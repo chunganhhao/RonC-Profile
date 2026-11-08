@@ -23,7 +23,7 @@ from chrome_engine import fetch
 from chrome_engine.engine import ChromeEngine
 from src.core.config import DATA_DIR, HEADLESS, RESTORE_TABS
 from src.services.browser import control, session
-from src.services.browser.runner import restore_tabs, snapshot_tabs
+from src.services.browser.runner import _read_profile_extra, restore_tabs, snapshot_tabs
 
 _shutdown = asyncio.Event()
 
@@ -79,6 +79,10 @@ async def run_browser(
 ) -> int:
     profile_dir = os.path.join(os.getcwd(), DATA_DIR, profile_name)
     proxy = proxy_str if proxy_str and proxy_str != "None" else None
+    extra = _read_profile_extra(profile_name)
+    engine_kwargs: dict[str, object] = {}
+    if extra.get("webrtc_mode") == "disable":
+        engine_kwargs["block_webrtc"] = True
     engine = ChromeEngine(
         profile_dir,
         platform=os_type,
@@ -87,6 +91,7 @@ async def run_browser(
         # "" keeps the timezone / locale following the proxy's exit IP.
         timezone=timezone,
         locale=locale,
+        **engine_kwargs,
     )
     _say(f"Starting Chrome engine for {profile_name}...")
     try:
@@ -106,10 +111,14 @@ async def run_browser(
             _say(f"Warning: {warning}")
         if not context.pages:
             await context.new_page()
+        restored = 0
         if RESTORE_TABS:
             restored = await restore_tabs(context, session.load(profile_dir))
             if restored:
                 _say(f"Restored {restored} tab(s)")
+        start_url = (extra.get("start_url") or "").strip()
+        if not restored and start_url:
+            await restore_tabs(context, [start_url])
 
         close_event = asyncio.Event()
 

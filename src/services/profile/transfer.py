@@ -5,7 +5,8 @@ import zipfile
 from datetime import datetime
 
 from ...core.logging import get_logger
-from ...models.profile import ENGINES, Profile
+from ...models.profile import CANVAS_MODES, ENGINES, WEBRTC_MODES, Profile
+from ...utils.totp import clean_totp_secret
 from ...utils.validation import (
     valid_or_none,
     validate_locale,
@@ -97,6 +98,18 @@ def import_from_zip(
                 engine=profile_data.get("engine")
                 if profile_data.get("engine") in ENGINES
                 else "camoufox",
+                group=(profile_data.get("group") or "").strip() or None,
+                account_uid=(profile_data.get("account_uid") or "").strip() or None,
+                account_password=profile_data.get("account_password") or None,
+                two_fa_secret=clean_totp_secret(profile_data.get("two_fa_secret")) or None,
+                notes=(profile_data.get("notes") or "").strip() or None,
+                start_url=(profile_data.get("start_url") or "").strip() or None,
+                webrtc_mode=profile_data.get("webrtc_mode")
+                if profile_data.get("webrtc_mode") in WEBRTC_MODES
+                else "proxy",
+                canvas_mode=profile_data.get("canvas_mode")
+                if profile_data.get("canvas_mode") in CANVAS_MODES
+                else "auto",
             )
 
             data_files = [f for f in zipf.namelist() if f.startswith("data/")]

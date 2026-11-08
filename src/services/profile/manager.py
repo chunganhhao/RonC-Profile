@@ -5,16 +5,19 @@ import pathlib
 import shutil
 import threading
 import time
+from typing import Any
 
 from ...core.config import DATA_DIR, PROFILES_FILE
 from ...core.logging import get_logger
-from ...models.profile import ENGINES, Profile
+from ...models.profile import CANVAS_MODES, ENGINES, WEBRTC_MODES, Profile
+from ...utils.totp import clean_totp_secret
 from ...utils.validation import (
     valid_or_none,
     validate_locale,
     validate_profile_name,
     validate_timezone,
 )
+from ..browser import fingerprint as fp_service
 from .transfer import export_to_zip, import_from_zip, read_profile_meta
 
 logger = get_logger("profile.manager")
@@ -22,6 +25,14 @@ logger = get_logger("profile.manager")
 
 def _engine_or_default(value: object) -> str:
     return value if value in ENGINES else "camoufox"
+
+
+def _webrtc_or_default(value: object) -> str:
+    return value if value in WEBRTC_MODES else "proxy"
+
+
+def _canvas_or_default(value: object) -> str:
+    return value if value in CANVAS_MODES else "auto"
 
 
 def _replace(src: pathlib.Path, dst: pathlib.Path, attempts: int = 10) -> None:
@@ -76,6 +87,14 @@ class ProfileManager:
                             "timezone": valid_or_none(p_data.get("timezone"), validate_timezone),
                             "locale": valid_or_none(p_data.get("locale"), validate_locale),
                             "engine": _engine_or_default(p_data.get("engine")),
+                            "group": (p_data.get("group") or "").strip() or None,
+                            "account_uid": (p_data.get("account_uid") or "").strip() or None,
+                            "account_password": p_data.get("account_password") or None,
+                            "two_fa_secret": clean_totp_secret(p_data.get("two_fa_secret")) or None,
+                            "notes": (p_data.get("notes") or "").strip() or None,
+                            "start_url": (p_data.get("start_url") or "").strip() or None,
+                            "webrtc_mode": _webrtc_or_default(p_data.get("webrtc_mode")),
+                            "canvas_mode": _canvas_or_default(p_data.get("canvas_mode")),
                         }
                         self.profiles[name] = Profile(**clean_data)
                 logger.info("Loaded %d profiles", len(self.profiles))
@@ -109,24 +128,48 @@ class ProfileManager:
         timezone: str | None = None,
         locale: str | None = None,
         engine: str = "camoufox",
+        *,
+        group: str | None = None,
+        account_uid: str | None = None,
+        account_password: str | None = None,
+        two_fa_secret: str | None = None,
+        notes: str | None = None,
+        start_url: str | None = None,
+        webrtc_mode: str = "proxy",
+        canvas_mode: str = "auto",
+        initial_fingerprint: dict[str, Any] | None = None,
     ) -> bool:
         with self._lock:
             if self._find_by_casefold(name) is not None:
                 return False
+            if two_fa_secret and two_fa_secret.strip() and not clean_totp_secret(two_fa_secret):
+                return False
             # Create directory before touching profiles.json so a mkdir failure
             # does not leave an entry with no data dir on disk.
+            data_dir = self._data_path(name)
             try:
-                pathlib.Path(self._data_path(name)).mkdir(exist_ok=True, parents=True)
+                pathlib.Path(data_dir).mkdir(exist_ok=True, parents=True)
             except OSError as e:
                 logger.warning("Could not create data dir for %s: %s", name, e)
                 return False
+            if isinstance(initial_fingerprint, dict) and engine == "camoufox":
+                with contextlib.suppress(Exception):
+                    fp_service.save_fingerprint(data_dir, os_type, initial_fingerprint)
             self.profiles[name] = Profile(
                 name=name,
                 proxy=proxy or None,
                 os_type=os_type,
                 timezone=timezone or None,
                 locale=locale or None,
-                engine=engine,
+                engine=_engine_or_default(engine),
+                group=(group or "").strip() or None,
+                account_uid=(account_uid or "").strip() or None,
+                account_password=account_password or None,
+                two_fa_secret=clean_totp_secret(two_fa_secret) or None,
+                notes=(notes or "").strip() or None,
+                start_url=(start_url or "").strip() or None,
+                webrtc_mode=_webrtc_or_default(webrtc_mode),
+                canvas_mode=_canvas_or_default(canvas_mode),
             )
             self.save_profiles()
             logger.info("Created profile: %s", name)
@@ -140,10 +183,22 @@ class ProfileManager:
         new_os: str,
         new_timezone: str | None = None,
         new_locale: str | None = None,
+        *,
+        group: str | None = None,
+        account_uid: str | None = None,
+        account_password: str | None = None,
+        two_fa_secret: str | None = None,
+        notes: str | None = None,
+        start_url: str | None = None,
+        webrtc_mode: str | None = None,
+        canvas_mode: str | None = None,
+        initial_fingerprint: dict[str, Any] | None = None,
     ) -> bool:
         """Replace every field; a None/empty timezone or locale means automatic."""
         with self._lock:
             if original_name not in self.profiles:
+                return False
+            if two_fa_secret and two_fa_secret.strip() and not clean_totp_secret(two_fa_secret):
                 return False
 
             if new_name != original_name:
@@ -188,10 +243,32 @@ class ProfileManager:
             profile.os_type = new_os
             profile.timezone = new_timezone or None
             profile.locale = new_locale or None
+            if group is not None:
+                profile.group = group.strip() or None
+            if account_uid is not None:
+                profile.account_uid = account_uid.strip() or None
+            if account_password is not None:
+                profile.account_password = account_password or None
+            if two_fa_secret is not None:
+                profile.two_fa_secret = clean_totp_secret(two_fa_secret) or None
+            if notes is not None:
+                profile.notes = notes.strip() or None
+            if start_url is not None:
+                profile.start_url = start_url.strip() or None
+            if webrtc_mode is not None:
+                profile.webrtc_mode = _webrtc_or_default(webrtc_mode)
+            if canvas_mode is not None:
+                profile.canvas_mode = _canvas_or_default(canvas_mode)
 
             if new_name != original_name:
                 del self.profiles[original_name]
                 self.profiles[new_name] = profile
+
+            if isinstance(initial_fingerprint, dict) and profile.engine == "camoufox":
+                with contextlib.suppress(Exception):
+                    fp_service.save_fingerprint(
+                        self._data_path(new_name), new_os, initial_fingerprint
+                    )
 
             self.save_profiles()
             logger.info("Updated profile: %s -> %s", original_name, new_name)

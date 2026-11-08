@@ -38,13 +38,37 @@ async () => {
   const hash = async (s) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))]
     .map(b => b.toString(16).padStart(2, '0')).join('');
 
-  const workerSrc = 'postMessage((' + IDENTITY + ')());';
-  const worker = await new Promise((resolve) => {
+  const workerSrc = `
+    (async () => {
+      const id = (` + IDENTITY + `)();
+      let webgpu = null;
+      if (navigator.gpu && typeof navigator.gpu.requestAdapter === 'function') {
+        try {
+          const adapter = await Promise.race([
+            navigator.gpu.requestAdapter(),
+            new Promise((r) => setTimeout(() => r(null), 2000)),
+          ]);
+          if (adapter && adapter.info) {
+            webgpu = {
+              vendor: String(adapter.info.vendor || ''),
+              architecture: String(adapter.info.architecture || ''),
+              device: String(adapter.info.device || ''),
+              description: String(adapter.info.description || ''),
+            };
+          }
+        } catch (e) { webgpu = {error: String(e)}; }
+      }
+      postMessage({identity: id, webgpu});
+    })();
+  `;
+  const workerBundle = await new Promise((resolve) => {
     const w = new Worker(URL.createObjectURL(new Blob([workerSrc], {type: 'text/javascript'})));
     w.onmessage = (e) => resolve(e.data);
-    w.onerror = (e) => resolve({error: String(e.message)});
-    setTimeout(() => resolve({error: 'timeout'}), 5000);
+    w.onerror = (e) => resolve({identity: {error: String(e.message)}, webgpu: null});
+    setTimeout(() => resolve({identity: {error: 'timeout'}, webgpu: null}), 5000);
   });
+  const worker = workerBundle.identity || workerBundle;
+  const workerWebgpu = workerBundle.webgpu ?? null;
 
   const iframe = await new Promise((resolve) => {
     const f = document.createElement('iframe');
@@ -67,11 +91,22 @@ async () => {
     } catch (e) { return {error: String(e)}; }
   })();
 
-  const sharedWorker = await new Promise((resolve) => {
+  const sharedBundle = await new Promise((resolve) => {
     try {
       const w = new SharedWorker('/shared.js');
       w.port.onmessage = (e) => resolve(e.data);
       w.port.start();
+    } catch (e) { resolve({identity: {error: String(e)}, webgpu: null}); }
+    setTimeout(() => resolve({identity: {error: 'timeout'}, webgpu: null}), 5000);
+  });
+  const sharedWorker = sharedBundle.identity || sharedBundle;
+  const sharedWorkerWebgpu = sharedBundle.webgpu ?? null;
+
+  const moduleWorkerWebgpu = await new Promise((resolve) => {
+    try {
+      const w = new Worker('/module_worker.js', {type: 'module'});
+      w.onmessage = (e) => resolve(e.data);
+      w.onerror = (e) => resolve({error: String(e.message || 'module worker error')});
     } catch (e) { resolve({error: String(e)}); }
     setTimeout(() => resolve({error: 'timeout'}), 5000);
   });
@@ -127,11 +162,36 @@ async () => {
   let uaData = null;
   if (navigator.userAgentData) {
     uaData = await navigator.userAgentData.getHighEntropyValues(
-      ['platform', 'platformVersion', 'architecture', 'bitness', 'model', 'fullVersionList']);
+      ['platform', 'platformVersion', 'architecture', 'bitness', 'model', 'fullVersionList', 'wow64', 'formFactors']);
+    uaData.mobile = Boolean(navigator.userAgentData.mobile);
   }
 
+  let webgpu = null;
+  if (navigator.gpu && typeof navigator.gpu.requestAdapter === 'function') {
+    try {
+      const adapter = await Promise.race([
+        navigator.gpu.requestAdapter(),
+        new Promise((r) => setTimeout(() => r(null), 2000)),
+      ]);
+      if (adapter && adapter.info) {
+        webgpu = {
+          vendor: String(adapter.info.vendor || ''),
+          architecture: String(adapter.info.architecture || ''),
+          device: String(adapter.info.device || ''),
+          description: String(adapter.info.description || ''),
+        };
+      }
+    } catch (e) { webgpu = {error: String(e)}; }
+  }
+
+  const reLeak = /^(\$?cdc_|__playwright|__pw|__webdriver|__selenium|__fxdriver|domAutomation)/i;
+  const cdpLeaks = [
+    ...Object.getOwnPropertyNames(window).filter((k) => reLeak.test(k)),
+    ...Object.getOwnPropertyNames(document).filter((k) => reLeak.test(k)),
+  ];
+
   return {
-    main: identity, worker, iframe, serviceWorker, sharedWorker, uaData, canvasHash, audioHash, webgl, cdpDetected,
+    main: identity, worker, iframe, serviceWorker, sharedWorker, uaData, canvasHash, audioHash, webgl, webgpu, workerWebgpu, sharedWorkerWebgpu, moduleWorkerWebgpu, cdpDetected, cdpLeaks,
     webrtcCandidates: candidates,
     screen: {width: screen.width, height: screen.height, availWidth: screen.availWidth,
              availHeight: screen.availHeight, colorDepth: screen.colorDepth, dpr: devicePixelRatio},
@@ -157,7 +217,29 @@ _SERVICE_WORKER_JS = (
     + _IDENTITY_JS.strip()
     + ")()));"
 )
-_SHARED_WORKER_JS = "onconnect = (e) => e.ports[0].postMessage((" + _IDENTITY_JS.strip() + ")());"
+_SHARED_WORKER_JS = (
+    "onconnect = async (e) => {"
+    " const id = (" + _IDENTITY_JS.strip() + ")();"
+    " let webgpu = null;"
+    " if (navigator.gpu && typeof navigator.gpu.requestAdapter === 'function') {"
+    "   try {"
+    "     const a = await Promise.race([navigator.gpu.requestAdapter(), new Promise((r) => setTimeout(() => r(null), 2000))]);"
+    "     if (a && a.info) webgpu = {vendor: String(a.info.vendor || ''), architecture: String(a.info.architecture || ''), device: String(a.info.device || ''), description: String(a.info.description || '')};"
+    "   } catch (err) { webgpu = {error: String(err)}; }"
+    " }"
+    " e.ports[0].postMessage({identity: id, webgpu});"
+    "};"
+)
+_MODULE_WORKER_JS = (
+    "let webgpu = null;\n"
+    "if (navigator.gpu && typeof navigator.gpu.requestAdapter === 'function') {\n"
+    "  try {\n"
+    "    const a = await Promise.race([navigator.gpu.requestAdapter(), new Promise((r) => setTimeout(() => r(null), 2000))]);\n"
+    "    if (a && a.info) webgpu = {vendor: String(a.info.vendor || ''), architecture: String(a.info.architecture || ''), device: String(a.info.device || ''), description: String(a.info.description || '')};\n"
+    "  } catch (err) { webgpu = {error: String(err)}; }\n"
+    "}\n"
+    "postMessage(webgpu);\n"
+)
 
 EMOJI_CANVAS_JS = r"""
 () => {
@@ -189,6 +271,7 @@ class ProbeServer:
         app.router.add_get("/headers", self._dump)
         app.router.add_get("/sw.js", self._script(_SERVICE_WORKER_JS))
         app.router.add_get("/shared.js", self._script(_SHARED_WORKER_JS))
+        app.router.add_get("/module_worker.js", self._script(_MODULE_WORKER_JS))
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         site = web.TCPSite(self._runner, "127.0.0.1", 0)
@@ -293,6 +376,16 @@ def _webgl_matches(platform: str, renderer: str) -> bool:
     return "direct3d" not in r and "d3d11" not in r and "metal" not in r
 
 
+def _webgpu_matches(platform: str, webgpu: dict[str, Any]) -> bool:
+    vendor = str(webgpu.get("vendor") or "").lower()
+    arch = str(webgpu.get("architecture") or "").lower()
+    if not vendor and not arch:
+        return True
+    if platform == "macos":
+        return "apple" in vendor or "metal" in arch or "amd" in vendor or "intel" in vendor
+    return "apple" not in vendor and "metal" not in arch
+
+
 def _private_ip_candidates(candidates: list[str]) -> list[str]:
     leaks = []
     for candidate in candidates:
@@ -335,6 +428,13 @@ def check(persona: Persona, fp: dict[str, Any]) -> list[Issue]:
         "webdriver",
         f"navigator.webdriver is {main.get('webdriver')!r}",
     )
+    dev_mem = main.get("deviceMemory")
+    if dev_mem is not None:
+        expect(
+            dev_mem in (0.25, 0.5, 1, 2, 4, 8),
+            "device_memory",
+            f"navigator.deviceMemory is {dev_mem!r}, Chromium ApproximatedDeviceMemory caps at 8 GB",
+        )
     if persona.timezone:
         expect(
             same_timezone(main.get("timezone") or "", persona.timezone),
@@ -366,6 +466,12 @@ def check(persona: Persona, fp: dict[str, Any]) -> list[Issue]:
                 f"{realm}_{key}",
                 f"{realm} reports {other.get(key)!r}, window reports {main.get(key)!r}",
             )
+        if dev_mem is not None and other.get("deviceMemory") is not None:
+            expect(
+                other.get("deviceMemory") == dev_mem,
+                f"{realm}_deviceMemory",
+                f"{realm} reports deviceMemory={other.get('deviceMemory')!r}, window reports {dev_mem!r}",
+            )
 
     ua_data = fp.get("uaData") or {}
     expect(
@@ -380,6 +486,43 @@ def check(persona: Persona, fp: dict[str, Any]) -> list[Issue]:
     )
     brands = [b.get("brand") for b in ua_data.get("brands") or []]
     expect(_BRAND[persona.brand] in brands, "brand", f"brands are {brands}")
+    if "mobile" in ua_data and ua_data.get("mobile") is not None:
+        expect(
+            ua_data.get("mobile") is False,
+            "uadata_mobile",
+            f"userAgentData.mobile is {ua_data.get('mobile')!r} on desktop persona",
+        )
+    if ua_data.get("bitness"):
+        expect(
+            ua_data.get("bitness") == "64",
+            "uadata_bitness",
+            f"userAgentData.bitness is {ua_data.get('bitness')!r}",
+        )
+    if ua_data.get("architecture"):
+        expected_archs = ("arm", "x86") if persona.platform == "macos" else ("x86",)
+        expect(
+            ua_data.get("architecture") in expected_archs,
+            "uadata_architecture",
+            f"userAgentData.architecture is {ua_data.get('architecture')!r} on {persona.platform}",
+        )
+    full_versions = ua_data.get("fullVersionList")
+    ua_major = chrome_major(fp)
+    if isinstance(full_versions, list) and full_versions and ua_major is not None:
+        brand_name = _BRAND[persona.brand]
+        matched_ver = next(
+            (
+                str(item.get("version") or "")
+                for item in full_versions
+                if isinstance(item, dict) and item.get("brand") in (brand_name, "Chromium")
+            ),
+            "",
+        )
+        if matched_ver:
+            expect(
+                matched_ver.startswith(f"{ua_major}."),
+                "uadata_full_version",
+                f"fullVersionList version {matched_ver!r} disagrees with UA major {ua_major}",
+            )
 
     headers = fp.get("headers") or {}
     expect(
@@ -397,6 +540,12 @@ def check(persona: Persona, fp: dict[str, Any]) -> list[Issue]:
         "header_brand",
         f"Sec-CH-UA is {headers.get('sec-ch-ua')!r}",
     )
+    if "sec-ch-ua-mobile" in headers:
+        expect(
+            headers.get("sec-ch-ua-mobile") == "?0",
+            "header_mobile",
+            f"Sec-CH-UA-Mobile is {headers.get('sec-ch-ua-mobile')!r}",
+        )
     if persona.locale:
         expect(
             headers.get("accept-language", "").startswith(persona.locale),
@@ -414,9 +563,46 @@ def check(persona: Persona, fp: dict[str, Any]) -> list[Issue]:
     else:
         issues.append(Issue("webgl_unavailable", str(webgl.get("error"))))
 
+    webgpu = fp.get("webgpu")
+    if isinstance(webgpu, dict) and ("vendor" in webgpu or "architecture" in webgpu):
+        expect(
+            _webgpu_matches(persona.platform, webgpu),
+            "webgpu_adapter",
+            f"WebGPU adapter {webgpu!r} does not fit {persona.platform}",
+        )
+
+    for field, prefix, label in (
+        ("workerWebgpu", "worker_webgpu", "Worker"),
+        ("sharedWorkerWebgpu", "shared_worker_webgpu", "SharedWorker"),
+        ("moduleWorkerWebgpu", "module_worker_webgpu", "ModuleWorker"),
+    ):
+        realm_gpu = fp.get(field)
+        if isinstance(realm_gpu, dict) and (
+            "vendor" in realm_gpu or "architecture" in realm_gpu
+        ):
+            expect(
+                _webgpu_matches(persona.platform, realm_gpu),
+                f"{prefix}_adapter",
+                f"{label} WebGPU adapter {realm_gpu!r} does not fit {persona.platform}",
+            )
+            if isinstance(webgpu, dict) and "vendor" in webgpu and "vendor" in realm_gpu:
+                expect(
+                    realm_gpu.get("vendor") == webgpu.get("vendor")
+                    and realm_gpu.get("architecture") == webgpu.get("architecture"),
+                    f"{prefix}_mismatch",
+                    f"{label} WebGPU {realm_gpu!r} disagrees with window WebGPU {webgpu!r}",
+                )
+
     expect(
         not fp.get("cdpDetected"), "cdp_runtime", "a DevTools client is visible (Runtime.enable)"
     )
+    cdp_leaks = fp.get("cdpLeaks")
+    if cdp_leaks:
+        expect(
+            False,
+            "cdp_globals",
+            f"automation globals visible on window/document: {cdp_leaks}",
+        )
 
     leaks = _private_ip_candidates(fp.get("webrtcCandidates") or [])
     expect(not leaks, "webrtc_ip", f"WebRTC exposes {leaks}")

@@ -3,10 +3,9 @@ from collections.abc import Callable
 import flet as ft
 
 from ...core.strings import get_string
-from ..theme.colors import COLORS
-from ..theme.styles import ACCENT_STYLE, INK_STYLE
+from ..theme.colors import COLORS, FONT_SEMIBOLD, current_theme_mode
 
-_WIDTH, _HEIGHT = 112, 36
+_WIDTH, _HEIGHT = 96, 34
 
 
 def build_launch_button(
@@ -15,33 +14,69 @@ def build_launch_button(
     is_running: bool,
     on_launch: Callable,
 ) -> ft.Button:
-    """Create the context-aware Launch / Stop / Loading button."""
+    """Create the PionLogin-style Launch ('🌐 Mở') / Stop ('✕ Đóng') / Loading button."""
+    is_dark = current_theme_mode() == "dark"
+    shape = ft.RoundedRectangleBorder(radius=7)
+    label_style = ft.TextStyle(font_family=FONT_SEMIBOLD, size=13)
+
     if is_loading:
         return ft.Button(
-            content=ft.ProgressRing(width=16, height=16, stroke_width=2, color=COLORS["text_sub"]),
+            content=ft.ProgressRing(width=15, height=15, stroke_width=2, color=COLORS["text_sub"]),
             width=_WIDTH,
             height=_HEIGHT,
             disabled=True,
             tooltip=get_string("loading"),
             style=ft.ButtonStyle(
-                shape=ft.RoundedRectangleBorder(radius=8),
+                shape=shape,
                 bgcolor=COLORS["paper_sunk"],
             ),
         )
     if is_running:
+        # In PionLogin dark mode, running stop button is crisp white with dark ink
+        stop_bg = "#F9FAFB" if is_dark else COLORS["ink_button"]
+        stop_fg = "#0B0C0E" if is_dark else "#FFFFFF"
         return ft.Button(
             get_string("stop"),
-            icon=ft.Icons.STOP_ROUNDED,
+            icon=ft.Icons.CLOSE_ROUNDED,
             width=_WIDTH,
             height=_HEIGHT,
-            style=INK_STYLE,
+            style=ft.ButtonStyle(
+                shape=shape,
+                bgcolor={
+                    ft.ControlState.DEFAULT: stop_bg,
+                    ft.ControlState.HOVERED: "#E5E7EB" if is_dark else "#000000",
+                },
+                color=stop_fg,
+                text_style=label_style,
+                padding=ft.Padding.symmetric(horizontal=10),
+                elevation=0,
+            ),
             on_click=lambda _, n=name: on_launch(n),
         )
+
+    launch_bg = COLORS["paper_sunk"] if is_dark else COLORS["accent"]
+    launch_hover = COLORS["rule_strong"] if is_dark else COLORS["accent_hover"]
+    launch_side = (
+        ft.BorderSide(1, COLORS["rule_strong"])
+        if is_dark
+        else ft.BorderSide(0, "transparent")
+    )
     return ft.Button(
         get_string("launch"),
-        icon=ft.Icons.PLAY_ARROW_ROUNDED,
+        icon=ft.Icons.LANGUAGE if is_dark else ft.Icons.PLAY_ARROW_ROUNDED,
         width=_WIDTH,
         height=_HEIGHT,
-        style=ACCENT_STYLE,
+        style=ft.ButtonStyle(
+            shape=shape,
+            side=launch_side,
+            bgcolor={
+                ft.ControlState.DEFAULT: launch_bg,
+                ft.ControlState.HOVERED: launch_hover,
+            },
+            color=COLORS["text_main"] if is_dark else "#FFFFFF",
+            text_style=label_style,
+            padding=ft.Padding.symmetric(horizontal=10),
+            elevation=0,
+        ),
         on_click=lambda _, n=name: on_launch(n),
     )

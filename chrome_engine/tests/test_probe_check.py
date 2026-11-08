@@ -197,3 +197,57 @@ def test_webgl_platform_match(renderer, platform, ok):
 def test_chrome_major():
     assert probe.chrome_major(good_fp()) == 148
     assert probe.chrome_major({}) is None
+
+
+@pytest.mark.parametrize("bad_mem", [16, 32, 64, 0, -4])
+def test_non_w3c_device_memory_is_reported(bad_mem):
+    fp = copy.deepcopy(good_fp())
+    fp["main"]["deviceMemory"] = bad_mem
+    assert "device_memory" in codes(fp)
+
+
+def test_worker_device_memory_mismatch_is_reported():
+    fp = copy.deepcopy(good_fp())
+    fp["worker"]["deviceMemory"] = 4
+    assert "worker_deviceMemory" in codes(fp)
+
+
+def test_client_hints_high_entropy_and_mobile_checks():
+    fp = copy.deepcopy(good_fp())
+    fp["uaData"]["mobile"] = True
+    fp["uaData"]["bitness"] = "32"
+    fp["uaData"]["architecture"] = "arm"
+    fp["uaData"]["fullVersionList"] = [{"brand": "Google Chrome", "version": "147.0.0.0"}]
+    fp["headers"]["sec-ch-ua-mobile"] = "?1"
+    found = codes(fp)
+    assert {
+        "uadata_mobile",
+        "uadata_bitness",
+        "uadata_architecture",
+        "uadata_full_version",
+        "header_mobile",
+    } <= found
+
+
+def test_webgpu_and_cdp_globals_checks():
+    fp = copy.deepcopy(good_fp())
+    fp["webgpu"] = {"vendor": "apple", "architecture": "metal-3"}
+    fp["cdpLeaks"] = ["cdc_adoQpoasnfa76pfcZLmcfl_Array"]
+    found = codes(fp)
+    assert "webgpu_adapter" in found
+    assert "cdp_globals" in found
+
+
+def test_worker_webgpu_checks():
+    fp = copy.deepcopy(good_fp())
+    fp["webgpu"] = {"vendor": "intel", "architecture": "gen-12lp"}
+    fp["workerWebgpu"] = {"vendor": "apple", "architecture": "metal-3"}
+    fp["sharedWorkerWebgpu"] = {"vendor": "apple", "architecture": "metal-3"}
+    fp["moduleWorkerWebgpu"] = {"vendor": "apple", "architecture": "metal-3"}
+    found = codes(fp)
+    assert "worker_webgpu_adapter" in found
+    assert "worker_webgpu_mismatch" in found
+    assert "shared_worker_webgpu_adapter" in found
+    assert "shared_worker_webgpu_mismatch" in found
+    assert "module_worker_webgpu_adapter" in found
+    assert "module_worker_webgpu_mismatch" in found

@@ -21,6 +21,11 @@ PERSONA_FILE = "chrome_persona.json"
 PLATFORMS = ("windows", "macos", "linux")
 BRANDS = ("Chrome", "Edge")
 SEED_MAX = 2**31 - 1
+# Chromium's ApproximatedDeviceMemory implementation caps exposed deviceMemory at 8 GB.
+# fingerprint-chromium 148's C++ patch (021-device-memory-cap.patch) indexes {8, 16, 32}
+# by `fingerprint % 3`, so seeds divisible by 3 natively report 8 GB in C++.
+# ponytail: temporary bypass pending upstream https://github.com/adryfish/fingerprint-chromium/issues/100
+VALID_DEVICE_MEMORIES = (0.25, 0.5, 1, 2, 4, 8)
 
 # Values Chrome reports in navigator.userAgentData platformVersion, weighted
 # roughly by usage. Windows: 10.0.0 = Windows 10, 15.0.0 = 11 23H2, 19.0.0 = 11 24H2.
@@ -80,10 +85,21 @@ class Persona:
         """Fill in timezone / locale only where the persona leaves them open."""
         return replace(self, timezone=self.timezone or timezone, locale=self.locale or locale)
 
+    @property
+    def has_valid_device_memory_seed(self) -> bool:
+        """True when C++ seed % 3 == 0 (reports 8 GB instead of non-standard 16/32 GB)."""
+        return seed_gives_valid_device_memory(self.seed)
+
+    def with_aligned_seed(self) -> Persona:
+        """Return a copy whose seed is aligned to a multiple of 3 for W3C deviceMemory=8."""
+        if self.has_valid_device_memory_seed:
+            return self
+        return replace(self, seed=align_seed_for_device_memory(self.seed))
+
     def to_args(self) -> list[str]:
         """fingerprint-chromium switches for this persona."""
         args = [
-            f"--fingerprint={self.seed}",
+            f"--fingerprint={align_seed_for_device_memory(self.seed)}",
             f"--fingerprint-platform={self.platform}",
             f"--fingerprint-platform-version={self.platform_version}",
             f"--fingerprint-brand={self.brand}",
@@ -149,6 +165,23 @@ def _pick(rng: Random, weighted: list[tuple[Any, float]]) -> Any:
     return rng.choices(values, weights=weights, k=1)[0]
 
 
+def seed_gives_valid_device_memory(seed: int) -> bool:
+    """True when `seed` makes fingerprint-chromium's C++ patch report 8 GB (seed % 3 == 0)."""
+    return isinstance(seed, int) and not isinstance(seed, bool) and 1 <= seed <= SEED_MAX and seed % 3 == 0
+
+
+def align_seed_for_device_memory(seed: int) -> int:
+    """Map a 1..SEED_MAX seed to a multiple of 3 so C++ reports navigator.deviceMemory == 8."""
+    # ponytail: temporary bypass pending upstream https://github.com/adryfish/fingerprint-chromium/issues/100
+    clamped = max(1, min(int(seed), SEED_MAX))
+    if clamped % 3 == 0:
+        return clamped
+    if clamped <= SEED_MAX // 3:
+        return clamped * 3
+    aligned = clamped - (clamped % 3)
+    return aligned if aligned >= 3 else 3
+
+
 def generate(
     platform: str,
     seed: int | None = None,
@@ -159,7 +192,8 @@ def generate(
     """A new persona. The same seed and platform always give the same persona."""
     if platform not in PLATFORMS:
         raise PersonaError(f"platform must be one of {', '.join(PLATFORMS)}")
-    seed = seed if seed is not None else 1 + secrets.randbelow(SEED_MAX)
+    if seed is None:
+        seed = align_seed_for_device_memory(1 + secrets.randbelow(SEED_MAX))
     rng = Random(f"{seed}:{platform}")
     return Persona(
         seed=seed,
@@ -201,6 +235,8 @@ def load_or_create(profile_dir: str | Path, platform: str, **overrides: Any) -> 
     persona = load(profile_dir)
     if persona is None or persona.platform != platform:
         persona = generate(platform)
+    elif not persona.has_valid_device_memory_seed:
+        persona = persona.with_aligned_seed()
     overrides = {k: (v or None) for k, v in overrides.items() if v is not None}
     if overrides:
         persona = replace(persona, **overrides)

@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
+import json
 import os
+import pathlib
 import signal
 import sys
 
@@ -12,10 +14,10 @@ sys.path.insert(
 from camoufox.async_api import AsyncCamoufox
 from camoufox.virtdisplay import VirtualDisplay
 
-from src.core.config import DATA_DIR, HEADLESS, RESTORE_TABS
+from src.core.config import DATA_DIR, HEADLESS, PROFILES_FILE, RESTORE_TABS
 from src.services.browser import control, session
 from src.services.browser import display as xvfb
-from src.services.browser.fingerprint import load_or_create
+from src.services.browser.fingerprint import available_gpus, load_or_create
 from src.services.proxy.geo_check import requests_proxy_url
 from src.utils.proxy_parser import parse_proxy
 
@@ -115,6 +117,19 @@ def geo_overrides(timezone: str, locale: str) -> dict:
     return options
 
 
+def _read_profile_extra(profile_name: str) -> dict:
+    """Read optional hardware/startup settings from profiles.json if available."""
+    try:
+        path = pathlib.Path(PROFILES_FILE)
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data.get(profile_name), dict):
+                return data[profile_name]
+    except Exception:
+        pass
+    return {}
+
+
 def exit_ip(proxy_str: str) -> str:
     """The exit IP Camoufox's geoip should use, looked up with DNS through the proxy.
 
@@ -177,17 +192,80 @@ async def run_browser(
     locale: str = "",
 ) -> int:
     profile_dir = os.path.join(os.getcwd(), DATA_DIR, profile_name)
+    fp = load_or_create(profile_dir, os_type)
+    extra = _read_profile_extra(profile_name)
 
     launch_config = {
         "headless": HEADLESS,
         "os": os_type,
-        "fingerprint": load_or_create(profile_dir, os_type),
+        "fingerprint": fp,
         "humanize": True,
         "block_images": False,
         "user_data_dir": profile_dir,
         "persistent_context": True,
         **geo_overrides(timezone, locale),
     }
+
+    canvas_mode = extra.get("canvas_mode") or "auto"
+
+    # Apply explicitly pinned hardware concurrency & GPU from the saved fingerprint if customized
+    if isinstance(fp, dict) and fp:
+        nav = fp.get("navigator") or {}
+        scr = fp.get("screen") or {}
+        if fp.get("_custom_cores") and isinstance(nav.get("hardwareConcurrency"), int):
+            cfg_override = launch_config.setdefault("config", {})
+            cfg_override["navigator.hardwareConcurrency"] = int(nav["hardwareConcurrency"])
+            if os_type == "linux":
+                try:
+                    from camoufox.fingerprints import fix_navigator_arch
+
+                    tmp_nav = {
+                        "navigator.userAgent": nav.get("userAgent") or "",
+                        "navigator.platform": nav.get("platform") or "",
+                        "navigator.oscpu": nav.get("oscpu") or "",
+                    }
+                    fix_navigator_arch(tmp_nav, "lin")
+                    if tmp_nav.get("navigator.platform"):
+                        cfg_override["navigator.platform"] = tmp_nav["navigator.platform"]
+                    if tmp_nav.get("navigator.oscpu"):
+                        cfg_override["navigator.oscpu"] = tmp_nav["navigator.oscpu"]
+                except Exception:
+                    pass
+            launch_config["i_know_what_im_doing"] = True
+
+        webgl = fp.get("webgl") or {}
+        vendor, renderer = webgl.get("vendor"), webgl.get("renderer")
+        if (
+            (fp.get("_custom_gpu") or canvas_mode != "auto")
+            and vendor
+            and renderer
+            and (vendor, renderer) in available_gpus(os_type)
+        ):
+            try:
+                from camoufox import coherence
+
+                target_os = {"windows": "win", "macos": "mac", "linux": "lin"}.get(os_type, "win")
+                fits = coherence.gpu_fits_machine(
+                    renderer,
+                    target_os,
+                    nav.get("hardwareConcurrency"),
+                    scr.get("width"),
+                    scr.get("height"),
+                )
+            except Exception:
+                fits = True
+            if fits:
+                launch_config["webgl_config"] = (vendor, renderer)
+                launch_config["i_know_what_im_doing"] = True
+
+    if extra.get("webrtc_mode") == "disable":
+        launch_config["block_webrtc"] = True
+    if canvas_mode == "noise":
+        launch_config["canvas_noise"] = True
+        launch_config["i_know_what_im_doing"] = True
+    elif canvas_mode == "native":
+        launch_config["canvas_noise"] = False
+        launch_config["i_know_what_im_doing"] = True
 
     proxy_config = parse_proxy(proxy_str)
     if proxy_config:
@@ -217,10 +295,14 @@ async def run_browser(
         async with AsyncCamoufox(**launch_config) as context:
             if not context.pages:
                 await context.new_page()
+            restored = 0
             if RESTORE_TABS:
                 restored = await restore_tabs(context, session.load(profile_dir))
                 if restored:
                     _safe_print(f"Restored {restored} tab(s)")
+            start_url = (extra.get("start_url") or "").strip()
+            if not restored and start_url:
+                await restore_tabs(context, [start_url])
 
             close_event = asyncio.Event()
 

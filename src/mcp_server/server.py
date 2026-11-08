@@ -303,10 +303,24 @@ async def browser_press(profile: str, key: str, selector: str | None = None) -> 
 
 
 @mcp.tool(annotations=_PAGE_ACT)
-async def browser_click_at(profile: str, x: float, y: float) -> dict:
+async def browser_click_at(profile: str, x: float, y: float, humanize: bool = False) -> dict:
     """Click viewport coordinates read from a (non-full-page) browser_screenshot.
     Prefer browser_click with a selector; use this for canvases or captchas."""
-    return await _arequest("POST", _page(profile, "click-at"), {"x": x, "y": y})
+    return await _arequest(
+        "POST", _page(profile, "click-at"), {"x": x, "y": y, "humanize": humanize}
+    )
+
+
+@mcp.tool(annotations=_PAGE_ACT)
+async def browser_scroll(
+    profile: str, delta_y: float = 380.0, delta_x: float = 0.0, steps: int = 6
+) -> dict:
+    """Scroll the active tab by `(delta_x, delta_y)` CSS pixels using humanized wheel increments."""
+    return await _arequest(
+        "POST",
+        _page(profile, "scroll"),
+        {"delta_y": delta_y, "delta_x": delta_x, "steps": steps, "humanize": True},
+    )
 
 
 @mcp.tool(annotations=_PAGE_READ)

@@ -10,6 +10,7 @@ from ..core.logging import get_logger
 from ..core.strings import current_language, get_string, set_language
 from ..interfaces.protocols import IBrowserLauncher, IProfileManager, IProxyService
 from ..services.browser import fingerprint
+from ..utils.totp import generate_totp
 from .components import (
     build_content_area,
     build_empty_state,
@@ -21,11 +22,20 @@ from .components import (
 from .components.profile_card import build_header_row
 from .components.sidebar import build_filter_buttons
 from .dialogs.mcp_guide import open_mcp_guide
+from .dialogs.proxy_pool import open_proxy_pool_dialog
+from .dialogs.warming import open_warming_dialog
 from .handlers import AppHandlers
 from .refs import UIRefs
 from .state import ITEMS_PER_PAGE, AppState
-from .theme import COLORS, configure_page
-from .theme.colors import FONT_SEMIBOLD
+from .theme import (
+    COLORS,
+    apply_page_theme,
+    configure_page,
+    current_theme_mode,
+    refresh_styles,
+    set_theme_mode,
+)
+from .theme.colors import FONT_DATA, FONT_SEMIBOLD
 from .theme.page import ASSETS_DIR
 
 logger = get_logger("app")
@@ -37,6 +47,8 @@ class App:
         self.pm: IProfileManager = c.profile_manager
         self.bl: IBrowserLauncher = c.browser_launcher
         self.ps: IProxyService = c.proxy_service
+        self.proxy_pool = c.proxy_pool
+        self.warming = c.warming_scheduler
         self.state = AppState()
         self.page: ft.Page | None = None
         self._reconcile_started = False
@@ -45,6 +57,9 @@ class App:
         self._live_since: dict[str, str] = {}
         self._filter_column = ft.Column(spacing=2)
         self._header_slot = ft.Container()
+        self._total_count_text = ft.Text("", size=12, font_family=FONT_SEMIBOLD)
+        self._footer_proxy_text = ft.Text("", size=11.5, font_family=FONT_DATA)
+        self._footer_warming_text = ft.Text("", size=11.5, font_family=FONT_DATA)
         c.event_bus.subscribe(self.state.schedule_refresh)
         self.h = AppHandlers(
             pm=self.pm,
@@ -69,6 +84,12 @@ class App:
         self.clipboard = ft.Clipboard()
         page.services.append(self.clipboard)
         self._file_picker = fp
+        self.warming.start_daemon(
+            self.pm,
+            self.bl,
+            log_fn=self._log,
+            on_update=self.state.schedule_refresh,
+        )
         self._build_ui()
         self.state._last_running_snapshot = self.bl.running_profile_names()
         if not self._reconcile_started:
@@ -76,8 +97,10 @@ class App:
             page.run_task(self._ui_reconcile_loop)
 
     def _build_ui(self) -> None:
-        """(Re)build every control; strings are read at build time."""
+        """(Re)build every control; strings and theme colors are read at build time."""
         assert self.page is not None
+        refresh_styles()
+        apply_page_theme(self.page)
         self.refs = build_ui_refs(
             pm=self.pm,
             on_change_page=self._change_page,
@@ -86,6 +109,24 @@ class App:
         )
         self._filter_column = ft.Column(spacing=2)
         self._header_slot = ft.Container()
+        self._total_count_text = ft.Text(
+            get_string("footer_total", count=len(self.pm.profiles)),
+            size=12,
+            font_family=FONT_SEMIBOLD,
+            color=COLORS["text_main"],
+        )
+        self._footer_proxy_text = ft.Text(
+            get_string("footer_proxy_pool", count=len(self.proxy_pool.list_entries())),
+            size=11.5,
+            font_family=FONT_DATA,
+            color=COLORS["text_sub"],
+        )
+        self._footer_warming_text = ft.Text(
+            get_string("footer_warming_tasks", count=len(self.warming.list_tasks())),
+            size=11.5,
+            font_family=FONT_DATA,
+            color=COLORS["text_sub"],
+        )
         self.page.title = get_string("window_title")
         self.page.controls.clear()
         self.page.add(self._build_root_layout(self.refs))
@@ -113,6 +154,40 @@ class App:
         self.state.search_query = ""
         self._build_ui()
 
+    def _set_theme(self, mode: str) -> None:
+        if mode == current_theme_mode():
+            return
+        set_theme_mode(mode)
+        self._build_ui()
+
+    def _open_proxy_pool(self, _: object = None) -> None:
+        if not self.page:
+            return
+        selected = sorted(self.state.selected_names())
+        open_proxy_pool_dialog(
+            self.page,
+            self.proxy_pool,
+            self.ps,
+            self.pm,
+            target_profile_names=selected or None,
+            log_fn=self._log,
+            refresh_fn=self._refresh_profiles,
+        )
+
+    def _open_warming(self, _: object = None) -> None:
+        if not self.page:
+            return
+        selected = sorted(self.state.selected_names())
+        open_warming_dialog(
+            self.page,
+            self.warming,
+            self.pm,
+            self.bl,
+            target_profile_names=selected or None,
+            log_fn=self._log,
+            refresh_fn=self._refresh_profiles,
+        )
+
     def _build_root_layout(self, r: UIRefs) -> ft.Row:
         sidebar = build_sidebar(
             r.stats_text,
@@ -129,6 +204,11 @@ class App:
             filter_column=self._filter_column,
             language=current_language(),
             on_language=self._set_language,
+            on_open_proxy_pool=self._open_proxy_pool,
+            on_open_warming=self._open_warming,
+            on_toggle_theme=self._set_theme,
+            proxy_pool_count=len(self.proxy_pool.list_entries()),
+            warming_task_count=len(self.warming.list_tasks()),
         )
         content = build_content_area(
             r.content_subtitle,
@@ -139,6 +219,15 @@ class App:
             r.bulk_bar,
             r.search_field,
             header_slot=self._header_slot,
+            on_open_warming=self._open_warming,
+            on_open_proxy_pool=self._open_proxy_pool,
+            on_import=self.h.on_import,
+            on_export=lambda _: self.h.on_export_open(),
+            on_refresh=lambda _: self._refresh_profiles(),
+            on_toggle_theme=self._set_theme,
+            total_count_text=self._total_count_text,
+            footer_proxy_text=self._footer_proxy_text,
+            footer_warming_text=self._footer_warming_text,
         )
         return ft.Row(
             expand=True,
@@ -170,16 +259,53 @@ class App:
 
     def _get_page_profiles(self) -> tuple[list, list, int]:
         all_profiles = self.pm.list_profiles()
-        test = self._filter_tests().get(self.filter, lambda p: True)
-        all_profiles = [p for p in all_profiles if test(p)]
+        if self.filter.startswith("group:"):
+            target_group = self.filter.split(":", 1)[1]
+            all_profiles = [p for p in all_profiles if (p.group or "") == target_group]
+        else:
+            test = self._filter_tests().get(self.filter, lambda p: True)
+            all_profiles = [p for p in all_profiles if test(p)]
         if q := self.state.search_query:
             all_profiles = [
-                p for p in all_profiles if q in p.name.lower() or q in (p.proxy or "").lower()
+                p
+                for p in all_profiles
+                if q in p.name.lower()
+                or q in (p.proxy or "").lower()
+                or q in (p.group or "").lower()
+                or q in (p.account_uid or "").lower()
+                or q in (p.notes or "").lower()
             ]
         total = max(1, (len(all_profiles) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
         self.state.current_page = min(self.state.current_page, total)
         start = (self.state.current_page - 1) * ITEMS_PER_PAGE
         return all_profiles, all_profiles[start : start + ITEMS_PER_PAGE], total
+
+    def _on_copy_pass(self, name: str) -> None:
+        profile = self.pm.profiles.get(name)
+        if not profile or not profile.account_password or not self.page:
+            return
+        pw = profile.account_password
+
+        async def _copy() -> None:
+            await self.clipboard.set(pw)
+
+        self.page.run_task(_copy)
+        self._log(get_string("copied_password", name=name))
+
+    def _on_copy_2fa(self, name: str) -> None:
+        profile = self.pm.profiles.get(name)
+        if not profile or not profile.two_fa_secret or not self.page:
+            return
+        res = generate_totp(profile.two_fa_secret)
+        if not res:
+            return
+        code, rem = res
+
+        async def _copy() -> None:
+            await self.clipboard.set(code)
+
+        self.page.run_task(_copy)
+        self._log(get_string("copied_2fa", name=name, code=code, rem=rem))
 
     def _refresh_profiles(self) -> None:
         r = self.refs
@@ -187,13 +313,13 @@ class App:
         self._update_stats()
         self._flush_log()
         all_profiles, page_profiles, total_pages = self._get_page_profiles()
+        start_offset = (self.state.current_page - 1) * ITEMS_PER_PAGE
 
         all_names = set(self.pm.profiles)
         for stale in self.state.selected_names() - all_names:
             self.state.toggle_selection(stale)
 
         running = self.bl.running_profile_names()
-        # A failure mark lasts until the profile runs again or is gone.
         self.state.failed.intersection_update(all_names - running)
         for name in running - set(self._live_since):
             self._live_since[name] = time.strftime("%H:%M")
@@ -202,10 +328,16 @@ class App:
 
         everything = self.pm.list_profiles()
         tests = self._filter_tests()
+        group_counts: dict[str, int] = {}
+        for p in everything:
+            if p.group:
+                group_counts[p.group] = group_counts.get(p.group, 0) + 1
+
         self._filter_column.controls = build_filter_buttons(
             self.filter,
             {fid: sum(1 for p in everything if test(p)) for fid, test in tests.items()},
             self._on_filter,
+            group_counts=group_counts,
         )
         names = [p.name for p in page_profiles]
         all_sel = bool(names) and all(self.state.is_selected(n) for n in names)
@@ -232,11 +364,14 @@ class App:
                     is_selected=self.state.is_selected(p.name),
                     on_select=self.h.on_toggle_select,
                     on_cookies=self.h.on_cookies,
+                    on_copy_pass=self._on_copy_pass,
+                    on_copy_2fa=self._on_copy_2fa,
                     device=self._device_label(p.name),
                     since=self._live_since.get(p.name, ""),
                     failed=p.name in self.state.failed,
+                    row_index=start_offset + idx + 1,
                 )
-                for p in page_profiles
+                for idx, p in enumerate(page_profiles)
             ]
             if page_profiles
             else [self._build_empty_or_no_results()]
@@ -255,6 +390,13 @@ class App:
             },
         )
         self._set_subtitle(r.content_subtitle)
+        self._total_count_text.value = get_string("footer_total", count=len(all_profiles))
+        self._footer_proxy_text.value = get_string(
+            "footer_proxy_pool", count=len(self.proxy_pool.list_entries())
+        )
+        self._footer_warming_text.value = get_string(
+            "footer_warming_tasks", count=len(self.warming.list_tasks())
+        )
         r.page_label.value = get_string(
             "page_of",
             current=self.state.current_page,
@@ -310,7 +452,6 @@ class App:
         self._refresh_profiles()
 
     def _set_subtitle(self, text: ft.Text) -> None:
-        """ "10 profile · 2 đang chạy", the running count in stamp violet."""
         c, r = len(self.pm.profiles), self.bl.running_count()
         head = get_string("profiles_configured", count=c) + " · "
         text.value = None

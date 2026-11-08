@@ -17,6 +17,7 @@ from ..schemas.page import (
     KeyboardTypeRequest,
     NavigateRequest,
     PressRequest,
+    ScrollRequest,
     TabNewRequest,
     TypeRequest,
     WaitRequest,
@@ -100,6 +101,12 @@ def click_at(name: str, body: ClickAtRequest, pm=_PM, bl=_BL) -> dict:
 def keyboard_type(name: str, body: KeyboardTypeRequest, pm=_PM, bl=_BL) -> dict:
     """Type text into the focused element."""
     return _run(name, pm, bl, "keyboard_type", body.model_dump())
+
+
+@router.post("/scroll")
+def scroll_page(name: str, body: ScrollRequest, pm=_PM, bl=_BL) -> dict:
+    """Scroll the active tab smoothly."""
+    return _run(name, pm, bl, "scroll", body.model_dump())
 
 
 @router.post("/wait")

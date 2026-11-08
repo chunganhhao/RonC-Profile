@@ -32,6 +32,7 @@ from . import persona as personas
 from .geo import ExitGeo, lookup, remembered_locale
 from .proxy_bridge import ProxyBridge, Upstream
 from .release import host_os
+from .stealth import build_anti_cdp_init_script
 
 # Playwright defaults a page can observe, or that make the browser behave
 # unlike a person's Chrome. Everything else Playwright passes is kept, except
@@ -143,7 +144,12 @@ def build_args(
     args = persona.to_args()
     if proxy_url:
         args.append(f"--proxy-server={proxy_url}")
-    args += ["--no-first-run", "--no-default-browser-check", "--hide-crash-restore-bubble"]
+    args += [
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--hide-crash-restore-bubble",
+        "--disable-blink-features=AutomationControlled",
+    ]
     if headless is True:
         # Headless otherwise reports an 800x600 screen.
         w, h = HEADLESS_SCREEN
@@ -175,6 +181,8 @@ class ChromeEngine:
         extra_args: tuple[str, ...] | list[str] = (),
         allow_unsupported: bool = False,
         sandbox: bool | None = None,
+        block_webrtc: bool = False,
+        stealth_js: bool = True,
     ) -> None:
         if headless not in (True, False, "offscreen"):
             raise ValueError("headless must be True, False or 'offscreen'")
@@ -191,6 +199,8 @@ class ChromeEngine:
         self._extra_args = tuple(extra_args)
         self._allow_unsupported = allow_unsupported
         self.sandbox = default_sandbox() if sandbox is None else sandbox
+        self.block_webrtc = bool(block_webrtc)
+        self.stealth_js = bool(stealth_js)
 
         self.persona: personas.Persona | None = None
         self.geo: ExitGeo | None = None
@@ -246,7 +256,8 @@ class ChromeEngine:
         self._playwright = await async_playwright().start()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         set_webrtc_policy(
-            self.profile_dir, WEBRTC_POLICY_PROXY if self.bridge else WEBRTC_POLICY_DIRECT
+            self.profile_dir,
+            WEBRTC_POLICY_PROXY if (self.bridge or self.block_webrtc) else WEBRTC_POLICY_DIRECT,
         )
         self.context = await self._playwright.chromium.launch_persistent_context(
             str(self.profile_dir),
@@ -258,6 +269,8 @@ class ChromeEngine:
             chromium_sandbox=self.sandbox,
             accept_downloads=True,
         )
+        if self.stealth_js and hasattr(self.context, "add_init_script"):
+            await self.context.add_init_script(build_anti_cdp_init_script(persona))
         if self.geo and self.geo.latitude is not None and self.geo.longitude is not None:
             # Only the position is emulated; sites still have to ask for permission.
             await self.context.set_geolocation(

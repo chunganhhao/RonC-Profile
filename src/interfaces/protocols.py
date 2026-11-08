@@ -16,6 +16,16 @@ class IProfileManager(Protocol):
         timezone: str | None = None,
         locale: str | None = None,
         engine: str = "camoufox",
+        *,
+        group: str | None = None,
+        account_uid: str | None = None,
+        account_password: str | None = None,
+        two_fa_secret: str | None = None,
+        notes: str | None = None,
+        start_url: str | None = None,
+        webrtc_mode: str = "proxy",
+        canvas_mode: str = "auto",
+        initial_fingerprint: dict[str, Any] | None = None,
     ) -> bool: ...
 
     def update_profile(
@@ -26,6 +36,16 @@ class IProfileManager(Protocol):
         new_os: str,
         new_timezone: str | None = None,
         new_locale: str | None = None,
+        *,
+        group: str | None = None,
+        account_uid: str | None = None,
+        account_password: str | None = None,
+        two_fa_secret: str | None = None,
+        notes: str | None = None,
+        start_url: str | None = None,
+        webrtc_mode: str | None = None,
+        canvas_mode: str | None = None,
+        initial_fingerprint: dict[str, Any] | None = None,
     ) -> bool: ...
 
     def delete_profile(self, name: str) -> bool: ...

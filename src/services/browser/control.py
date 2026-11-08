@@ -149,16 +149,50 @@ class PageController:
             await page.keyboard.press(key)
         return await self._describe(page)
 
-    async def click_at(self, x: float, y: float) -> dict[str, Any]:
+    async def click_at(self, x: float, y: float, humanize: bool = False) -> dict[str, Any]:
         """Click viewport coordinates, as seen on a screenshot of the active tab."""
         page = await self._page()
-        await page.mouse.click(x, y)
+        if humanize:
+            from chrome_engine.stealth import human_click_at
+
+            await human_click_at(page, x, y)
+        else:
+            await page.mouse.click(x, y)
         return await self._describe(page)
 
-    async def keyboard_type(self, text: str) -> dict[str, Any]:
+    async def keyboard_type(self, text: str, humanize: bool = False) -> dict[str, Any]:
         """Type into whatever element has focus."""
         page = await self._page()
-        await page.keyboard.type(text)
+        if humanize:
+            from chrome_engine.stealth import human_type
+
+            await human_type(page, text)
+        else:
+            await page.keyboard.type(text)
+        return await self._describe(page)
+
+    async def scroll(
+        self,
+        delta_y: float = 380.0,
+        delta_x: float = 0.0,
+        steps: int = 6,
+        humanize: bool = True,
+    ) -> dict[str, Any]:
+        """Scroll the active page using wheel increments or smooth window.scrollBy."""
+        page = await self._page()
+        if humanize:
+            from chrome_engine.stealth import human_scroll
+
+            await human_scroll(page, delta_y=delta_y, delta_x=delta_x, steps=steps)
+        else:
+            mouse = getattr(page, "mouse", None)
+            wheel_fn = getattr(mouse, "wheel", None) if mouse is not None else None
+            if callable(wheel_fn):
+                await wheel_fn(float(delta_x), float(delta_y))
+            else:
+                await page.evaluate(
+                    f"window.scrollBy({float(delta_x)}, {float(delta_y)}); true;"
+                )
         return await self._describe(page)
 
     async def wait_for(self, selector: str, timeout: int = 15_000) -> dict[str, Any]:
@@ -227,6 +261,7 @@ class PageController:
         "press",
         "click_at",
         "keyboard_type",
+        "scroll",
         "wait_for",
         "screenshot",
         "evaluate",

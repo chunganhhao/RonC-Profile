@@ -31,10 +31,19 @@ class PressRequest(BaseModel):
 class ClickAtRequest(BaseModel):
     x: float = Field(ge=0, description="Viewport X in CSS pixels, as on a screenshot")
     y: float = Field(ge=0, description="Viewport Y in CSS pixels, as on a screenshot")
+    humanize: bool = Field(False, description="Move cursor along a human Bezier trajectory")
 
 
 class KeyboardTypeRequest(BaseModel):
     text: str = Field(max_length=20_000)
+    humanize: bool = Field(False, description="Type with natural per-character cadence")
+
+
+class ScrollRequest(BaseModel):
+    delta_y: float = Field(380.0, ge=-10_000, le=10_000)
+    delta_x: float = Field(0.0, ge=-10_000, le=10_000)
+    steps: int = Field(6, ge=1, le=50)
+    humanize: bool = Field(True, description="Smooth multi-step scroll")
 
 
 class WaitRequest(BaseModel):

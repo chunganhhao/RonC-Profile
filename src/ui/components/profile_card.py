@@ -5,26 +5,39 @@ import flet as ft
 from ...core.strings import get_string
 from ...models.profile import Profile
 from ...utils.proxy_parser import mask_proxy
+from ...utils.totp import generate_totp
 from ..theme.colors import COLORS, FONT_DATA, FONT_SEMIBOLD
 from ..theme.styles import DANGER_ICON_STYLE, ICON_STYLE
 from .launch_button import build_launch_button
 
-_OS_LABELS = {"windows": "WIN", "macos": "MAC", "linux": "LIN"}
+_OS_ICONS = {
+    "macos": ft.Icons.APPLE,
+    "windows": ft.Icons.WINDOW_ROUNDED,
+    "linux": ft.Icons.TERMINAL_ROUNDED,
+}
 
-# One column grid for the header and every row: (expand, fixed width).
+# PionLogin-style tag pill color pairs: (bg_color, text_color)
+_TAG_PALETTES = (
+    ("#86EFAC", "#064E3B"),  # Mint green (like AGY in PionLogin)
+    ("#F9A8D4", "#831843"),  # Soft pink (like Gemini in PionLogin)
+    ("#93C5FD", "#1E3A8A"),  # Sky blue
+    ("#FDE68A", "#78350F"),  # Amber gold
+    ("#C4B5FD", "#4C1D95"),  # Lavender violet
+    ("#67E8F9", "#164E63"),  # Cyan
+)
+
+# PionLogin table grid: (expand, fixed_width)
 COLUMNS = {
     "select": (None, 32),
-    # Sized from real data: "shop-facebook-01", "1920x1080 · 12 CPU",
-    # "198.51.100.40:1080", "America/Los_Angeles".
+    "id": (None, 38),
     "name": (9, None),
-    "device": (11, None),
-    "proxy": (9, None),
-    "geo": (9, None),
-    "status": (None, 100),
-    # Launch button (112, wide enough for "Launch") + gap (8) + three 40px icon buttons.
-    "actions": (None, 244),
+    "group": (6, None),
+    "proxy": (7, None),
+    "notes": (9, None),
+    "status": (None, 92),
+    "actions": (None, 286),
 }
-ROW_HEIGHT = 58
+ROW_HEIGHT = 56
 
 
 def _cell(key: str, content: ft.Control | None) -> ft.Container:
@@ -32,12 +45,26 @@ def _cell(key: str, content: ft.Control | None) -> ft.Container:
     return ft.Container(content=content, expand=expand, width=width)
 
 
+def _tag_colors(tag: str) -> tuple[str, str]:
+    low = tag.lower()
+    if "google" in low or "gmail" in low or "gemini" in low:
+        return ("#F9A8D4", "#831843")
+    if "facebook" in low or "fb" in low or "agy" in low:
+        return ("#86EFAC", "#064E3B")
+    if "tiktok" in low or "x" in low or "twitter" in low:
+        return ("#93C5FD", "#1E3A8A")
+    if "crypto" in low or "airdrop" in low:
+        return ("#FDE68A", "#78350F")
+    idx = sum(ord(ch) for ch in tag) % len(_TAG_PALETTES)
+    return _TAG_PALETTES[idx]
+
+
 def build_header_row(
     all_selected: bool, any_selected: bool, on_select_all: Callable[[bool], None]
 ) -> ft.Container:
     def label(key: str) -> ft.Text:
         return ft.Text(
-            get_string(key), size=12, font_family=FONT_SEMIBOLD, color=COLORS["text_dim"]
+            get_string(key), size=12, font_family=FONT_SEMIBOLD, color=COLORS["text_sub"]
         )
 
     box = ft.Checkbox(
@@ -48,19 +75,20 @@ def build_header_row(
     return ft.Container(
         height=40,
         padding=ft.Padding.symmetric(horizontal=14),
-        bgcolor=COLORS["bg"],
+        bgcolor=COLORS["paper_sunk"],
         border=ft.Border.only(bottom=ft.BorderSide(1, COLORS["card_border"])),
         content=ft.Row(
-            spacing=12,
+            spacing=10,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 _cell("select", box),
+                _cell("id", label("col_id")),
                 _cell("name", label("col_profile")),
-                _cell("device", label("col_device")),
+                _cell("group", label("col_group")),
                 _cell("proxy", label("col_proxy")),
-                _cell("geo", label("col_geo")),
+                _cell("notes", label("col_notes")),
                 _cell("status", label("col_status")),
-                _cell("actions", None),
+                _cell("actions", label("col_actions")),
             ],
         ),
     )
@@ -76,11 +104,14 @@ def build_profile_card(
     is_selected: bool = False,
     on_select: Callable[[str], None] | None = None,
     on_cookies: Callable[[str], None] | None = None,
+    on_copy_pass: Callable[[str], None] | None = None,
+    on_copy_2fa: Callable[[str], None] | None = None,
     device: str = "",
     since: str = "",
     failed: bool = False,
+    row_index: int = 1,
 ) -> ft.Container:
-    """One profile as a table row: identity, device, proxy, geo, stamp, actions."""
+    """One profile as a PionLogin-style table row."""
     if is_running:
         bg = COLORS["card_hover"]
     elif is_selected:
@@ -94,7 +125,7 @@ def build_profile_card(
         bgcolor=bg,
         border=ft.Border.only(bottom=ft.BorderSide(1, COLORS["card_border"])),
         content=ft.Row(
-            spacing=12,
+            spacing=10,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 _cell(
@@ -106,21 +137,18 @@ def build_profile_card(
                     ),
                 ),
                 _cell(
-                    "name",
+                    "id",
                     ft.Text(
-                        profile.name,
-                        size=14,
-                        font_family=FONT_SEMIBOLD,
-                        color=COLORS["text_main"],
-                        no_wrap=True,
-                        overflow=ft.TextOverflow.ELLIPSIS,
-                        tooltip=profile.name,
+                        str(row_index),
+                        size=12.5,
+                        font_family=FONT_DATA,
+                        color=COLORS["text_sub"],
                     ),
                 ),
-                _cell("device", _device(profile, device)),
-                _cell("proxy", _proxy(profile)),
-                _cell("geo", _geo(profile)),
-                # A Row lets the stamp keep its own width instead of filling the cell.
+                _cell("name", _profile_identity(profile)),
+                _cell("group", _group_and_engine_badges(profile)),
+                _cell("proxy", _proxy_badge(profile)),
+                _cell("notes", _notes_and_device(profile, device)),
                 _cell("status", ft.Row(controls=[_stamp(is_loading, is_running, since, failed)])),
                 _cell(
                     "actions",
@@ -130,9 +158,15 @@ def build_profile_card(
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
                             build_launch_button(profile.name, is_loading, is_running, on_launch),
-                            ft.Container(width=8),
+                            ft.Container(width=4),
                             *_action_buttons(
-                                profile.name, is_running, on_edit, on_delete, on_cookies
+                                profile,
+                                is_running,
+                                on_edit,
+                                on_delete,
+                                on_cookies,
+                                on_copy_pass,
+                                on_copy_2fa,
                             ),
                         ],
                     ),
@@ -142,21 +176,144 @@ def build_profile_card(
     )
 
 
-def _data(text: str, size: float = 12.5, color: str | None = None) -> ft.Text:
-    return ft.Text(
-        text,
-        size=size,
-        font_family=FONT_DATA,
-        color=color or COLORS["text_main"],
-        no_wrap=True,
-        overflow=ft.TextOverflow.ELLIPSIS,
+def _profile_identity(profile: Profile) -> ft.Control:
+    os_icon = _OS_ICONS.get(profile.os_type, ft.Icons.COMPUTER)
+    top_line = ft.Row(
+        spacing=7,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        controls=[
+            ft.Icon(
+                os_icon,
+                size=16,
+                color=COLORS["text_main"],
+                tooltip=profile.os_type.upper(),
+            ),
+            ft.Container(
+                expand=True,
+                content=ft.Text(
+                    profile.name,
+                    size=13.5,
+                    font_family=FONT_SEMIBOLD,
+                    color=COLORS["text_main"],
+                    no_wrap=True,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    tooltip=profile.name,
+                ),
+            ),
+        ],
+    )
+    if not profile.account_uid:
+        return top_line
+    return _stack(top_line, _minor(profile.account_uid, data=True))
+
+
+def _group_and_engine_badges(profile: Profile) -> ft.Control:
+    pills: list[ft.Control] = []
+    if profile.group:
+        bg_col, fg_col = _tag_colors(profile.group)
+        pills.append(
+            ft.Container(
+                padding=ft.Padding.symmetric(horizontal=8, vertical=2),
+                border_radius=5,
+                bgcolor=bg_col,
+                content=ft.Text(
+                    profile.group,
+                    size=11,
+                    font_family=FONT_SEMIBOLD,
+                    color=fg_col,
+                    no_wrap=True,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                ),
+            )
+        )
+    engine_label = "Chrome" if profile.engine == "chrome" else "Camoufox"
+    pills.append(
+        ft.Container(
+            padding=ft.Padding.symmetric(horizontal=6, vertical=1.5),
+            border_radius=4,
+            bgcolor=COLORS["paper_sunk"],
+            border=ft.Border.all(1, COLORS["card_border"]),
+            content=ft.Text(
+                engine_label,
+                size=10.5,
+                font_family=FONT_DATA,
+                color=COLORS["text_sub"],
+            ),
+        )
+    )
+    return ft.Row(
+        spacing=5,
+        wrap=False,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        controls=pills,
+    )
+
+
+def _proxy_badge(profile: Profile) -> ft.Control:
+    server = mask_proxy(profile.proxy)
+    if not server:
+        return ft.Text(get_string("direct_short"), size=12.5, color=COLORS["text_dim"])
+    scheme, _, rest = server.partition("://")
+    return ft.Row(
+        spacing=6,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        controls=[
+            ft.Container(
+                padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+                border_radius=6,
+                bgcolor=COLORS["proxy_pill_bg"],
+                border=ft.Border.all(1, COLORS["proxy_pill_border"]),
+                tooltip=f"{scheme.upper()}://{rest}",
+                content=ft.Row(
+                    spacing=5,
+                    tight=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.Text(
+                            rest,
+                            size=11.5,
+                            font_family=FONT_DATA,
+                            color=COLORS["proxy_pill_fg"],
+                            no_wrap=True,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                        ft.Icon(
+                            ft.Icons.LOCK_OUTLINE,
+                            size=12,
+                            color=COLORS["proxy_pill_fg"],
+                        ),
+                    ],
+                ),
+            )
+        ],
+    )
+
+
+def _notes_and_device(profile: Profile, device: str) -> ft.Control:
+    geo_part = profile.timezone or get_string("follows_ip")
+    hw_line = f"{device} · {geo_part}" if device else geo_part
+    if profile.notes:
+        return _stack(
+            ft.Text(
+                profile.notes,
+                size=12.5,
+                color=COLORS["text_main"],
+                no_wrap=True,
+                overflow=ft.TextOverflow.ELLIPSIS,
+                tooltip=profile.notes,
+            ),
+            _minor(hw_line, data=True),
+        )
+    return _stack(
+        _minor(device or get_string("no_fingerprint_short"), data=bool(device)),
+        _minor(geo_part, data=bool(profile.timezone)),
     )
 
 
 def _minor(text: str, data: bool = False) -> ft.Text:
     return ft.Text(
         text,
-        size=11.5,
+        size=11,
         font_family=FONT_DATA if data else None,
         color=COLORS["text_dim"],
         no_wrap=True,
@@ -168,158 +325,88 @@ def _stack(*lines: ft.Control) -> ft.Column:
     return ft.Column(spacing=1, alignment=ft.MainAxisAlignment.CENTER, controls=list(lines))
 
 
-def _device(profile: Profile, device: str) -> ft.Row:
-    chrome = profile.engine == "chrome"
-    engine = ft.Text(
-        "Chrome" if chrome else "Camoufox",
-        size=13,
-        font_family=FONT_SEMIBOLD if chrome else None,
-        color=COLORS["sidebar"] if chrome else COLORS["text_main"],
-    )
-    return ft.Row(
-        spacing=8,
-        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        controls=[
-            ft.Container(
-                width=38,
-                height=22,
-                border_radius=4,
-                border=ft.Border.all(1, COLORS["text_sub"]),
-                alignment=ft.Alignment(0, 0),
-                tooltip=profile.os_type,
-                content=ft.Text(
-                    _OS_LABELS.get(profile.os_type, "OS"),
-                    size=11,
-                    font_family=FONT_DATA,
-                    weight=ft.FontWeight.W_600,
-                    color=COLORS["text_main"],
-                ),
-            ),
-            ft.Container(
-                expand=True,
-                # Every row keeps two lines, so heights and baselines match.
-                content=_stack(
-                    engine,
-                    _minor(device, data=True)
-                    if device
-                    else _minor(get_string("no_fingerprint_short")),
-                ),
-            ),
-        ],
-    )
-
-
-def _proxy(profile: Profile) -> ft.Control:
-    server = mask_proxy(profile.proxy)
-    if not server:
-        return _stack(
-            ft.Text(get_string("direct_short"), size=13, color=COLORS["text_sub"]),
-            _minor(get_string("no_proxy_short")),
-        )
-    scheme, _, rest = server.partition("://")
-    return _stack(_data(rest), _minor(scheme.upper()))
-
-
-def _geo(profile: Profile) -> ft.Column:
-    follow = get_string("follows_ip")
-    tz = (
-        _data(profile.timezone)
-        if profile.timezone
-        else ft.Text(follow, size=13, color=COLORS["text_dim"])
-    )
-    locale = _minor(profile.locale, data=True) if profile.locale else _minor(follow)
-    return _stack(tz, locale)
-
-
 def _stamp(is_loading: bool, is_running: bool, since: str, failed: bool = False) -> ft.Control:
-    """The entry stamp: a rotated rubber-stamp mark while a profile is live.
-
-    State reads by form as well as ink: live is a double rule, starting a single
-    thin rule set straight, failure a struck single rule in red.
-    """
     if failed and not is_loading and not is_running:
-        # Same footprint as the live stamp so the state that needs action is not
-        # the smallest one on screen; a thin strike keeps the letters legible.
         return ft.Container(
-            rotate=ft.Rotate(-0.07),
-            width=86,
-            padding=ft.Padding.symmetric(horizontal=9, vertical=5),
-            border_radius=6,
-            border=ft.Border.all(1.5, COLORS["error"]),
+            padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+            border_radius=5,
+            border=ft.Border.all(1, COLORS["error"]),
             tooltip=get_string("stamp_failed"),
             content=ft.Text(
-                get_string("stamp_failed").upper(),
-                size=10.5,
-                text_align=ft.TextAlign.CENTER,
-                font_family=FONT_DATA,
-                weight=ft.FontWeight.W_700,
+                get_string("stamp_failed"),
+                size=11,
+                font_family=FONT_SEMIBOLD,
                 color=COLORS["error"],
-                style=ft.TextStyle(
-                    decoration=ft.TextDecoration.LINE_THROUGH, decoration_thickness=0.8
-                ),
             ),
         )
     if is_loading:
         return ft.Container(
-            padding=ft.Padding.symmetric(horizontal=9, vertical=3),
-            border_radius=6,
+            padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+            border_radius=5,
             border=ft.Border.all(1, COLORS["text_sub"]),
             content=ft.Text(
-                get_string("stamp_starting").upper(),
-                size=10.5,
+                get_string("stamp_starting"),
+                size=11,
                 font_family=FONT_DATA,
-                weight=ft.FontWeight.W_700,
                 color=COLORS["text_sub"],
             ),
         )
     if not is_running:
-        return ft.Text(get_string("stamp_idle"), size=13, color=COLORS["text_dim"])
+        return ft.Text(get_string("stamp_idle"), size=12, color=COLORS["text_dim"])
+
     ink = COLORS["live"]
-    lines: list[ft.Control] = [
-        ft.Text(
-            get_string("stamp_live").upper(),
-            size=10.5,
-            font_family=FONT_DATA,
-            weight=ft.FontWeight.W_700,
-            color=ink,
-        )
-    ]
-    if since:
-        lines.append(ft.Text(since, size=10, font_family=FONT_DATA, color=ink))
-    # Double rule: an outer ring around the inked frame.
+    label = f"● {get_string('stamp_live')}" + (f" {since}" if since else "")
     return ft.Container(
-        rotate=ft.Rotate(-0.07),
-        padding=2,
-        border_radius=8,
+        padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+        border_radius=5,
         border=ft.Border.all(1, ink),
-        content=ft.Container(
-            padding=ft.Padding.symmetric(horizontal=9, vertical=2),
-            border_radius=6,
-            border=ft.Border.all(1.5, ink),
-            bgcolor=ft.Colors.with_opacity(0.35, "#FFFFFF"),
-            content=ft.Column(
-                spacing=0,
-                tight=True,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                controls=lines,
-            ),
+        content=ft.Text(
+            label,
+            size=11,
+            font_family=FONT_SEMIBOLD,
+            color=ink,
         ),
     )
 
 
 def _action_buttons(
-    name: str,
+    profile: Profile,
     is_running: bool,
     on_edit: Callable[[str], None],
     on_delete: Callable[[str], None],
     on_cookies: Callable[[str], None] | None,
+    on_copy_pass: Callable[[str], None] | None,
+    on_copy_2fa: Callable[[str], None] | None,
 ) -> list[ft.IconButton]:
-    buttons = []
+    name = profile.name
+    buttons: list[ft.IconButton] = []
+    if profile.account_password and on_copy_pass:
+        buttons.append(
+            ft.IconButton(
+                icon=ft.Icons.KEY_OUTLINED,
+                icon_size=17,
+                icon_color=COLORS["text_sub"],
+                tooltip=get_string("tooltip_copy_pass", uid=profile.account_uid or name),
+                style=ICON_STYLE,
+                on_click=lambda _, n=name: on_copy_pass(n),
+            )
+        )
+    if profile.two_fa_secret and on_copy_2fa and generate_totp(profile.two_fa_secret):
+        buttons.append(
+            ft.IconButton(
+                icon=ft.Icons.SECURITY_OUTLINED,
+                icon_size=17,
+                icon_color=COLORS["accent"],
+                tooltip=get_string("tooltip_copy_2fa"),
+                style=ICON_STYLE,
+                on_click=lambda _, n=name: on_copy_2fa(n),
+            )
+        )
     if on_cookies:
         buttons.append(
             ft.IconButton(
                 icon=ft.Icons.COOKIE_OUTLINED,
-                icon_size=19,
+                icon_size=18,
                 icon_color=COLORS["rule_strong"] if is_running else COLORS["text_sub"],
                 tooltip=get_string("tooltip_cookies"),
                 disabled=is_running,
@@ -331,7 +418,7 @@ def _action_buttons(
         *buttons,
         ft.IconButton(
             icon=ft.Icons.EDIT_OUTLINED,
-            icon_size=19,
+            icon_size=18,
             icon_color=COLORS["text_sub"],
             tooltip=get_string("tooltip_edit"),
             style=ICON_STYLE,
@@ -339,7 +426,7 @@ def _action_buttons(
         ),
         ft.IconButton(
             icon=ft.Icons.DELETE_OUTLINE,
-            icon_size=19,
+            icon_size=18,
             icon_color=COLORS["rule_strong"] if is_running else COLORS["text_sub"],
             tooltip=get_string("tooltip_delete"),
             disabled=is_running,

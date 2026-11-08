@@ -3,15 +3,25 @@ import os
 import flet as ft
 
 from ...core.strings import get_string
-from .colors import COLORS, FONT, FONT_BOLD, FONT_DATA, FONT_MEDIUM, FONT_SEMIBOLD
+from .colors import (
+    COLORS,
+    FONT,
+    FONT_BOLD,
+    FONT_DATA,
+    FONT_MEDIUM,
+    FONT_SEMIBOLD,
+    current_theme_mode,
+)
 
 
 def build_page_theme() -> ft.Theme:
+    is_dark = current_theme_mode() == "dark"
+    primary_color = COLORS["accent"] if is_dark else COLORS["sidebar"]
     return ft.Theme(
         font_family=FONT,
-        color_scheme_seed=COLORS["sidebar"],
+        color_scheme_seed=primary_color,
         color_scheme=ft.ColorScheme(
-            primary=COLORS["sidebar"],
+            primary=primary_color,
             on_primary="#FFFFFF",
             secondary=COLORS["accent"],
             surface=COLORS["card_bg"],
@@ -29,11 +39,14 @@ def build_page_theme() -> ft.Theme:
             radius=8,
         ),
         tooltip_theme=ft.TooltipTheme(
-            decoration=ft.BoxDecoration(bgcolor=COLORS["text_main"], border_radius=6),
+            decoration=ft.BoxDecoration(
+                bgcolor="#272B35" if is_dark else COLORS["text_main"],
+                border_radius=6,
+            ),
             text_style=ft.TextStyle(color="#F2F4F1", size=12),
         ),
         checkbox_theme=ft.CheckboxTheme(
-            fill_color={ft.ControlState.SELECTED: COLORS["sidebar"]},
+            fill_color={ft.ControlState.SELECTED: primary_color},
             border_side=ft.BorderSide(1.5, COLORS["text_sub"]),
             shape=ft.RoundedRectangleBorder(radius=4),
         ),
@@ -58,7 +71,7 @@ def build_os_dropdown(value: str = "windows") -> ft.Dropdown:
         bgcolor=COLORS["input_bg"],
         color=COLORS["text_main"],
         border_color=COLORS["rule_strong"],
-        focused_border_color=COLORS["sidebar"],
+        focused_border_color=COLORS["accent"],
         label_style=ft.TextStyle(color=COLORS["text_sub"]),
         border_radius=8,
         options=[
@@ -77,7 +90,7 @@ def build_engine_dropdown(value: str = "camoufox", disabled: bool = False) -> ft
         bgcolor=COLORS["input_bg"],
         color=COLORS["text_main"],
         border_color=COLORS["rule_strong"],
-        focused_border_color=COLORS["sidebar"],
+        focused_border_color=COLORS["accent"],
         label_style=ft.TextStyle(color=COLORS["text_sub"]),
         border_radius=8,
         options=[
@@ -87,9 +100,16 @@ def build_engine_dropdown(value: str = "camoufox", disabled: bool = False) -> ft
     )
 
 
+def apply_page_theme(page: ft.Page) -> None:
+    is_dark = current_theme_mode() == "dark"
+    page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
+    page.bgcolor = COLORS["bg"]
+    page.theme = build_page_theme()
+
+
 def configure_page(page: ft.Page) -> None:
     page.title = get_string("window_title")
-    page.window.width, page.window.height = 1400, 860
+    page.window.width, page.window.height = 1440, 880
     page.window.min_width, page.window.min_height = 1180, 680
 
     icon_name = "icon.ico" if os.name == "nt" else "icon.png"
@@ -101,6 +121,4 @@ def configure_page(page: ft.Page) -> None:
 
     page.padding = page.spacing = 0
     page.fonts = dict(_FONT_FILES)
-    page.theme_mode = ft.ThemeMode.LIGHT
-    page.bgcolor = COLORS["bg"]
-    page.theme = build_page_theme()
+    apply_page_theme(page)

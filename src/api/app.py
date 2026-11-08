@@ -19,6 +19,7 @@ from .routes import (
     page_router,
     profiles_router,
     proxy_router,
+    warming_router,
 )
 from .schemas.common import SuccessResponse
 
@@ -48,8 +49,16 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        async with mcp_lifespan:
-            yield
+        container.warming_scheduler.start_daemon(
+            container.profile_manager,
+            container.browser_launcher,
+            on_update=container.event_bus.emit,
+        )
+        try:
+            async with mcp_lifespan:
+                yield
+        finally:
+            container.warming_scheduler.stop_daemon()
 
     app = FastAPI(
         lifespan=lifespan,
@@ -70,6 +79,7 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
     app.include_router(browser_router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(page_router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(proxy_router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(warming_router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(mcp_setup_router, prefix=API_PREFIX, dependencies=protected)
     app.router.routes.append(mcp_route)
 

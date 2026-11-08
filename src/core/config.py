@@ -14,11 +14,14 @@ def _env(key: str, default: str) -> str:
 
 
 PROFILES_FILE = _env("PROFILES_FILE", "profiles.json")
+PROXY_POOL_FILE = _env("PROXY_POOL_FILE", "proxies.json")
+WARMING_FILE = _env("WARMING_FILE", "warming_tasks.json")
 DATA_DIR = _env("DATA_DIR", "camoufox_data")
 LOG_DIR = _env("LOG_DIR", "logs")
 LOG_LEVEL = _env("LOG_LEVEL", "INFO")
 PROXY_CHECK_TIMEOUT = int(_env("PROXY_TIMEOUT", "10"))
 LANGUAGE = _env("LANG", "en")
+THEME_MODE = _env("THEME", "dark").strip().lower()
 
 API_HOST = _env("API_HOST", "127.0.0.1")
 API_PORT = int(_env("API_PORT", "8000"))

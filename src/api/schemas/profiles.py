@@ -16,6 +16,14 @@ class ProfileCreate(BaseModel):
         description="camoufox (Firefox) or chrome (Chromium, fingerprint-chromium). "
         "Fixed once the profile is created",
     )
+    group: str | None = None
+    account_uid: str | None = None
+    account_password: str | None = None
+    two_fa_secret: str | None = None
+    notes: str | None = None
+    start_url: str | None = None
+    webrtc_mode: str = "proxy"
+    canvas_mode: str = "auto"
 
 
 class ProfileUpdate(BaseModel):
@@ -27,6 +35,14 @@ class ProfileUpdate(BaseModel):
     timezone: str | None = Field(None, description='"" switches back to automatic')
     locale: str | None = Field(None, description='"" switches back to automatic')
     engine: str | None = Field(None, description="Cannot be changed; only the current value")
+    group: str | None = None
+    account_uid: str | None = None
+    account_password: str | None = None
+    two_fa_secret: str | None = None
+    notes: str | None = None
+    start_url: str | None = None
+    webrtc_mode: str | None = None
+    canvas_mode: str | None = None
 
 
 class ProfileResponse(BaseModel):
@@ -36,6 +52,14 @@ class ProfileResponse(BaseModel):
     timezone: str | None = None
     locale: str | None = None
     engine: str = "camoufox"
+    group: str | None = None
+    account_uid: str | None = None
+    notes: str | None = None
+    start_url: str | None = None
+    webrtc_mode: str = "proxy"
+    canvas_mode: str = "auto"
+    has_password: bool = False
+    has_2fa: bool = False
     data_dir: str
     is_running: bool
 

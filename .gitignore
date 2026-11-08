@@ -178,12 +178,16 @@ pyrightconfig.json
 # Local runtime data (cookies, fingerprints, profiles, logs)
 camoufox_data/
 profiles.json
+proxies.json
+warming_tasks.json
 logs/
 
 # Tooling artefacts
 uv.lock
 e2e-output/
 .omc/
+artifacts/
+HANDOFF_CODEX_REVIEW_BATCH*.md
 
 # Impeccable design run artifacts (screenshots, decision payloads)
 .impeccable/review/

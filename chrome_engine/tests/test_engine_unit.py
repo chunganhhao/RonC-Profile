@@ -22,6 +22,7 @@ def test_build_args_headed():
     args = build_args(P)
     assert args[:5] == P.to_args()
     assert "--start-maximized" in args
+    assert "--disable-blink-features=AutomationControlled" in args
     assert not any(a.startswith("--disable-features") for a in args)
     assert not any(a.startswith("--proxy-server") for a in args)
 

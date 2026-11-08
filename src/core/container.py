@@ -46,3 +46,15 @@ class Container:
         from ..services.proxy.service import ProxyService
 
         return self._get("ps", ProxyService)
+
+    @property
+    def proxy_pool(self):
+        from ..services.proxy.pool import ProxyPoolService
+
+        return self._get("pp", ProxyPoolService)
+
+    @property
+    def warming_scheduler(self):
+        from ..services.warming.scheduler import WarmingSchedulerService
+
+        return self._get("ws", WarmingSchedulerService)

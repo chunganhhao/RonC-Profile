@@ -13,6 +13,7 @@ from ...models.profile import ENGINES
 from ...services.browser import chrome_prefetch, cookies, fingerprint
 from ...services.browser.launcher import ProfileBusyError
 from ...services.proxy.geo_check import check_geo
+from ...utils.totp import clean_totp_secret
 from ...utils.validation import (
     validate_locale,
     validate_profile_name,
@@ -106,6 +107,11 @@ def create_profile(
         valid, msg = validate_proxy_format(body.proxy)
         if not valid:
             raise HTTPException(status_code=400, detail=msg)
+    if body.two_fa_secret and body.two_fa_secret.strip() and not clean_totp_secret(body.two_fa_secret):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid 2FA TOTP secret (must be Base32 or standard SHA1/6-digit/30s otpauth://totp URI)",
+        )
 
     if not pm.add_profile(
         body.name,
@@ -114,6 +120,14 @@ def create_profile(
         body.timezone or None,
         body.locale or None,
         body.engine,
+        group=body.group,
+        account_uid=body.account_uid,
+        account_password=body.account_password,
+        two_fa_secret=body.two_fa_secret,
+        notes=body.notes,
+        start_url=body.start_url,
+        webrtc_mode=body.webrtc_mode,
+        canvas_mode=body.canvas_mode,
     ):
         raise HTTPException(status_code=409, detail="Profile already exists")
 
@@ -182,9 +196,35 @@ def update_profile(
         valid, msg = validate_proxy_format(new_proxy)
         if not valid:
             raise HTTPException(status_code=400, detail=msg)
+    raw_2fa = supplied.get("two_fa_secret")
+    if raw_2fa and raw_2fa.strip() and not clean_totp_secret(raw_2fa):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid 2FA TOTP secret (must be Base32 or standard SHA1/6-digit/30s otpauth://totp URI)",
+        )
 
+    extra_update = {
+        k: supplied[k]
+        for k in (
+            "group",
+            "account_uid",
+            "account_password",
+            "two_fa_secret",
+            "notes",
+            "start_url",
+            "webrtc_mode",
+            "canvas_mode",
+        )
+        if k in supplied
+    }
     if not pm.update_profile(
-        name, new_name, new_proxy or "", new_os, new_timezone or None, new_locale or None
+        name,
+        new_name,
+        new_proxy or "",
+        new_os,
+        new_timezone or None,
+        new_locale or None,
+        **extra_update,
     ):
         raise HTTPException(status_code=409, detail="Update failed (name conflict?)")
 

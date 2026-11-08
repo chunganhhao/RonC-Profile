@@ -36,3 +36,15 @@ def get_event_bus(
     container: Container = Depends(_container),
 ) -> EventBus:
     return container.event_bus
+
+
+def get_proxy_pool(
+    container: Container = Depends(_container),
+):
+    return container.proxy_pool
+
+
+def get_warming_scheduler(
+    container: Container = Depends(_container),
+):
+    return container.warming_scheduler

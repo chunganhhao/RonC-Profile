@@ -30,8 +30,31 @@ def test_generated_values_are_valid(platform):
 
 
 def test_random_seed_when_none():
-    seeds = {personas.generate("linux").seed for _ in range(20)}
-    assert len(seeds) > 15
+    personas_list = [personas.generate("linux") for _ in range(40)]
+    seeds = {p.seed for p in personas_list}
+    assert len(seeds) > 25
+    # Upstream #100: every auto-generated seed must be a multiple of 3 (deviceMemory == 8 GB)
+    assert all(p.seed % 3 == 0 and p.has_valid_device_memory_seed for p in personas_list)
+
+
+def test_align_seed_for_device_memory():
+    for raw in (1, 2, 4, 5, 7, 1337, personas.SEED_MAX):
+        aligned = personas.align_seed_for_device_memory(raw)
+        assert 1 <= aligned <= personas.SEED_MAX
+        assert aligned % 3 == 0
+        assert personas.seed_gives_valid_device_memory(aligned)
+    # Consecutive unaligned seeds (e.g. 5000, 5001, 5002) remain distinct and divisible by 3
+    mapped = [
+        Persona(seed=s, platform="windows", platform_version="15.0.0").to_args()[0]
+        for s in (5000, 5001, 5002)
+    ]
+    assert len(set(mapped)) == 3
+    assert all(int(arg.split("=")[1]) % 3 == 0 for arg in mapped)
+    unaligned = Persona(seed=1337, platform="windows", platform_version="15.0.0")
+    assert not unaligned.has_valid_device_memory_seed
+    fixed = unaligned.with_aligned_seed()
+    assert fixed.has_valid_device_memory_seed
+    assert fixed.seed == 4011
 
 
 @pytest.mark.parametrize(
