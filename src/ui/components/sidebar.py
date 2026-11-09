@@ -275,7 +275,7 @@ def build_sidebar(
                     spacing=10,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
-                        ft.Image(src="logo.png", width=32, height=32),
+                        ft.Image(src="logo.png", width=48, height=48),
                         ft.Column(
                             spacing=0,
                             expand=True,

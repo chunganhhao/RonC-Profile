@@ -5,7 +5,6 @@ import flet as ft
 from ...core.strings import get_string
 from ...models.profile import Profile
 from ...utils.proxy_parser import mask_proxy
-from ...utils.totp import generate_totp
 from ..theme.colors import COLORS, FONT_DATA, FONT_SEMIBOLD
 from ..theme.styles import DANGER_ICON_STYLE, ICON_STYLE
 from .launch_button import build_launch_button
@@ -391,7 +390,7 @@ def _action_buttons(
                 on_click=lambda _, n=name: on_copy_pass(n),
             )
         )
-    if profile.two_fa_secret and on_copy_2fa and generate_totp(profile.two_fa_secret):
+    if profile.two_fa_secret and on_copy_2fa:
         buttons.append(
             ft.IconButton(
                 icon=ft.Icons.SECURITY_OUTLINED,

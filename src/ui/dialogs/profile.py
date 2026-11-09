@@ -15,9 +15,11 @@ from ...services.browser import fingerprint as fp_service
 from ...services.proxy.geo_check import GeoCheckResult, check_geo
 from ...utils.totp import clean_totp_secret, generate_totp, parse_account_line
 from ...utils.validation import (
+    normalize_start_url,
     validate_locale,
     validate_profile_name,
     validate_proxy_format,
+    validate_start_url,
     validate_timezone,
 )
 from ..theme.colors import COLORS, FONT_BOLD, FONT_DATA, FONT_SEMIBOLD
@@ -87,6 +89,7 @@ def open_profile_dialog(
     proxy_service: IProxyService,
     on_save: Callable[..., str | None],
     profile: Profile | None = None,
+    profile_manager: Any = None,
 ) -> None:
     is_edit = profile is not None
     title = get_string("edit_profile") if is_edit else get_string("create_new_profile")
@@ -468,7 +471,9 @@ def open_profile_dialog(
             # Sync dropdown values back to coherent result
             scr_now = info.get("screen")
             screen_dropdown.options = _screen_options_for_os(os_val, scr_now)
-            if scr_now:
+            if scr_spec == "auto":
+                screen_dropdown.value = "auto"
+            elif scr_now:
                 screen_dropdown.value = scr_now
             g_key = _gpu_key(info.get("gpu_vendor") or "", info.get("gpu_renderer") or "")
             if g_key in {opt.key for opt in gpu_dropdown.options}:
@@ -539,6 +544,7 @@ def open_profile_dialog(
     pool_idx_state = {"idx": 0}
 
     def _on_pick_from_pool(_: ft.ControlEvent) -> None:
+        from ...services.profile.manager import ProfileManager
         from ...services.proxy.pool import ProxyPoolService
 
         pool = ProxyPoolService()
@@ -550,7 +556,14 @@ def open_profile_dialog(
             with contextlib.suppress(Exception):
                 page.update()
             return
-        chosen = entries[pool_idx_state["idx"] % len(entries)]
+        pm_inst = profile_manager if profile_manager is not None else ProfileManager()
+        counts = pool.usage_counts(pm_inst)
+        entries.sort(key=lambda e: (counts.get(e.id, 0), 0 if e.status == "working" else 1))
+        chosen = (
+            (pool.pick_least_used(pm_inst) or entries[0])
+            if pool_idx_state["idx"] == 0
+            else entries[pool_idx_state["idx"] % len(entries)]
+        )
         pool_idx_state["idx"] += 1
         proxy_field.value = chosen.proxy
         proxy_error.value = get_string("picked_pool_proxy", masked=chosen.masked)
@@ -613,16 +626,26 @@ def open_profile_dialog(
             page.update()
             return
 
+        raw_start_url = (start_url_field.value or "").strip()
+        valid_url, url_err = validate_start_url(raw_start_url)
+        if not valid_url:
+            name_error.value = url_err
+            name_error.visible = True
+            page.update()
+            return
+
         is_chrome = engine == "chrome"
+        default_webrtc = profile.webrtc_mode if profile is not None else "proxy"
+        default_canvas = profile.canvas_mode if profile is not None else "auto"
         extra_kwargs = {
             "group": (group_dropdown.value or "").strip(),
             "account_uid": (uid_field.value or "").strip(),
             "account_password": pass_field.value or "",
             "two_fa_secret": cleaned_2fa,
             "notes": (notes_field.value or "").strip(),
-            "start_url": (start_url_field.value or "").strip(),
-            "webrtc_mode": "proxy" if is_chrome else (webrtc_dropdown.value or "proxy"),
-            "canvas_mode": "auto" if is_chrome else (canvas_dropdown.value or "auto"),
+            "start_url": normalize_start_url(raw_start_url),
+            "webrtc_mode": default_webrtc if is_chrome else (webrtc_dropdown.value or "proxy"),
+            "canvas_mode": default_canvas if is_chrome else (canvas_dropdown.value or "auto"),
             "initial_fingerprint": None if is_chrome else fp_state["fp"],
         }
 

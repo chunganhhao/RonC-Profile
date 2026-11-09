@@ -506,6 +506,87 @@ def test_worker_variants_base_url_module_tla_and_shared_worker_semantics():
                     "invalidOptionErrors": ["TypeError", "TypeError"],
                 }, storage_probe
 
+                # Ponytail Finding #8 (and Codex Re-Review #1 & #2):
+                # 1. Binary/image Blobs are ignored by blobMap, and the oldest still-valid script Blob URL
+                #    retains its realm stealth bootstrap even after >64 subsequent script Blob URLs are created.
+                # 2. Closing SharedWorker ports releases connection references so activeSharedRefs does not grow unboundedly.
+                blob_churn_ok = page.evaluate(
+                    """async () => {
+                      const askGpu = async (u) => {
+                        const w = new Worker(u);
+                        return await new Promise((resolve) => {
+                          const t = setTimeout(() => resolve('timeout'), 3000);
+                          w.onmessage = (e) => { clearTimeout(t); w.terminate(); resolve(e.data); };
+                          w.postMessage('go');
+                        });
+                      };
+                      const code = "onmessage = async () => { const a = await navigator.gpu.requestAdapter(); postMessage(a ? a.info.vendor : null); };";
+                      const firstUrl = URL.createObjectURL(new Blob([code], {type: 'text/javascript'}));
+                      const beforeVendor = await askGpu(firstUrl);
+                      for (let i = 0; i < 80; i++) {
+                        const imgUrl = URL.createObjectURL(new Blob([new Uint8Array(64)], {type: 'image/png'}));
+                        URL.revokeObjectURL(imgUrl);
+                      }
+                      let lastUrl = '';
+                      for (let i = 0; i < 70; i++) {
+                        lastUrl = URL.createObjectURL(new Blob([code], {type: 'text/javascript'}));
+                      }
+                      const afterFirstVendor = await askGpu(firstUrl);
+                      const afterLastVendor = await askGpu(lastUrl);
+                      const mainAdapter = await navigator.gpu.requestAdapter();
+                      const mainVendor = mainAdapter ? mainAdapter.info.vendor : null;
+                      return (
+                        beforeVendor === mainVendor &&
+                        afterFirstVendor === mainVendor &&
+                        afterLastVendor === mainVendor
+                      );
+                    }"""
+                )
+                assert blob_churn_ok is True
+
+                ref_ctx = browser.new_context()
+                try:
+                    ref_script = stealth.build_anti_cdp_init_script(
+                        Persona(seed=300, platform="windows", platform_version="19.0.0")
+                    ).replace(
+                        "const activeSharedRefs = [];",
+                        "const activeSharedRefs = []; globalThis.__reviewRefs = activeSharedRefs;",
+                    )
+                    ref_ctx.add_init_script(ref_script)
+                    ref_page = ref_ctx.new_page()
+                    ref_page.goto(f"http://127.0.0.1:{server.server_port}/")
+                    close_res = ref_page.evaluate(
+                        """async () => {
+                          const frame = document.createElement('iframe');
+                          document.body.append(frame);
+                          for (let i = 0; i < 6; i++) {
+                            const w = new SharedWorker('/shared.js', {name: 'close-check-' + i});
+                            await new Promise((resolve, reject) => {
+                              const t = setTimeout(() => reject(new Error('timeout')), 2000);
+                              w.port.onmessage = () => { clearTimeout(t); resolve(); };
+                              w.port.start();
+                              w.port.postMessage('go');
+                            });
+                            if (i % 2 === 0) {
+                              w.port.close();
+                            } else {
+                              frame.contentWindow.MessagePort.prototype.close.call(w.port);
+                            }
+                          }
+                          await new Promise((r) => setTimeout(r, 40));
+                          let illegalCloseErr = '';
+                          try {
+                            frame.contentWindow.MessagePort.prototype.close.call({});
+                          } catch (e) {
+                            illegalCloseErr = e.name;
+                          }
+                          return {refs: globalThis.__reviewRefs.length, illegalCloseErr};
+                        }"""
+                    )
+                    assert close_res == {"refs": 0, "illegalCloseErr": "TypeError"}, close_res
+                finally:
+                    ref_ctx.close()
+
                 # Verify R5-B3-F1: same-origin SharedWorker works under Content-Security-Policy: worker-src 'self' blob:
                 # and R6-B3-F1: page BroadcastChannel cannot observe or query internal coordination channel
                 csp_page = ctx.new_page()

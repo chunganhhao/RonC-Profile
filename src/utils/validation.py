@@ -2,6 +2,7 @@ import functools
 import re
 import zoneinfo
 from collections.abc import Callable
+from urllib.parse import unquote, urlparse
 
 from ..core.strings import get_string
 from .proxy_parser import normalize_proxy
@@ -108,6 +109,44 @@ def valid_or_none(value: object, validate: Callable[[str], tuple[bool, str]]) ->
     if not isinstance(value, str) or not value or not validate(value)[0]:
         return None
     return value
+
+
+_URL_SCHEME = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):(.*)$", re.S)
+
+
+def normalize_start_url(value: object) -> str:
+    """Normalize an optional http(s) startup URL, or return '' if empty/unsafe."""
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip()
+    if not raw:
+        return ""
+    colon = raw.find(":")
+    slash = raw.find("/")
+    if colon != -1 and "%" in raw[:colon] and (slash == -1 or colon < slash):
+        if unquote(raw[:colon]).lower() not in ("http", "https"):
+            return ""
+    match = _URL_SCHEME.match(raw)
+    if not match or re.match(r"\d+(/|$)", match.group(2)):
+        raw = "https://" + raw
+    try:
+        parsed = urlparse(raw)
+        host = parsed.hostname
+    except ValueError:
+        return ""
+    if parsed.scheme.lower() not in ("http", "https") or not host:
+        return ""
+    return raw
+
+
+def validate_start_url(value: str | None) -> tuple[bool, str]:
+    """Validate an optional http(s) startup URL; empty means none."""
+    raw = (value or "").strip()
+    if not raw:
+        return True, ""
+    if not normalize_start_url(raw):
+        return False, "Invalid start_url (must be an http:// or https:// URL)"
+    return True, ""
 
 
 @functools.cache

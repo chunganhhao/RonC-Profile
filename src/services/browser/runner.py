@@ -20,6 +20,7 @@ from src.services.browser import display as xvfb
 from src.services.browser.fingerprint import available_gpus, load_or_create
 from src.services.proxy.geo_check import requests_proxy_url
 from src.utils.proxy_parser import parse_proxy
+from src.utils.validation import normalize_start_url
 
 _shutdown = asyncio.Event()
 
@@ -300,9 +301,9 @@ async def run_browser(
                 restored = await restore_tabs(context, session.load(profile_dir))
                 if restored:
                     _safe_print(f"Restored {restored} tab(s)")
-            start_url = (extra.get("start_url") or "").strip()
+            start_url = normalize_start_url(extra.get("start_url"))
             if not restored and start_url:
-                await restore_tabs(context, [start_url])
+                await restore_tabs(context, session.restorable([start_url]))
 
             close_event = asyncio.Event()
 

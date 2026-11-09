@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<title>FoxProfile</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpath fill='%23D9481A' d='M256 190H200L104 64 82 262 256 456Z'/%3E%3Cpath fill='%23FF6B2C' d='M256 190h56l96-126 22 198-174 194Z'/%3E%3Cpath fill='%23FFF4EC' d='M82 262l114 38 60 156ZM430 262l-114 38-60 156Z'/%3E%3C/svg%3E">
+<title>RonC Profile</title>
+<link rel="icon" type="image/png" href="/assets/icon.png">
 <style>
 @font-face { font-family: "Be Vietnam Pro"; src: url("/assets/fonts/BeVietnamPro-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Be Vietnam Pro"; src: url("/assets/fonts/BeVietnamPro-Medium.ttf") format("truetype"); font-weight: 500; font-display: swap; }
@@ -86,7 +86,7 @@ input[type=checkbox] { width: 16px; height: 16px; margin: 0; accent-color: var(-
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='44' viewBox='0 0 160 44'%3E%3Cg fill='none' stroke='%2321433C' stroke-width='.7'%3E%3Cpath d='M0 22c20-16 40-16 60 0s40 16 60 0 40-16 60 0'/%3E%3Cpath d='M0 22c20 16 40 16 60 0s40-16 60 0 40 16 60 0'/%3E%3Cpath d='M0 0c20 12 40 12 60 0s40-12 60 0 40 12 60 0M0 44c20-12 40-12 60 0s40 12 60 0 40-12 60 0'/%3E%3C/g%3E%3C/svg%3E");
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
-.brand svg { width: 34px; height: 34px; flex: none; }
+.brand img { width: 48px; height: 48px; object-fit: contain; flex: none; border-radius: 8px; }
 .brand b { display: block; font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
 .brand span { display: block; font-size: 12px; color: var(--cover-muted); }
 .rail .btn-act { width: 100%; height: 42px; }
@@ -280,14 +280,6 @@ code { font-family: var(--data); font-size: 12.5px; background: var(--paper-sunk
 <body>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="fox" viewBox="0 0 512 512">
-    <path fill="#D9481A" d="M256 190H200L104 64 82 262 256 456Z"/>
-    <path fill="#FF6B2C" d="M256 190h56l96-126 22 198-174 194Z"/>
-    <path fill="#7A2E10" d="M122 104l64 86-48 24ZM390 104l-64 86 48 24Z"/>
-    <path fill="#FFF4EC" d="M82 262l114 38 60 156ZM430 262l-114 38-60 156Z"/>
-    <path fill="#F3E3D6" d="M196 300l60 30 60-30-60 156Z"/>
-    <path fill="#17171C" d="M172 244l58 20-30 18ZM340 244l-58 20 30 18ZM234 416h44l-22 36Z"/>
-  </symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5Z"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -314,7 +306,7 @@ code { font-family: var(--data); font-size: 12.5px; background: var(--paper-sunk
 
 <div id="login" class="login hidden">
   <div class="cover-side rail">
-    <div class="brand"><svg aria-hidden="true"><use href="#fox"/></svg><div><b>FoxProfile</b></div></div>
+    <div class="brand"><img src="/assets/icon.png" alt="RonC logo" width="48" height="48"><div><b>RonC Profile</b></div></div>
     <p data-t="login_side"></p>
   </div>
   <form id="login-form">
@@ -329,8 +321,8 @@ code { font-family: var(--data); font-size: 12.5px; background: var(--paper-sunk
 <div id="app" class="layout hidden">
   <aside class="rail">
     <div class="brand">
-      <svg aria-hidden="true"><use href="#fox"/></svg>
-      <div><b>FoxProfile</b><span data-t="tagline"></span></div>
+      <img src="/assets/icon.png" alt="RonC logo" width="48" height="48">
+      <div><b>RonC Profile</b><span data-t="tagline"></span></div>
     </div>
     <button class="btn btn-act" id="new-btn"><svg class="i"><use href="#i-plus"/></svg><span data-t="new_profile"></span></button>
     <nav class="nav" id="filters" aria-label="Filters">
@@ -393,12 +385,12 @@ const I18N = {
     direct: "Trực tiếp", follow_ip: "Theo IP", no_fp_short: "chưa có fingerprint", no_proxy_short: "không proxy", selected: "Đã chọn {n}", bulk_launch: "Mở", bulk_stop: "Dừng", bulk_delete: "Xoá", clear_sel: "Bỏ chọn",
     select_all: "Chọn tất cả", select_row: "Chọn {name}",
     confirm_bulk_delete: "Xoá {n} profile đã chọn? Cookie và dữ liệu của chúng sẽ mất vĩnh viễn.", bulk_skip_running: "Bỏ qua {n} profile",
-    login_side: "Server này chạy FoxProfile. Đăng nhập bằng API token để quản lý profile từ xa.",
+    login_side: "Server này chạy RonC Profile. Đăng nhập bằng API token để quản lý profile từ xa.",
     login_hint: "Nhập API token (biến FOXPROFILE_API_TOKEN) của server.", token: "API token", login: "Đăng nhập",
     bad_token: "Token không đúng", create: "Tạo profile", edit_title: "Sửa profile", edit_sub: "Đang sửa {name}", create_sub: "Một profile là một danh tính: thiết bị, proxy và vị trí riêng.",
     name: "Tên profile", os: "Hệ điều hành", engine: "Engine",
     engine_camoufox: "Camoufox (Firefox)", engine_chrome: "Chrome (Chromium)", engine_locked: "Engine không đổi được sau khi tạo.",
-    engine_note: "Engine Chromium (fingerprint-chromium). Lần đầu dùng sẽ tự tải về máy chạy FoxProfile (~150 MB). Nên chọn đúng hệ điều hành của máy đó, chọn hệ khác sẽ lộ font. Không đổi được engine sau khi tạo.",
+    engine_note: "Engine Chromium (fingerprint-chromium). Lần đầu dùng sẽ tự tải về máy chạy RonC Profile (~150 MB). Nên chọn đúng hệ điều hành của máy đó, chọn hệ khác sẽ lộ font. Không đổi được engine sau khi tạo.",
     proxy_label: "Proxy", proxy_hint: "user:pass@host:port, host:port:user:pass, hoặc socks5://... Để trống = kết nối trực tiếp.",
     check_proxy: "Kiểm tra proxy", cancel: "Huỷ", save: "Lưu thay đổi", checking: "Đang kiểm tra...",
     confirm_delete: "Xoá profile “{name}”? Cookie và dữ liệu của profile sẽ mất vĩnh viễn.", confirm_title: "Xác nhận", stop_first: "Hãy dừng trình duyệt trước",
@@ -413,7 +405,7 @@ const I18N = {
     mcp_intro: "Cho Claude, Cursor hay VS Code tự quản lý profile và lướt web giúp bạn: mở trang, đọc nội dung, click, gõ và chụp màn hình.",
     mcp_endpoint: "Địa chỉ MCP", mcp_pick: "1. Chọn ứng dụng AI bạn dùng", mcp_paste: "2. Dán vào: {where}",
     mcp_copy: "Sao chép", mcp_copied: "Đã sao chép", mcp_insert_token: "Chèn token đang đăng nhập vào cấu hình",
-    mcp_restart: "3. Khởi động lại ứng dụng AI, giữ FoxProfile đang chạy, rồi thử nhắn:",
+    mcp_restart: "3. Khởi động lại ứng dụng AI, giữ RonC Profile đang chạy, rồi thử nhắn:",
     mcp_example: "Mở profile {name}, vào google.com tìm “thời tiết Hà Nội” và chụp màn hình cho tôi.",
     mcp_remote_note: "Claude Desktop chỉ chạy MCP server cục bộ, nên cấu hình này dùng cầu nối mcp-remote (cần cài Node.js).",
     mcp_security: "Nội dung trang web không đáng tin: AI được dặn không làm theo chỉ dẫn nằm trên trang. MCP không thể xoá profile.",
@@ -444,12 +436,12 @@ const I18N = {
     direct: "Direct", follow_ip: "Follows IP", no_fp_short: "no fingerprint yet", no_proxy_short: "no proxy", selected: "{n} selected", bulk_launch: "Launch", bulk_stop: "Stop", bulk_delete: "Delete", clear_sel: "Clear",
     select_all: "Select all", select_row: "Select {name}",
     confirm_bulk_delete: "Delete {n} selected profiles? Their cookies and data are removed permanently.", bulk_skip_running: "Skipped {n}",
-    login_side: "This server runs FoxProfile. Log in with the API token to manage profiles remotely.",
+    login_side: "This server runs RonC Profile. Log in with the API token to manage profiles remotely.",
     login_hint: "Enter the server's API token (FOXPROFILE_API_TOKEN).", token: "API token", login: "Log in",
     bad_token: "Invalid token", create: "Create profile", edit_title: "Edit profile", edit_sub: "Editing {name}", create_sub: "A profile is an identity: its own device, proxy and location.",
     name: "Profile name", os: "Operating system", engine: "Engine",
     engine_camoufox: "Camoufox (Firefox)", engine_chrome: "Chrome (Chromium)", engine_locked: "The engine cannot be changed after creation.",
-    engine_note: "Chromium engine (fingerprint-chromium). It is downloaded automatically to the FoxProfile machine the first time (~150 MB). Pick that machine's OS: other OSes leak its fonts. The engine cannot be changed later.",
+    engine_note: "Chromium engine (fingerprint-chromium). It is downloaded automatically to the RonC Profile machine the first time (~150 MB). Pick that machine's OS: other OSes leak its fonts. The engine cannot be changed later.",
     proxy_label: "Proxy", proxy_hint: "user:pass@host:port, host:port:user:pass, or socks5://... Blank = direct connection.",
     check_proxy: "Check proxy", cancel: "Cancel", save: "Save changes", checking: "Checking...",
     confirm_delete: "Delete profile “{name}”? Its cookies and data are removed permanently.", confirm_title: "Confirm", stop_first: "Stop the browser first",
@@ -464,7 +456,7 @@ const I18N = {
     mcp_intro: "Let Claude, Cursor or VS Code manage profiles and browse for you: open pages, read them, click, type and take screenshots.",
     mcp_endpoint: "MCP endpoint", mcp_pick: "1. Pick your AI app", mcp_paste: "2. Paste into: {where}",
     mcp_copy: "Copy", mcp_copied: "Copied", mcp_insert_token: "Insert the token you are logged in with",
-    mcp_restart: "3. Restart the AI app, keep FoxProfile running, then try:",
+    mcp_restart: "3. Restart the AI app, keep RonC Profile running, then try:",
     mcp_example: "Open profile {name}, search google.com for “weather in Hanoi” and send me a screenshot.",
     mcp_remote_note: "Claude Desktop only starts local MCP servers, so this config bridges through mcp-remote (requires Node.js).",
     mcp_security: "Page content is untrusted: the AI is told never to follow instructions found on web pages. Profiles cannot be deleted through MCP.",

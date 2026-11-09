@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="src/assets/icon.png" width="112" alt="FoxProfile logo" />
-  <h1>FoxProfile</h1>
+  <img src="src/assets/icon.png" width="112" alt="RonC Profile logo" />
+  <h1>RonC Profile</h1>
   <p><strong>Quản lý nhiều profile trình duyệt chống phát hiện, miễn phí và mã nguồn mở</strong></p>
   <p>Mỗi profile có fingerprint thiết bị, cookie và proxy riêng · Hai engine: Camoufox (Firefox) và Chrome · Giao diện tiếng Anh và tiếng Việt · REST API và MCP cho tự động hóa</p>
 
@@ -23,13 +23,15 @@
   </p>
 </div>
 
-![FoxProfile](docs/images/main.png)
+RonC Profile is a local rebrand of [FoxProfile by chienbm98](https://github.com/chienbm98/foxprofile). Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
 
-FoxProfile quản lý các profile trình duyệt chống phát hiện: mỗi profile là một danh tính riêng với fingerprint thiết bị, cookie, proxy, timezone và locale của nó. Trình duyệt mặc định là [Camoufox](https://github.com/daijro/camoufox), một bản Firefox được chỉnh sửa ở tầng mã nguồn để giả lập fingerprint; ngoài ra có engine Chrome dựa trên [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium). FoxProfile là lựa chọn tự host, chạy trên máy bạn hoặc VPS, thay cho các antidetect browser trả phí như GoLogin, GPM hay MoreLogin.
+![RonC Profile](docs/images/main.png)
+
+RonC Profile quản lý các profile trình duyệt chống phát hiện: mỗi profile là một danh tính riêng với fingerprint thiết bị, cookie, proxy, timezone và locale của nó. Trình duyệt mặc định là [Camoufox](https://github.com/daijro/camoufox), một bản Firefox được chỉnh sửa ở tầng mã nguồn để giả lập fingerprint; ngoài ra có engine Chrome dựa trên [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium). RonC Profile là lựa chọn tự host, chạy trên máy bạn hoặc VPS, thay cho các antidetect browser trả phí như GoLogin, GPM hay MoreLogin.
 
 ## Ủng hộ
 
-FoxProfile miễn phí, mã nguồn mở, được làm vào thời gian rảnh và sẽ luôn như vậy. Nếu nó tiết kiệm cho bạn thời gian hay chi phí, bạn có thể mời mình một ly cà phê; cà phê sẽ thành bug fix, cập nhật theo bản mới của Camoufox và Chrome, và trả lời issue nhanh hơn.
+RonC Profile miễn phí, mã nguồn mở, được làm vào thời gian rảnh và sẽ luôn như vậy. Nếu nó tiết kiệm cho bạn thời gian hay chi phí, bạn có thể mời mình một ly cà phê; cà phê sẽ thành bug fix, cập nhật theo bản mới của Camoufox và Chrome, và trả lời issue nhanh hơn.
 
 <a href="https://buymeacoffee.com/chienbm98"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" /></a>
 
@@ -139,13 +141,13 @@ Hướng dẫn triển khai đầy đủ (Ubuntu, systemd, nginx, HTTPS): [docs/
 
 ## MCP: cho AI điều khiển trình duyệt
 
-FoxProfile có sẵn MCP server, để Claude Code, Claude Desktop, Cursor, VS Code... tự quản lý profile và thao tác trên trang: mở URL, đọc trang, click, gõ, chụp màn hình.
+RonC Profile có sẵn MCP server, để Claude Code, Claude Desktop, Cursor, VS Code... tự quản lý profile và thao tác trên trang: mở URL, đọc trang, click, gõ, chụp màn hình.
 
 **Cách nhanh nhất:** bấm **Kết nối AI (MCP)** ở thanh bên trái của app desktop hoặc web panel. Hộp thoại sinh sẵn cấu hình cho từng ứng dụng AI, đúng địa chỉ và token của bạn, chỉ cần bấm Sao chép rồi dán.
 
 ![Kết nối AI (MCP)](docs/images/mcp-guide.png)
 
-MCP được phục vụ qua HTTP tại `/mcp`, ngay trên cổng của FoxProfile, nên dùng được cả khi FoxProfile chạy trên VPS:
+MCP được phục vụ qua HTTP tại `/mcp`, ngay trên cổng của RonC Profile, nên dùng được cả khi RonC Profile chạy trên VPS:
 
 ```bash
 # Claude Code
@@ -176,21 +178,21 @@ MCP **không** có tool xóa profile, để AI không thể vô tình xóa cooki
 
 Ngoài Camoufox (Firefox), profile có thể chạy trên engine **Chrome**: một bản Chromium đã vá fingerprint ở tầng C++ ([fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium), giấy phép BSD-3). Chọn ở ô **Engine** khi tạo profile; không đổi được sau khi tạo. Bản trình duyệt (~140-190 MB tuỳ hệ điều hành, tải từ GitHub của fingerprint-chromium và kiểm tra SHA-256) được tự tải ở nền ngay khi tạo profile Chrome đầu tiên, hoặc lúc mở profile nếu chưa có; tiến độ hiện trong log. Muốn tải trước bằng tay: `python -m chrome_engine fetch`.
 
-Nên chọn đúng hệ điều hành của máy đang chạy FoxProfile: persona khác hệ điều hành sẽ lộ font của máy, và persona Linux trên Windows/macOS bị từ chối vì WebGL lộ GPU thật. Hỗ trợ Windows x64, macOS Apple Silicon và Linux x64 (hiện ít kiểm thử trên máy thật hơn). Chi tiết và kết quả kiểm thử: [chrome_engine/README.md](chrome_engine/README.md).
+Nên chọn đúng hệ điều hành của máy đang chạy RonC Profile: persona khác hệ điều hành sẽ lộ font của máy, và persona Linux trên Windows/macOS bị từ chối vì WebGL lộ GPU thật. Hỗ trợ Windows x64, macOS Apple Silicon và Linux x64 (hiện ít kiểm thử trên máy thật hơn). Chi tiết và kết quả kiểm thử: [chrome_engine/README.md](chrome_engine/README.md).
 
 Giới hạn đã biết:
 
 - **Font lấy từ máy.** Persona khác hệ điều hành sẽ hiện font của máy, vì vậy persona nên dùng đúng hệ điều hành của máy. Trên máy macOS, persona Windows còn có scrollbar overlay 0px.
 - **Cửa sổ hiện trên màn hình báo kích thước màn hình thật.** fingerprint-chromium 148 bỏ qua các switch giả kích thước màn hình, nên các profile trên cùng một máy có chung kích thước màn hình; trình duyệt chạy ẩn (headless) báo 1920x1080.
 - **Không có Widevine.** Bản build dựa trên ungoogled-chromium nên video có DRM (các dịch vụ streaming) không phát được, và trang web kiểm tra được điều này.
-- **Chậm hơn Chrome hiện hành vài phiên bản.** FoxProfile ghim fingerprint-chromium 148 vì bản 150 bị crash khi trang vẽ emoji lên canvas.
+- **Chậm hơn Chrome hiện hành vài phiên bản.** RonC Profile ghim fingerprint-chromium 148 vì bản 150 bị crash khi trang vẽ emoji lên canvas.
 - **WebRTC khi có proxy không gửi UDP**, giống chính sách của extension WebRTC Leak Prevent: không lộ địa chỉ nào, nhưng cuộc gọi WebRTC chỉ chạy được qua TURN server dùng TCP.
 
 ## Cookie và fingerprint
 
 ![Cookie & fingerprint](docs/images/cookies.png)
 
-Bấm nút cookie trên dòng profile để mở hộp thoại **Cookie & fingerprint**. **Trình duyệt của profile phải đang tắt**, vì FoxProfile mở profile ở chế độ headless để đọc và ghi cookie.
+Bấm nút cookie trên dòng profile để mở hộp thoại **Cookie & fingerprint**. **Trình duyệt của profile phải đang tắt**, vì RonC Profile mở profile ở chế độ headless để đọc và ghi cookie.
 
 - Cookie phiên (session) khi nhập vào sẽ được đặt hạn 1 năm. Nếu không, trình duyệt sẽ xóa chúng ngay khi đóng.
 - "Tạo fingerprint mới" xóa fingerprint đã lưu; lần mở sau profile sẽ là một thiết bị khác. Đổi hệ điều hành của profile cũng tự sinh fingerprint mới.
@@ -302,7 +304,7 @@ Mọi đóng góp đều được chào đón: báo lỗi, đề xuất tính n�
 - Lỗ hổng bảo mật: **không** mở issue công khai, xem [SECURITY.md](SECURITY.md).
 - Mọi người tham gia cần tuân theo [Quy tắc ứng xử](CODE_OF_CONDUCT.md).
 
-Nếu FoxProfile có ích với bạn, hãy cho dự án một ⭐ trên GitHub.
+Nếu RonC Profile có ích với bạn, hãy cho dự án một ⭐ trên GitHub.
 
 ## Lưu ý sử dụng
 

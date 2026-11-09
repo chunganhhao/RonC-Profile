@@ -1,4 +1,4 @@
-"""End-to-end checks against a running FoxProfile API."""
+"""End-to-end checks against a running RonC Profile API."""
 
 import hashlib
 import json
@@ -51,7 +51,7 @@ for _ in range(40):
         time.sleep(1)
 
 s, b, _ = call("GET", "/health")
-check("health renamed", "FoxProfile" in b["message"], b["message"])
+check("health renamed", "RonC Profile" in b["message"], b["message"])
 
 for n in ("e2e-a", "e2e-bad"):
     call("POST", f"/browser/{n}/stop")

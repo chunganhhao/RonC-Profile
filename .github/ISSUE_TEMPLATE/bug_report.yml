@@ -27,7 +27,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Phiên bản FoxProfile / commit
+      label: Phiên bản RonC Profile / commit
       placeholder: "2.0.0 hoặc abc1234"
     validations:
       required: true

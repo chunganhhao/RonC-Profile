@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse
 
 from ...core.config import DATA_DIR
 from ...core.logging import get_logger
-from ...models.profile import ENGINES
+from ...models.profile import CANVAS_MODES, ENGINES, WEBRTC_MODES
 from ...services.browser import chrome_prefetch, cookies, fingerprint
 from ...services.browser.launcher import ProfileBusyError
 from ...services.proxy.geo_check import check_geo
@@ -18,6 +18,7 @@ from ...utils.validation import (
     validate_locale,
     validate_profile_name,
     validate_proxy_format,
+    validate_start_url,
     validate_timezone,
 )
 from ..dependencies import get_browser_launcher, get_event_bus, get_profile_manager
@@ -112,6 +113,13 @@ def create_profile(
             status_code=400,
             detail="Invalid 2FA TOTP secret (must be Base32 or standard SHA1/6-digit/30s otpauth://totp URI)",
         )
+    valid_url, url_msg = validate_start_url(body.start_url)
+    if not valid_url:
+        raise HTTPException(status_code=400, detail=url_msg)
+    if body.webrtc_mode not in WEBRTC_MODES:
+        raise HTTPException(status_code=400, detail=f"webrtc_mode must be one of: {', '.join(WEBRTC_MODES)}")
+    if body.canvas_mode not in CANVAS_MODES:
+        raise HTTPException(status_code=400, detail=f"canvas_mode must be one of: {', '.join(CANVAS_MODES)}")
 
     if not pm.add_profile(
         body.name,
@@ -202,6 +210,14 @@ def update_profile(
             status_code=400,
             detail="Invalid 2FA TOTP secret (must be Base32 or standard SHA1/6-digit/30s otpauth://totp URI)",
         )
+    if "start_url" in supplied:
+        valid_url, url_msg = validate_start_url(supplied.get("start_url"))
+        if not valid_url:
+            raise HTTPException(status_code=400, detail=url_msg)
+    if "webrtc_mode" in supplied and supplied["webrtc_mode"] not in WEBRTC_MODES:
+        raise HTTPException(status_code=400, detail=f"webrtc_mode must be one of: {', '.join(WEBRTC_MODES)}")
+    if "canvas_mode" in supplied and supplied["canvas_mode"] not in CANVAS_MODES:
+        raise HTTPException(status_code=400, detail=f"canvas_mode must be one of: {', '.join(CANVAS_MODES)}")
 
     extra_update = {
         k: supplied[k]

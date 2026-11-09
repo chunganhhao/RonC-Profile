@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="src/assets/icon.png" width="112" alt="FoxProfile logo" />
-  <h1>FoxProfile</h1>
+  <img src="src/assets/icon.png" width="112" alt="RonC Profile logo" />
+  <h1>RonC Profile</h1>
   <p><strong>Free, open-source manager for anti-detect browser profiles</strong></p>
   <p>Per-profile device fingerprint, cookies and proxy · Two engines: Camoufox (Firefox) and Chrome · English and Vietnamese UI · REST API and MCP for automation</p>
 
@@ -23,13 +23,15 @@
   </p>
 </div>
 
-![FoxProfile](docs/images/en/main.png)
+RonC Profile is a local rebrand of [FoxProfile by chienbm98](https://github.com/chienbm98/foxprofile). Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
 
-FoxProfile manages anti-detect browser profiles: each profile is a separate identity with its own device fingerprint, cookies, proxy, timezone and locale. The default browser is [Camoufox](https://github.com/daijro/camoufox), a Firefox build that spoofs fingerprints at the engine level; a Chrome engine based on [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) is also available. It is a self-hosted alternative, on your machine or a VPS, to paid anti-detect browsers such as GoLogin, GPM or MoreLogin.
+![RonC Profile](docs/images/en/main.png)
+
+RonC Profile manages anti-detect browser profiles: each profile is a separate identity with its own device fingerprint, cookies, proxy, timezone and locale. The default browser is [Camoufox](https://github.com/daijro/camoufox), a Firefox build that spoofs fingerprints at the engine level; a Chrome engine based on [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) is also available. It is a self-hosted alternative, on your machine or a VPS, to paid anti-detect browsers such as GoLogin, GPM or MoreLogin.
 
 ## Support
 
-FoxProfile is free and open source, built in my spare time, and will stay that way. If it saves you time or money, you can buy me a coffee; it goes toward bug fixes, keeping up with upstream browser releases and faster replies on issues.
+RonC Profile is free and open source, built in my spare time, and will stay that way. If it saves you time or money, you can buy me a coffee; it goes toward bug fixes, keeping up with upstream browser releases and faster replies on issues.
 
 <a href="https://buymeacoffee.com/chienbm98"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" /></a>
 
@@ -139,13 +141,13 @@ Full deployment guide (Ubuntu, systemd, nginx, HTTPS; in Vietnamese): [docs/DEPL
 
 ## MCP: let AI agents drive the browser
 
-FoxProfile ships an MCP server so Claude Code, Claude Desktop, Cursor, VS Code and others can manage profiles and act on pages: navigate, read, click, type, screenshot.
+RonC Profile ships an MCP server so Claude Code, Claude Desktop, Cursor, VS Code and others can manage profiles and act on pages: navigate, read, click, type, screenshot.
 
 **Quickest:** click **Connect AI (MCP)** in the left sidebar of the desktop app or the web panel. It generates ready-to-paste configs for each AI app with your address and token.
 
 ![Connect AI (MCP)](docs/images/en/mcp-guide.png)
 
-MCP is served over HTTP at `/mcp` on FoxProfile's own port, so it also works when FoxProfile runs on a VPS:
+MCP is served over HTTP at `/mcp` on RonC Profile's own port, so it also works when RonC Profile runs on a VPS:
 
 ```bash
 # Claude Code
@@ -176,21 +178,21 @@ There is deliberately **no** delete tool, so an agent cannot wipe an account's c
 
 Besides Camoufox (Firefox), a profile can run on the **Chrome** engine: a Chromium build with fingerprint spoofing patched in C++ ([fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium), BSD-3 license). Pick it in **Engine** when creating a profile; it cannot be changed afterwards. The browser build (~140-190 MB depending on the OS, fetched from fingerprint-chromium's GitHub releases and verified by SHA-256) is downloaded in the background as soon as the first Chrome profile is created, or on launch if it is still missing; progress shows in the log. To fetch it ahead of time: `python -m chrome_engine fetch`.
 
-Pick the OS of the machine running FoxProfile: a persona of another OS leaks the machine's fonts, and a Linux persona on Windows/macOS is refused because WebGL reveals the real GPU. Supported: Windows x64, macOS Apple Silicon, Linux x64 (fewer tests on real hardware so far). Details and test results (in Vietnamese): [chrome_engine/README.md](chrome_engine/README.md).
+Pick the OS of the machine running RonC Profile: a persona of another OS leaks the machine's fonts, and a Linux persona on Windows/macOS is refused because WebGL reveals the real GPU. Supported: Windows x64, macOS Apple Silicon, Linux x64 (fewer tests on real hardware so far). Details and test results (in Vietnamese): [chrome_engine/README.md](chrome_engine/README.md).
 
 Known limitations:
 
 - **Fonts come from the machine.** A persona of another OS shows the machine's fonts, which is why it should use the machine's OS. A macOS host also gives a Windows persona 0px overlay scrollbars.
 - **A visible window reports the real monitor size.** fingerprint-chromium 148 ignores its screen-size switches, so profiles on one machine share that screen size; hidden (headless) browsers report 1920x1080.
 - **No Widevine.** The build is based on ungoogled-chromium, so DRM video (streaming services) does not play, and a page can check for it.
-- **It trails the current Chrome by a few versions.** FoxProfile pins fingerprint-chromium 148 because 150 crashes when a page draws emoji on a canvas.
+- **It trails the current Chrome by a few versions.** RonC Profile pins fingerprint-chromium 148 because 150 crashes when a page draws emoji on a canvas.
 - **WebRTC behind a proxy sends no UDP at all**, the same policy as the WebRTC Leak Prevent extension: no address leaks, but WebRTC calls only work through a TURN server over TCP.
 
 ## Cookies and fingerprints
 
 ![Cookies & fingerprint](docs/images/en/cookies.png)
 
-Click the cookie button on a profile row to open **Cookies & fingerprint**. **The profile's browser must be stopped**: FoxProfile opens the profile headless to read and write cookies.
+Click the cookie button on a profile row to open **Cookies & fingerprint**. **The profile's browser must be stopped**: RonC Profile opens the profile headless to read and write cookies.
 
 - Imported session cookies are given a one-year lifetime; otherwise the browser would discard them when it closes.
 - "New fingerprint" deletes the stored fingerprint so the next launch presents a different device. Changing a profile's OS also regenerates it.
@@ -302,7 +304,7 @@ Contributions of all kinds are welcome: bug reports, feature ideas, docs, transl
 - Security issues: **do not** open a public issue, see [SECURITY.md](SECURITY.md).
 - Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-If FoxProfile is useful to you, consider giving it a ⭐ on GitHub.
+If RonC Profile is useful to you, consider giving it a ⭐ on GitHub.
 
 ## Responsible use
 

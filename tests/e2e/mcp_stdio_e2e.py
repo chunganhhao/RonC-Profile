@@ -1,4 +1,4 @@
-"""End-to-end: HTTP auth checks, then drive FoxProfile through a real MCP stdio client."""
+"""End-to-end: HTTP auth checks, then drive RonC Profile through a real MCP stdio client."""
 
 import asyncio
 import base64
@@ -48,7 +48,7 @@ check(
     b,
 )
 check("health is public", http("/api/v1/health")[0] == 200)
-check("panel served at /", http("/")[0] == 200 and b"FoxProfile" in http("/")[1])
+check("panel served at /", http("/")[0] == 200 and b"RonC Profile" in http("/")[1])
 check("profiles without token -> 401", http("/api/v1/profiles")[0] == 401)
 check("profiles with wrong token -> 401", http("/api/v1/profiles", "x" * 30)[0] == 401)
 check("profiles with token -> 200", http("/api/v1/profiles", TOKEN)[0] == 200)

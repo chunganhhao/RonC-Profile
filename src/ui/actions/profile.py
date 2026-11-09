@@ -63,7 +63,7 @@ def edit_profile(
             return None
         return get_string("update_failed")
 
-    open_profile_dialog(page, ps, on_save, profile)
+    open_profile_dialog(page, ps, on_save, profile, profile_manager=pm)
 
 
 def add_profile(
@@ -92,4 +92,4 @@ def add_profile(
             return None
         return get_string("profile_exists")
 
-    open_profile_dialog(page, ps, on_save)
+    open_profile_dialog(page, ps, on_save, profile_manager=pm)

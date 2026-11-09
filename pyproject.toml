@@ -1,7 +1,7 @@
 [project]
-name = "foxprofile"
+name = "ronc-profile"
 version = "2.4.0"
-description = "Anti-detect browser profile manager for Camoufox"
+description = "RonC Profile — dual-engine browser profile manager"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

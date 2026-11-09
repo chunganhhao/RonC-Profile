@@ -8,6 +8,7 @@ from ...core.logging import get_logger
 from ...models.profile import CANVAS_MODES, ENGINES, WEBRTC_MODES, Profile
 from ...utils.totp import clean_totp_secret
 from ...utils.validation import (
+    normalize_start_url,
     valid_or_none,
     validate_locale,
     validate_profile_name,
@@ -103,7 +104,7 @@ def import_from_zip(
                 account_password=profile_data.get("account_password") or None,
                 two_fa_secret=clean_totp_secret(profile_data.get("two_fa_secret")) or None,
                 notes=(profile_data.get("notes") or "").strip() or None,
-                start_url=(profile_data.get("start_url") or "").strip() or None,
+                start_url=normalize_start_url(profile_data.get("start_url")) or None,
                 webrtc_mode=profile_data.get("webrtc_mode")
                 if profile_data.get("webrtc_mode") in WEBRTC_MODES
                 else "proxy",

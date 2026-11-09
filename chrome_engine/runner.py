@@ -24,6 +24,7 @@ from chrome_engine.engine import ChromeEngine
 from src.core.config import DATA_DIR, HEADLESS, RESTORE_TABS
 from src.services.browser import control, session
 from src.services.browser.runner import _read_profile_extra, restore_tabs, snapshot_tabs
+from src.utils.validation import normalize_start_url
 
 _shutdown = asyncio.Event()
 
@@ -116,9 +117,9 @@ async def run_browser(
             restored = await restore_tabs(context, session.load(profile_dir))
             if restored:
                 _say(f"Restored {restored} tab(s)")
-        start_url = (extra.get("start_url") or "").strip()
+        start_url = normalize_start_url(extra.get("start_url"))
         if not restored and start_url:
-            await restore_tabs(context, [start_url])
+            await restore_tabs(context, session.restorable([start_url]))
 
         close_event = asyncio.Event()
 

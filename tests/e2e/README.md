@@ -11,6 +11,7 @@ Chạy thủ công với một FoxProfile thật (không thuộc `pytest`/CI vì
 | `panel_e2e.py` | API + web panel | đăng nhập, tạo/sửa profile, xem màn hình từ xa |
 | `mcp_guide_e2e.py` | API + web panel | hộp thoại "Kết nối AI (MCP)" |
 | `detection_e2e.py headless headed` | mạng | so headless/có cửa sổ trên các trang kiểm tra bot |
+| `python -m chrome_engine.e2e.sharedworker_cleanup --out artifacts/worker-cleanup` | Google Chrome cục bộ | ChromeEngine + DOM: cleanup port qua iframe hai chiều, sibling còn hoạt động, không replay close; profile tạm, không tài khoản |
 
 Biến môi trường:
 

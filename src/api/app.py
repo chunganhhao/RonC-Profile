@@ -62,9 +62,9 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
 
     app = FastAPI(
         lifespan=lifespan,
-        title="FoxProfile API",
+        title="RonC Profile API",
         description=(
-            "REST API for FoxProfile (Camoufox profile manager). When "
+            "REST API for RonC Profile (Camoufox profile manager). When "
             "FOXPROFILE_API_TOKEN is set, send it as `Authorization: Bearer <token>`."
         ),
         version=VERSION,
@@ -85,13 +85,13 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
 
     @app.get(f"{API_PREFIX}/health", response_model=SuccessResponse, tags=["health"])
     def health_check() -> SuccessResponse:
-        return SuccessResponse(message="FoxProfile API is running")
+        return SuccessResponse(message="RonC Profile API is running")
 
     @app.get(f"{API_PREFIX}/info", tags=["health"])
     def info() -> dict:
         """Public, secret-free facts the web panel needs before logging in."""
         return {
-            "name": "FoxProfile",
+            "name": "RonC Profile",
             "version": VERSION,
             "auth_required": bool(API_TOKEN),
             "headless": HEADLESS,
@@ -110,6 +110,10 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
         return FileResponse(
             path, media_type="font/ttf", headers={"Cache-Control": "public, max-age=604800"}
         )
+
+    @app.get("/assets/icon.png", include_in_schema=False)
+    def brand_icon() -> FileResponse:
+        return FileResponse(_FONTS.parent / "icon.png", media_type="image/png")
 
     logger.info("FastAPI application created")
     return app

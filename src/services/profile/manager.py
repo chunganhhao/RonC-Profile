@@ -12,6 +12,7 @@ from ...core.logging import get_logger
 from ...models.profile import CANVAS_MODES, ENGINES, WEBRTC_MODES, Profile
 from ...utils.totp import clean_totp_secret
 from ...utils.validation import (
+    normalize_start_url,
     valid_or_none,
     validate_locale,
     validate_profile_name,
@@ -92,7 +93,7 @@ class ProfileManager:
                             "account_password": p_data.get("account_password") or None,
                             "two_fa_secret": clean_totp_secret(p_data.get("two_fa_secret")) or None,
                             "notes": (p_data.get("notes") or "").strip() or None,
-                            "start_url": (p_data.get("start_url") or "").strip() or None,
+                            "start_url": normalize_start_url(p_data.get("start_url")) or None,
                             "webrtc_mode": _webrtc_or_default(p_data.get("webrtc_mode")),
                             "canvas_mode": _canvas_or_default(p_data.get("canvas_mode")),
                         }
@@ -144,6 +145,8 @@ class ProfileManager:
                 return False
             if two_fa_secret and two_fa_secret.strip() and not clean_totp_secret(two_fa_secret):
                 return False
+            if start_url and start_url.strip() and not normalize_start_url(start_url):
+                return False
             # Create directory before touching profiles.json so a mkdir failure
             # does not leave an entry with no data dir on disk.
             data_dir = self._data_path(name)
@@ -167,7 +170,7 @@ class ProfileManager:
                 account_password=account_password or None,
                 two_fa_secret=clean_totp_secret(two_fa_secret) or None,
                 notes=(notes or "").strip() or None,
-                start_url=(start_url or "").strip() or None,
+                start_url=normalize_start_url(start_url) or None,
                 webrtc_mode=_webrtc_or_default(webrtc_mode),
                 canvas_mode=_canvas_or_default(canvas_mode),
             )
@@ -199,6 +202,8 @@ class ProfileManager:
             if original_name not in self.profiles:
                 return False
             if two_fa_secret and two_fa_secret.strip() and not clean_totp_secret(two_fa_secret):
+                return False
+            if start_url and start_url.strip() and not normalize_start_url(start_url):
                 return False
 
             if new_name != original_name:
@@ -238,6 +243,7 @@ class ProfileManager:
                         return False
 
             profile = self.profiles[original_name]
+            old_os = profile.os_type
             profile.name = new_name
             profile.proxy = new_proxy or None
             profile.os_type = new_os
@@ -254,7 +260,7 @@ class ProfileManager:
             if notes is not None:
                 profile.notes = notes.strip() or None
             if start_url is not None:
-                profile.start_url = start_url.strip() or None
+                profile.start_url = normalize_start_url(start_url) or None
             if webrtc_mode is not None:
                 profile.webrtc_mode = _webrtc_or_default(webrtc_mode)
             if canvas_mode is not None:
@@ -264,11 +270,13 @@ class ProfileManager:
                 del self.profiles[original_name]
                 self.profiles[new_name] = profile
 
+            target_dir = self._data_path(new_name)
             if isinstance(initial_fingerprint, dict) and profile.engine == "camoufox":
                 with contextlib.suppress(Exception):
-                    fp_service.save_fingerprint(
-                        self._data_path(new_name), new_os, initial_fingerprint
-                    )
+                    fp_service.save_fingerprint(target_dir, new_os, initial_fingerprint)
+            elif new_os != old_os:
+                with contextlib.suppress(Exception):
+                    fp_service.reset(target_dir)
 
             self.save_profiles()
             logger.info("Updated profile: %s -> %s", original_name, new_name)

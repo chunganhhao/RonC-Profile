@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="FoxProfile server (API + web panel)")
+    parser = argparse.ArgumentParser(description="RonC Profile server (API + web panel)")
     parser.add_argument("--host", help="Interface to listen on (default: FOXPROFILE_API_HOST)")
     parser.add_argument("--port", type=int, help="Port (default: FOXPROFILE_API_PORT)")
     parser.add_argument(
@@ -49,8 +49,8 @@ def main() -> None:
     container = Container()
     app = create_app(container, self_url=f"http://127.0.0.1:{port}")
     logger = get_logger("server")
-    logger.info("FoxProfile server on http://%s:%s (panel at /)", host, port)
-    print(f"FoxProfile panel: http://{host}:{port}/   API docs: http://{host}:{port}/docs")
+    logger.info("RonC Profile server on http://%s:%s (panel at /)", host, port)
+    print(f"RonC Profile panel: http://{host}:{port}/   API docs: http://{host}:{port}/docs")
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
     finally:

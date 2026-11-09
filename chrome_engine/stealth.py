@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import secrets
 from random import Random
 from typing import Any
 
@@ -93,6 +94,7 @@ def build_anti_cdp_init_script(persona: Persona) -> str:
             "platform": persona.platform,
             "seed": persona.seed,
             "gpu": gpu_info,
+            "portCloseKey": secrets.token_hex(32),
         }
     )
     return f"""(() => {{
@@ -453,6 +455,7 @@ def build_anti_cdp_init_script(persona: Persona) -> str:
         }} catch (_) {{}}
       }};
       patchBroadcastChannel(globalThis);
+      let patchMessagePort = null;
       for (const FrameProto of [
         typeof HTMLIFrameElement !== 'undefined' ? HTMLIFrameElement.prototype : null,
         typeof HTMLFrameElement !== 'undefined' ? HTMLFrameElement.prototype : null,
@@ -465,7 +468,10 @@ def build_anti_cdp_init_script(persona: Persona) -> str:
             get: new Proxy(origCwGet, {{
               apply(target, thisArg, args) {{
                 const cw = Reflect.apply(target, thisArg, args);
-                if (cw) patchBroadcastChannel(cw);
+                if (cw) {{
+                  patchBroadcastChannel(cw);
+                  if (patchMessagePort) patchMessagePort(cw);
+                }}
                 return cw;
               }}
             }}),
@@ -575,6 +581,10 @@ def build_anti_cdp_init_script(persona: Persona) -> str:
 
       if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {{
         const cleanupDocSwReg = () => {{
+          while (activeConnList.length > 0) {{
+            releaseConn(activeConnList.pop());
+          }}
+          activeSharedRefs.length = 0;
           sendSwBc({{ type: 'release', docId }});
         }};
         window.addEventListener('pagehide', cleanupDocSwReg);
@@ -592,7 +602,10 @@ def build_anti_cdp_init_script(persona: Persona) -> str:
           apply(target, thisArg, args) {{
             const url = Reflect.apply(target, thisArg, args);
             if (typeof Blob !== 'undefined' && args[0] instanceof Blob) {{
-              blobMap.set(String(url), args[0]);
+              const b = args[0];
+              if (!b.type || /javascript|ecmascript|text\\/plain/i.test(String(b.type))) {{
+                blobMap.set(String(url), b);
+              }}
             }}
             return url;
           }}
@@ -622,6 +635,74 @@ def build_anti_cdp_init_script(persona: Persona) -> str:
       const origPortStart = (typeof MessagePort !== 'undefined' && MessagePort.prototype && typeof MessagePort.prototype.start === 'function')
         ? MessagePort.prototype.start
         : null;
+      const origPortClose = (typeof MessagePort !== 'undefined' && MessagePort.prototype && typeof MessagePort.prototype.close === 'function')
+        ? MessagePort.prototype.close
+        : null;
+      const activeConnList = [];
+      let swPortCloseMap = new WeakMap();
+      // Share ownership across same-origin realms without a window/storage marker.
+      try {{
+        if (typeof window !== 'undefined' && window.parent !== window) {{
+          const owners = window.parent.MessagePort.prototype.close[CFG.portCloseKey];
+          if (owners) swPortCloseMap = owners;
+        }}
+      }} catch (_) {{}}
+      const removeFromActiveRefs = (items) => {{
+        for (const item of items) {{
+          const idx = activeSharedRefs.indexOf(item);
+          if (idx !== -1) activeSharedRefs.splice(idx, 1);
+        }}
+      }};
+      const pushConnRefs = (conn, ...items) => {{
+        if (conn.closed) return;
+        for (const item of items) {{
+          conn.refs.push(item);
+          activeSharedRefs.push(item);
+        }}
+      }};
+      const releaseConn = (conn) => {{
+        if (!conn || conn.closed) return;
+        conn.closed = true;
+        const cIdx = activeConnList.indexOf(conn);
+        if (cIdx !== -1) activeConnList.splice(cIdx, 1);
+        removeFromActiveRefs(conn.refs);
+        conn.refs.length = 0;
+        if (origPortClose) {{
+          if (conn.bridgePort) {{ try {{ Reflect.apply(origPortClose, conn.bridgePort, []); }} catch (_) {{}} }}
+          if (conn.currentPort) {{ try {{ Reflect.apply(origPortClose, conn.currentPort, []); }} catch (_) {{}} }}
+        }}
+      }};
+      if (origPortClose) {{
+        const patchedMpProtos = new WeakSet();
+        patchMessagePort = (realm) => {{
+          try {{
+            const proto = realm && realm.MessagePort && realm.MessagePort.prototype;
+            if (!proto || patchedMpProtos.has(proto)) return;
+            const desc = Object.getOwnPropertyDescriptor(proto, 'close');
+            if (!desc || typeof desc.value !== 'function' || !desc.configurable) return;
+            patchedMpProtos.add(proto);
+            Object.defineProperty(proto, 'close', {{
+              ...desc,
+              value: new Proxy(desc.value, {{
+                get(target, key, receiver) {{
+                  if (key === CFG.portCloseKey) return swPortCloseMap;
+                  return Reflect.get(target, key, receiver);
+                }},
+                apply(target, thisArg, args) {{
+                  const res = Reflect.apply(target, thisArg, args);
+                  const release = swPortCloseMap.get(thisArg);
+                  if (release) {{
+                    swPortCloseMap.delete(thisArg);
+                    release();
+                  }}
+                  return res;
+                }}
+              }}),
+            }});
+          }} catch (_) {{}}
+        }};
+        patchMessagePort(globalThis);
+      }}
       const onTarget = (et, type, fn, opts) => {{
         if (origAddEventListener) Reflect.apply(origAddEventListener, et, [type, fn, opts]);
         else et.addEventListener(type, fn, opts);
@@ -666,7 +747,10 @@ def build_anti_cdp_init_script(persona: Persona) -> str:
         const clientPort = mc.port1;
         const bridgePort = mc.port2;
         swPortMap.set(w, clientPort);
-        activeSharedRefs.push(w, clientPort, bridgePort);
+        const conn = {{ refs: [], closed: false, bridgePort, currentPort: null }};
+        activeConnList.push(conn);
+        swPortCloseMap.set(clientPort, () => releaseConn(conn));
+        pushConnRefs(conn, w, clientPort, bridgePort);
 
         let urlPromise = sharedUrlPromiseMap.get(swKey);
         if (!urlPromise) {{
@@ -732,15 +816,28 @@ def build_anti_cdp_init_script(persona: Persona) -> str:
         }}
 
         urlPromise.then(({{ canonicalUrl, candidateUrl }}) => {{
+          if (conn.closed) return;
           try {{
             let currentPort = null;
+            let currentRealWorker = null;
             let gotMessage = false;
             const pendingOut = [];
             const attachRealWorker = (targetUrl, allowFallback) => {{
+              if (conn.closed) return;
+              if (currentRealWorker || currentPort) {{
+                const stale = [currentRealWorker, currentPort].filter(Boolean);
+                removeFromActiveRefs(stale);
+                for (const s of stale) {{
+                  const rIdx = conn.refs.indexOf(s);
+                  if (rIdx !== -1) conn.refs.splice(rIdx, 1);
+                }}
+              }}
               const realWorker = Reflect.construct(target, [targetUrl, ...args.slice(1)], target);
               const realPort = Reflect.apply(origSwPortGet, realWorker, []);
+              currentRealWorker = realWorker;
               currentPort = realPort;
-              activeSharedRefs.push(realWorker, realPort);
+              conn.currentPort = realPort;
+              pushConnRefs(conn, realWorker, realPort);
               onTarget(realWorker, 'error', (errEv) => {{
                 if (allowFallback && !gotMessage && targetUrl !== candidateUrl) {{
                   localSwReg.set(swKey, {{ url: candidateUrl, docs: new Set([docId]) }});

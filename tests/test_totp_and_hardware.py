@@ -286,10 +286,127 @@ def test_f1_f2_f3_dialog_regressions():
         chrome_page,
         None,
         on_save,
-        Profile("chrome-fixture", engine="chrome", os_type="macos"),
+        Profile("chrome-fixture", engine="chrome", os_type="macos", webrtc_mode="disable", canvas_mode="noise"),
     )
     chrome_controls = list(walk(chrome_page.dialog))
     hw_dropdowns = [c for c in chrome_controls if isinstance(c, ft.Dropdown)][3:]
     assert len(hw_dropdowns) == 5
     assert all(c.disabled for c in hw_dropdowns)
+    chrome_page.dialog.actions[-1].on_click(None)
+    assert saved["webrtc_mode"] == "disable"
+    assert saved["canvas_mode"] == "noise"
     chrome_page.dialog.on_dismiss(None)
+
+
+def test_ponytail_findings_start_url_auto_screen_os_reset_and_card_perf(tmp_path, monkeypatch):
+    import json
+    import zipfile
+    from unittest.mock import patch
+
+    import flet as ft
+    from fastapi.testclient import TestClient
+
+    from src.api.app import create_app
+    from src.core.container import Container
+    from src.models.profile import Profile
+    from src.services.profile import manager as pm_mod
+    from src.services.profile.transfer import import_from_zip
+    from src.ui.components.profile_card import build_profile_card
+    from src.ui.dialogs.profile import open_profile_dialog
+    from src.utils.validation import normalize_start_url, validate_start_url
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+
+    # Finding #1: start_url validation & scheme sanitization
+    assert normalize_start_url("mail.google.com") == "https://mail.google.com"
+    assert normalize_start_url("https://example.com/login?x=1") == "https://example.com/login?x=1"
+    for unsafe in ("file:///etc/passwd", "%66ile:///etc/passwd", "javascript:alert(1)", "chrome://settings", "about:config"):
+        assert normalize_start_url(unsafe) == ""
+        assert validate_start_url(unsafe)[0] is False
+
+    pm = pm_mod.ProfileManager()
+    assert not pm.add_profile("bad-url", "", "macos", start_url="file:///etc/passwd")
+    assert pm.add_profile("good-url", "", "macos", start_url="mail.google.com")
+    assert pm.profiles["good-url"].start_url == "https://mail.google.com"
+    assert not pm.update_profile("good-url", "good-url", "", "macos", start_url="javascript:alert(1)")
+
+    # ZIP import strips unsafe start_url
+    zip_path = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("profile.json", json.dumps({"name": "zip-prof", "os_type": "macos", "start_url": "file:///etc/passwd"}))
+    ok, imported = import_from_zip(str(zip_path), str(tmp_path / "data"))
+    assert ok and imported.start_url is None
+
+    # API rejects unsafe start_url and invalid webrtc_mode/canvas_mode
+    with TestClient(create_app(Container()), base_url="http://127.0.0.1") as client:
+        assert client.post("/api/v1/profiles", json={"name": "p-bad", "start_url": "file:///etc/passwd"}).status_code == 400
+        assert client.post("/api/v1/profiles", json={"name": "p-bad2", "webrtc_mode": "invalid"}).status_code == 400
+        assert client.patch("/api/v1/profiles/good-url", json={"start_url": "chrome://version"}).status_code == 400
+
+    # Finding #4: Selecting "auto" in screen_dropdown resets _custom_screen and keeps dropdown value "auto"
+    class DummyPage:
+        def __init__(self):
+            self.dialog = None
+
+        def update(self):
+            pass
+
+        def show_dialog(self, dlg):
+            self.dialog = dlg
+
+        def pop_dialog(self):
+            pass
+
+    def walk(ctrl):
+        yield ctrl
+        for attr in ("content", "controls", "actions"):
+            val = getattr(ctrl, attr, None)
+            if isinstance(val, list):
+                for item in val:
+                    yield from walk(item)
+            elif val is not None:
+                yield from walk(val)
+
+    saved = {}
+    page = DummyPage()
+    open_profile_dialog(
+        page,
+        None,
+        lambda *a, **kw: (saved.update(kw), None)[1],
+        Profile("auto-scr-test", os_type="macos"),
+    )
+    dropdowns = [c for c in walk(page.dialog) if isinstance(c, ft.Dropdown)]
+    screen_dd = dropdowns[3]
+    screen_dd.value = "2560x1440"
+    screen_dd.on_select(None)
+    assert screen_dd.value == "2560x1440"
+    screen_dd.value = "auto"
+    screen_dd.on_select(None)
+    assert screen_dd.value == "auto"
+    page.dialog.actions[-1].on_click(None)
+    assert not saved["initial_fingerprint"].get("_custom_screen")
+    page.dialog.on_dismiss(None)
+
+    # Finding #9: Updating OS without initial_fingerprint resets stale saved fingerprint/persona
+    fp_dir = tmp_path / "data" / "good-url"
+    fp_file = fp_dir / "fingerprint.json"
+    persona_file = fp_dir / "chrome_persona.json"
+    fp_file.write_text('{"os": "macos", "fingerprint": {}}', encoding="utf-8")
+    persona_file.write_text('{"platform": "macos"}', encoding="utf-8")
+    assert pm.update_profile("good-url", "good-url", "", "windows")
+    assert not fp_file.exists() and not persona_file.exists()
+
+    # Finding #11: build_profile_card does not call generate_totp during render
+    with patch("src.utils.totp.generate_totp", side_effect=AssertionError("should not be called on render")):
+        card = build_profile_card(
+            Profile("card-test", two_fa_secret="JBSWY3DPEHPK3PXP"),
+            is_loading=False,
+            is_running=False,
+            on_launch=lambda *_: None,
+            on_edit=lambda *_: None,
+            on_delete=lambda *_: None,
+            on_copy_2fa=lambda *_: None,
+            row_index=1,
+        )
+        assert card is not None

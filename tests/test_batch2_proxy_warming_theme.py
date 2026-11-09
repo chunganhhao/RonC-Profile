@@ -653,6 +653,82 @@ def test_b2_f1_to_f4_warming_concurrency_duration_and_api_lifespan(tmp_path, mon
     assert ws._profile_active_users == {}
     assert ws._cancel_flags == {}
 
+    # Ponytail Finding #2: Pick from Pool selects least-used working proxy
+    pool = ProxyPoolService(file_path=str(tmp_path / "proxies_least.json"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies_least.json"))
+    e_busy = pool.add_proxy("198.51.100.10:8080", label="Busy")
+    e_free = pool.add_proxy("198.51.100.20:8080", label="Free")
+    e_free.status = "working"
+    pool._save()
+    pm.add_profile("uses-10", e_busy.proxy, "macos")
+    page_pick = _DummyPage()
+    open_profile_dialog(page_pick, None, lambda *a, **kw: None, profile_manager=pm)
+    try:
+        ctrls_pick = list(_walk_controls(page_pick.dialog))
+        btn_pick = next(
+            c for c in ctrls_pick if isinstance(c, ft.OutlinedButton) and c.icon == ft.Icons.STORAGE_OUTLINED
+        )
+        btn_pick.on_click(None)
+        p_field = next(
+            c for c in ctrls_pick if isinstance(c, ft.TextField) and c.hint_text == "socks5://user:pass@host:port"
+        )
+        assert p_field.value == e_free.proxy
+    finally:
+        page_pick.dialog.on_dismiss(None)
+
+    # Ponytail Finding #5 (and Codex Re-Review #3): normalize_warming_urls splits by whitespace/newlines
+    # and never splits commas/semicolons inside URL queries/paths (even when domain-looking)
+    from src.services.warming.scheduler import normalize_warming_urls
+
+    parsed_urls = normalize_warming_urls(
+        "https://www.google.com/search?q=coffee,tea.example\nhttps://en.wikipedia.org/wiki/A;next.example https://example.org/path"
+    )
+    assert parsed_urls == [
+        "https://www.google.com/search?q=coffee,tea.example",
+        "https://en.wikipedia.org/wiki/A;next.example",
+        "https://example.org/path",
+    ]
+
+    # Ponytail Finding #6: _lease_lock decouples task CRUD from blocking browser launch/stop
+    launch_entered = threading.Event()
+    release_launch = threading.Event()
+
+    class SlowStartLauncher:
+        def is_running(self, name):
+            return False
+
+        def start_thread(self, profile, log):
+            launch_entered.set()
+            release_launch.wait(2)
+            return False
+
+    slow_task = ws.add_task("Slow Launch", ["shared-prof"], preset="custom", custom_urls=["https://example.org"])
+    t_slow = threading.Thread(
+        target=ws.execute_task_sync,
+        args=(slow_task.id, pm, SlowStartLauncher()),
+        kwargs={"step_dwell_seconds": 0},
+        daemon=True,
+    )
+    t_slow.start()
+    assert launch_entered.wait(2)
+    # Must complete immediately without blocking on _lease_lock
+    assert len(ws.list_tasks()) >= 1
+    release_launch.set()
+    t_slow.join(2)
+
+    # Ponytail Finding #7: assign_round_robin persists once for N profiles
+    save_calls = 0
+    orig_save = pm.save_profiles
+
+    def counted_save():
+        nonlocal save_calls
+        save_calls += 1
+        orig_save()
+
+    monkeypatch.setattr(pm, "save_profiles", counted_save)
+    assert pool.assign_round_robin(["shared-prof", "uses-10"], pm) == 2
+    assert save_calls == 1
+
 
 
 

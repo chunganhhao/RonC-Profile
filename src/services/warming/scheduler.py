@@ -51,11 +51,7 @@ def validate_schedule_time(value: str) -> bool:
 
 
 def normalize_warming_urls(urls: list[str] | str) -> list[str]:
-    raw_list = (
-        [u.strip() for u in re.split(r"[\n,;]+", urls)]
-        if isinstance(urls, str)
-        else [str(u).strip() for u in urls]
-    )
+    raw_list = urls.split() if isinstance(urls, str) else [str(u).strip() for u in urls]
     cleaned: list[str] = []
     for u in raw_list:
         if not u:
@@ -134,6 +130,7 @@ class WarmingSchedulerService:
     def __init__(self, file_path: str | None = None) -> None:
         self._explicit_path = file_path
         self._lock = threading.RLock()
+        self._lease_lock = threading.RLock()
         self._tasks: dict[str, WarmingTask] = {}
         self._cancel_flags: dict[str, threading.Event] = {}
         self._profile_active_users: dict[str, int] = {}
@@ -303,7 +300,7 @@ class WarmingSchedulerService:
 
             acquired_lease = False
             try:
-                with self._lock:
+                with self._lease_lock:
                     self._profile_active_users[prof_name] = (
                         self._profile_active_users.get(prof_name, 0) + 1
                     )
@@ -323,9 +320,12 @@ class WarmingSchedulerService:
                         continue
 
                 visited_any = False
-                if step_dwell_seconds is not None:
+                single_pass = step_dwell_seconds is not None
+                remaining_dwell = total_budget_seconds
+                while not cancel_ev.is_set():
+                    visited_in_pass = False
                     for url in urls:
-                        if cancel_ev.is_set():
+                        if cancel_ev.is_set() or (not single_pass and remaining_dwell <= 0):
                             break
                         try:
                             bl.control(
@@ -335,58 +335,26 @@ class WarmingSchedulerService:
                                 timeout=25.0,
                             )
                             visited_any = True
+                            visited_in_pass = True
                             log(f"[Warming] [{prof_name}] Visited {url}")
                         except Exception as nav_err:
                             log(f"[Warming] [{prof_name}] Navigate warning on {url}: {nav_err}")
                             continue
 
-                        if per_url_dwell > 0 and not cancel_ev.wait(per_url_dwell / 2.0):
+                        dwell = per_url_dwell if single_pass else min(per_url_dwell, remaining_dwell)
+                        if not single_pass:
+                            remaining_dwell -= dwell
+                        if dwell > 0 and not cancel_ev.wait(dwell / 2.0):
                             with contextlib.suppress(Exception):
                                 bl.control(
                                     prof_name,
-                                    "evaluate",
-                                    {
-                                        "script": "window.scrollBy({top: 380, behavior: 'smooth'}); true;"
-                                    },
+                                    "scroll",
+                                    {"delta_y": 380, "humanize": True},
                                     timeout=8.0,
                                 )
-                            cancel_ev.wait(per_url_dwell / 2.0)
-                else:
-                    remaining_dwell = total_budget_seconds
-                    while remaining_dwell > 0 and not cancel_ev.is_set():
-                        visited_in_pass = False
-                        for url in urls:
-                            if cancel_ev.is_set() or remaining_dwell <= 0:
-                                break
-                            try:
-                                bl.control(
-                                    prof_name,
-                                    "navigate",
-                                    {"url": url, "wait_until": "domcontentloaded"},
-                                    timeout=25.0,
-                                )
-                                visited_any = True
-                                visited_in_pass = True
-                                log(f"[Warming] [{prof_name}] Visited {url}")
-                            except Exception as nav_err:
-                                log(f"[Warming] [{prof_name}] Navigate warning on {url}: {nav_err}")
-                                continue
-
-                            dwell = min(per_url_dwell, remaining_dwell)
-                            remaining_dwell -= dwell
-                            if dwell > 0 and not cancel_ev.wait(dwell / 2.0):
-                                with contextlib.suppress(Exception):
-                                    bl.control(
-                                        prof_name,
-                                        "evaluate",
-                                        {
-                                            "script": "window.scrollBy({top: 380, behavior: 'smooth'}); true;"
-                                        },
-                                        timeout=8.0,
-                                    )
-                                cancel_ev.wait(dwell / 2.0)
-                        if not visited_in_pass:
-                            break
+                            cancel_ev.wait(dwell / 2.0)
+                    if single_pass or not visited_in_pass or remaining_dwell <= 0:
+                        break
 
                 if visited_any:
                     succeeded += 1
@@ -394,7 +362,7 @@ class WarmingSchedulerService:
                 log(f"[Warming] Error warming '{prof_name}': {e}")
             finally:
                 if acquired_lease:
-                    with self._lock:
+                    with self._lease_lock:
                         rem = self._profile_active_users.get(prof_name, 1) - 1
                         if rem > 0:
                             self._profile_active_users[prof_name] = rem
@@ -407,7 +375,7 @@ class WarmingSchedulerService:
                         try:
                             is_live = bl.is_running(prof_name)
                         finally:
-                            with self._lock:
+                            with self._lease_lock:
                                 if self._profile_active_users.get(prof_name, 0) == 0:
                                     self._profile_launched_by_warming.discard(prof_name)
                                     if is_live:

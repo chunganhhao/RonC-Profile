@@ -129,8 +129,15 @@ def generate_coherent_fingerprint(
             win["outerHeight"] = min(scr["availHeight"], max(600, h - 48))
             win["innerWidth"] = min(win["outerWidth"], win.get("innerWidth") or win["outerWidth"])
             win["innerHeight"] = max(480, min(win["outerHeight"], win["outerHeight"] - 86))
+            fp["_custom_screen"] = True
         except ValueError:
             pass
+    elif (not screen_spec or screen_spec == "auto") and fp.pop("_custom_screen", False):
+        fresh = generate_fingerprint(os=os_type)
+        scr.clear()
+        scr.update(fresh.get("screen") or {})
+        win.clear()
+        win.update(fresh.get("window") or {})
 
     # Apply GPU pair if specified or make sure it fits the OS & machine
     valid_gpus = available_gpus(os_type)

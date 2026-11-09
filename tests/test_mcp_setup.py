@@ -85,4 +85,4 @@ def test_mcp_endpoint_requires_token():
             headers={**_HEADERS, "Authorization": "Bearer " + "x" * 32},
         )
         assert ok.status_code == 200
-        assert ok.json()["result"]["serverInfo"]["name"] == "foxprofile"
+        assert ok.json()["result"]["serverInfo"]["name"] == "RonC Profile"

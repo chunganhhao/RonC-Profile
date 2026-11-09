@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -119,31 +120,32 @@ class ProxyPoolService:
         with self._lock:
             return self._entries.get(proxy_id)
 
-    def add_proxy(self, raw_str: str, label: str = "") -> ProxyPoolEntry | None:
+    def _upsert_locked(self, raw_str: str, label: str = "") -> ProxyPoolEntry | None:
         cleaned = (raw_str or "").strip()
-        if not cleaned:
-            return None
-        valid, _ = validate_proxy_format(cleaned)
-        if not valid:
+        if not cleaned or not validate_proxy_format(cleaned)[0]:
             return None
         norm = normalize_proxy(cleaned)
-        masked = mask_proxy(norm) or norm
         pid = _make_id(norm)
+        clean_label = label.strip()
+        existing = self._entries.get(pid)
+        if existing:
+            if clean_label:
+                existing.label = clean_label
+            return existing
+        entry = ProxyPoolEntry(
+            id=pid,
+            proxy=norm,
+            masked=mask_proxy(norm) or norm,
+            label=clean_label,
+        )
+        self._entries[pid] = entry
+        return entry
+
+    def add_proxy(self, raw_str: str, label: str = "") -> ProxyPoolEntry | None:
         with self._lock:
-            existing = self._entries.get(pid)
-            if existing:
-                if label.strip():
-                    existing.label = label.strip()
-                    self._save()
-                return existing
-            entry = ProxyPoolEntry(
-                id=pid,
-                proxy=norm,
-                masked=masked,
-                label=label.strip(),
-            )
-            self._entries[pid] = entry
-            self._save()
+            entry = self._upsert_locked(raw_str, label)
+            if entry is not None:
+                self._save()
             return entry
 
     def bulk_import(self, text: str, default_label: str = "") -> tuple[int, int]:
@@ -159,35 +161,17 @@ class ProxyPoolService:
                 if not line or line.startswith("#"):
                     continue
                 label = default_label.strip()
-                if "|" in line:
-                    proxy_part, label_part = line.split("|", 1)
-                    line = proxy_part.strip()
-                    if label_part.strip():
-                        label = label_part.strip()
-                elif " #" in line:
-                    proxy_part, label_part = line.split(" #", 1)
-                    line = proxy_part.strip()
-                    if label_part.strip():
-                        label = label_part.strip()
-
-                valid, _ = validate_proxy_format(line)
-                if not valid or not line:
-                    invalid += 1
-                    continue
-                norm = normalize_proxy(line)
-                pid = _make_id(norm)
-                masked = mask_proxy(norm) or norm
-                if pid in self._entries:
-                    if label:
-                        self._entries[pid].label = label
+                for sep in ("|", " #"):
+                    if sep in line:
+                        proxy_part, label_part = line.split(sep, 1)
+                        line = proxy_part.strip()
+                        if label_part.strip():
+                            label = label_part.strip()
+                        break
+                if self._upsert_locked(line, label) is not None:
+                    added += 1
                 else:
-                    self._entries[pid] = ProxyPoolEntry(
-                        id=pid,
-                        proxy=norm,
-                        masked=masked,
-                        label=label,
-                    )
-                added += 1
+                    invalid += 1
             if added > 0:
                 self._save()
         return added, invalid
@@ -311,6 +295,20 @@ class ProxyPoolService:
         pool.sort(key=lambda e: (counts.get(e.id, 0), 0 if e.status == "working" else 1))
 
         updated = 0
+        save_fn = getattr(pm, "save_profiles", None)
+        if callable(save_fn):
+            pm_lock = getattr(pm, "_lock", None) or contextlib.nullcontext()
+            with pm_lock:
+                for idx, name in enumerate(profile_names):
+                    prof = pm.profiles.get(name)
+                    if not prof:
+                        continue
+                    prof.proxy = pool[idx % len(pool)].proxy or None
+                    updated += 1
+                if updated > 0:
+                    save_fn()
+            return updated
+
         for idx, name in enumerate(profile_names):
             prof = pm.profiles.get(name)
             if not prof:
