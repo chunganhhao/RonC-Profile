@@ -4,6 +4,7 @@ import flet as ft
 
 from ...core.strings import get_string
 from ...interfaces.protocols import IProfileManager
+from ...services.profile.manager import ProfileStoreChangedError
 from ..dialogs import open_export_dialog
 
 
@@ -23,7 +24,10 @@ async def import_profile(
     ok_count = 0
     for f in files:
         if f.path:
-            success, result = pm.import_profile(f.path)
+            try:
+                success, result = pm.import_profile(f.path)
+            except (ProfileStoreChangedError, OSError) as exc:
+                success, result = False, str(exc) or "Profile/store is busy; refresh and retry"
             if success:
                 ok_count += 1
                 log(get_string("import_success") + f": {result}")

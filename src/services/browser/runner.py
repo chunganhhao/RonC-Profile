@@ -5,6 +5,7 @@ import os
 import pathlib
 import signal
 import sys
+from time import perf_counter
 
 sys.path.insert(
     0,
@@ -18,6 +19,8 @@ from src.core.config import DATA_DIR, HEADLESS, PROFILES_FILE, RESTORE_TABS
 from src.services.browser import control, session
 from src.services.browser import display as xvfb
 from src.services.browser.fingerprint import available_gpus, load_or_create
+from src.services.browser.search import ensure_google_search
+from src.services.browser.timing import launch_stage, report_timing
 from src.services.proxy.geo_check import requests_proxy_url
 from src.utils.proxy_parser import parse_proxy
 from src.utils.validation import normalize_start_url
@@ -191,10 +194,28 @@ async def run_browser(
     os_type: str,
     timezone: str = "",
     locale: str = "",
+    core_version: str = "",
 ) -> int:
+    launch_started = perf_counter()
+    with launch_stage("profile_metadata"):
+        extra = _read_profile_extra(profile_name)
+    # A long-lived manager may hold an older Profile object after another
+    # process applied a core. Persisted binding is authoritative at launch.
+    if extra.get("core_version"):
+        core_version = extra["core_version"]
+    executable = None
+    if core_version:
+        try:
+            from src.services.browser.cores import bound_executable
+
+            with launch_stage("core_resolve"):
+                executable = bound_executable("camoufox", core_version)
+        except (ValueError, OSError, RuntimeError) as exc:
+            _safe_print(f"LAUNCH_FAILED: {_compact_error(exc, 220)}")
+            return 1
     profile_dir = os.path.join(os.getcwd(), DATA_DIR, profile_name)
-    fp = load_or_create(profile_dir, os_type)
-    extra = _read_profile_extra(profile_name)
+    with launch_stage("fingerprint"):
+        fp = load_or_create(profile_dir, os_type)
 
     launch_config = {
         "headless": HEADLESS,
@@ -280,30 +301,42 @@ async def run_browser(
     # record lets the launcher stop it if this process is killed instead.
     display = None
     try:
+        if executable:
+            launch_config["executable_path"] = str(executable)
         # Blocking (up to ~30 s over a slow proxy), so off the event loop; inside
         # the try so a dead proxy reports LAUNCH_FAILED like any launch error.
-        ip = await asyncio.to_thread(exit_ip, proxy_str)
+        with launch_stage("exit_ip"):
+            ip = await asyncio.to_thread(exit_ip, proxy_str)
         launch_config["geoip"] = ip
-        if not locale:
-            launch_config["locale"] = await asyncio.to_thread(stable_locale, profile_dir, ip)
-        pin_geoip_locale(launch_config["locale"])
-        if HEADLESS == "virtual":
-            await asyncio.to_thread(xvfb.sweep_stale)
-            display = VirtualDisplay()
-            launch_config["headless"] = False
-            launch_config["virtual_display"] = display.get()
-            xvfb.record(display.proc.pid, launch_config["virtual_display"])
-        async with AsyncCamoufox(**launch_config) as context:
-            if not context.pages:
-                await context.new_page()
-            restored = 0
-            if RESTORE_TABS:
-                restored = await restore_tabs(context, session.load(profile_dir))
-                if restored:
-                    _safe_print(f"Restored {restored} tab(s)")
-            start_url = normalize_start_url(extra.get("start_url"))
-            if not restored and start_url:
-                await restore_tabs(context, session.restorable([start_url]))
+        with launch_stage("geo_locale"):
+            if not locale:
+                launch_config["locale"] = await asyncio.to_thread(stable_locale, profile_dir, ip)
+            pin_geoip_locale(launch_config["locale"])
+        if not core_version:
+            with launch_stage("search_policy"):
+                await asyncio.to_thread(ensure_google_search)
+        with launch_stage("virtual_display"):
+            if HEADLESS == "virtual":
+                await asyncio.to_thread(xvfb.sweep_stale)
+                display = VirtualDisplay()
+                launch_config["headless"] = False
+                launch_config["virtual_display"] = display.get()
+                xvfb.record(display.proc.pid, launch_config["virtual_display"])
+        async with contextlib.AsyncExitStack() as stack:
+            # Time entry only: the browser context stays open for the session.
+            with launch_stage("browser_start"):
+                context = await stack.enter_async_context(AsyncCamoufox(**launch_config))
+            with launch_stage("restore_tabs"):
+                if not context.pages:
+                    await context.new_page()
+                restored = 0
+                if RESTORE_TABS:
+                    restored = await restore_tabs(context, session.load(profile_dir))
+                    if restored:
+                        _safe_print(f"Restored {restored} tab(s)")
+                start_url = normalize_start_url(extra.get("start_url"))
+                if not restored and start_url:
+                    await restore_tabs(context, session.restorable([start_url]))
 
             close_event = asyncio.Event()
 
@@ -320,10 +353,12 @@ async def run_browser(
             context.on("page", watch)
             context.on("close", lambda: close_event.set())
 
-            control_runner, port, token = await control.serve(context)
+            with launch_stage("control_ready"):
+                control_runner, port, token = await control.serve(context)
             # CONTROL must precede BROWSER_STARTED: the launcher reports the
             # profile ready on BROWSER_STARTED and callers may control it at once.
             _safe_print(f"CONTROL:{port}:{token}")
+            report_timing("launch_ready_total", launch_started)
             _safe_print("BROWSER_STARTED")
 
             snapshot_task = (
@@ -370,7 +405,22 @@ async def run_browser(
 async def _async_main() -> int:
     loop = asyncio.get_running_loop()
     _setup_signals(loop)
-    return await run_browser(*sys.argv[1:6])
+    from src.services.browser.cores import launch_binding
+    from src.services.browser.gpu_probe import install_headless_gpu_probe
+    from src.services.browser.lease import profile_lease
+
+    with profile_lease(os.path.join(os.getcwd(), DATA_DIR, sys.argv[1])):
+        args = sys.argv[1:6]
+        args += [""] * (5 - len(args))
+        try:
+            with launch_stage("launch_binding"):
+                version = launch_binding(args[0], "camoufox", sys.argv[6] if len(sys.argv) > 6 else "")
+        except (ValueError, OSError, RuntimeError) as exc:
+            _safe_print(f"LAUNCH_FAILED: {_compact_error(exc, 220)}")
+            return 1
+        with launch_stage("probe_adapter"):
+            install_headless_gpu_probe()
+        return await run_browser(*args, version)
 
 
 if __name__ == "__main__":

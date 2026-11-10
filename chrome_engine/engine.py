@@ -27,6 +27,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from src.services.browser.timing import launch_stage
+
 from . import fetch
 from . import persona as personas
 from .geo import ExitGeo, lookup, remembered_locale
@@ -229,19 +231,23 @@ class ChromeEngine:
             raise
 
     async def _start(self) -> Any:
-        executable = self._resolve_executable()
-        persona = self._resolve_persona()
+        with launch_stage("chrome_core_resolve"):
+            executable = self._resolve_executable()
+        with launch_stage("chrome_persona"):
+            persona = self._resolve_persona()
 
-        upstream = Upstream.parse(self._proxy) if self._proxy else None
-        if upstream:
-            self.bridge = await ProxyBridge(upstream).start()
+        with launch_stage("chrome_proxy_bridge"):
+            upstream = Upstream.parse(self._proxy) if self._proxy else None
+            if upstream:
+                self.bridge = await ProxyBridge(upstream).start()
 
-        if upstream and self.geoip and not (persona.timezone and persona.locale):
-            self.geo = await self._lookup_geo()
-            if not persona.locale:
-                locale = remembered_locale(self.profile_dir, self.geo.country, self.geo.locale)
-                self.geo = replace(self.geo, locale=locale)
-            persona = persona.with_geo(self.geo.timezone, self.geo.locale)
+        with launch_stage("chrome_geo_locale"):
+            if upstream and self.geoip and not (persona.timezone and persona.locale):
+                self.geo = await self._lookup_geo()
+                if not persona.locale:
+                    locale = remembered_locale(self.profile_dir, self.geo.country, self.geo.locale)
+                    self.geo = replace(self.geo, locale=locale)
+                persona = persona.with_geo(self.geo.timezone, self.geo.locale)
         self.persona = persona
 
         self.args = build_args(
@@ -253,22 +259,25 @@ class ChromeEngine:
 
         from playwright.async_api import async_playwright
 
-        self._playwright = await async_playwright().start()
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
-        set_webrtc_policy(
-            self.profile_dir,
-            WEBRTC_POLICY_PROXY if (self.bridge or self.block_webrtc) else WEBRTC_POLICY_DIRECT,
-        )
-        self.context = await self._playwright.chromium.launch_persistent_context(
-            str(self.profile_dir),
-            executable_path=str(executable),
-            headless=self.headless is True,
-            args=self.args,
-            ignore_default_args=self._ignored_default_args(),
-            no_viewport=True,
-            chromium_sandbox=self.sandbox,
-            accept_downloads=True,
-        )
+        with launch_stage("chrome_driver"):
+            self._playwright = await async_playwright().start()
+        with launch_stage("chrome_preferences"):
+            self.profile_dir.mkdir(parents=True, exist_ok=True)
+            set_webrtc_policy(
+                self.profile_dir,
+                WEBRTC_POLICY_PROXY if (self.bridge or self.block_webrtc) else WEBRTC_POLICY_DIRECT,
+            )
+        with launch_stage("chrome_context_start"):
+            self.context = await self._playwright.chromium.launch_persistent_context(
+                str(self.profile_dir),
+                executable_path=str(executable),
+                headless=self.headless is True,
+                args=self.args,
+                ignore_default_args=self._ignored_default_args(),
+                no_viewport=True,
+                chromium_sandbox=self.sandbox,
+                accept_downloads=True,
+            )
         if self.stealth_js and hasattr(self.context, "add_init_script"):
             await self.context.add_init_script(build_anti_cdp_init_script(persona))
         if self.geo and self.geo.latitude is not None and self.geo.longitude is not None:

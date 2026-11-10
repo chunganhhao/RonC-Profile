@@ -54,16 +54,12 @@ def build_launch_button(
             on_click=lambda _, n=name: on_launch(n),
         )
 
-    launch_bg = COLORS["paper_sunk"] if is_dark else COLORS["accent"]
-    launch_hover = COLORS["rule_strong"] if is_dark else COLORS["accent_hover"]
-    launch_side = (
-        ft.BorderSide(1, COLORS["rule_strong"])
-        if is_dark
-        else ft.BorderSide(0, "transparent")
-    )
+    launch_bg = COLORS["paper_sunk"] if is_dark else "#FFFFFF"
+    launch_hover = COLORS["rule_strong"] if is_dark else COLORS["paper_sunk"]
+    launch_side = ft.BorderSide(1, COLORS["rule_strong"])
     return ft.Button(
         get_string("launch"),
-        icon=ft.Icons.LANGUAGE if is_dark else ft.Icons.PLAY_ARROW_ROUNDED,
+        icon=ft.Icons.LANGUAGE,
         width=_WIDTH,
         height=_HEIGHT,
         style=ft.ButtonStyle(
@@ -73,7 +69,7 @@ def build_launch_button(
                 ft.ControlState.DEFAULT: launch_bg,
                 ft.ControlState.HOVERED: launch_hover,
             },
-            color=COLORS["text_main"] if is_dark else "#FFFFFF",
+            color=COLORS["text_main"],
             text_style=label_style,
             padding=ft.Padding.symmetric(horizontal=10),
             elevation=0,

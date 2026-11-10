@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from functools import wraps
 from typing import Any
 
 import flet as ft
@@ -6,7 +7,19 @@ import flet as ft
 from ...core.strings import get_string
 from ...interfaces.protocols import IBrowserLauncher, IProfileManager, IProxyService
 from ...services.browser import chrome_prefetch
+from ...services.profile.manager import ProfileStoreChangedError
 from ..dialogs import open_confirm_dialog, open_profile_dialog
+
+
+def _store_conflict(on_save):
+    @wraps(on_save)
+    def guarded(*args, **kwargs):
+        try:
+            return on_save(*args, **kwargs)
+        except (ProfileStoreChangedError, OSError) as exc:
+            return str(exc) or "Profile/store is busy; refresh and retry"
+
+    return guarded
 
 
 def delete_profile(
@@ -17,7 +30,12 @@ def delete_profile(
     refresh: Callable[[], None],
 ) -> None:
     def do_delete() -> None:
-        pm.delete_profile(name)
+        try:
+            pm.delete_profile(name)
+        except (ProfileStoreChangedError, OSError) as exc:
+            log(str(exc) or "Profile/store is busy; refresh and retry")
+            refresh()
+            return
         log(get_string("deleted_profile", name=name))
         refresh()
 
@@ -38,6 +56,7 @@ def edit_profile(
         return
     original = profile.name
 
+    @_store_conflict
     def on_save(
         new_name: str,
         new_proxy: str,
@@ -73,6 +92,7 @@ def add_profile(
     log: Callable[[str], None],
     refresh: Callable[[], None],
 ) -> None:
+    @_store_conflict
     def on_save(
         name: str,
         proxy: str,

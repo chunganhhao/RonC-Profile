@@ -17,6 +17,8 @@ class ProfileCreate(BaseModel):
         "Fixed once the profile is created",
     )
     group: str | None = None
+    tags: list[str] | None = Field(None, max_length=20)
+    display_order: int | None = Field(None, ge=1, le=1_000_000, strict=True)
     account_uid: str | None = None
     account_password: str | None = None
     two_fa_secret: str | None = None
@@ -36,6 +38,8 @@ class ProfileUpdate(BaseModel):
     locale: str | None = Field(None, description='"" switches back to automatic')
     engine: str | None = Field(None, description="Cannot be changed; only the current value")
     group: str | None = None
+    tags: list[str] | None = Field(None, max_length=20)
+    display_order: int | None = Field(None, ge=1, le=1_000_000, strict=True)
     account_uid: str | None = None
     account_password: str | None = None
     two_fa_secret: str | None = None
@@ -52,7 +56,10 @@ class ProfileResponse(BaseModel):
     timezone: str | None = None
     locale: str | None = None
     engine: str = "camoufox"
+    core_version: str | None = None
     group: str | None = None
+    tags: list[str] | None = Field(None, max_length=20)
+    display_order: int | None = Field(None, ge=1, le=1_000_000, strict=True)
     account_uid: str | None = None
     notes: str | None = None
     start_url: str | None = None

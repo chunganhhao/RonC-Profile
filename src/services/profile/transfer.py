@@ -5,7 +5,14 @@ import zipfile
 from datetime import datetime
 
 from ...core.logging import get_logger
-from ...models.profile import CANVAS_MODES, ENGINES, WEBRTC_MODES, Profile
+from ...models.profile import (
+    CANVAS_MODES,
+    ENGINES,
+    WEBRTC_MODES,
+    Profile,
+    normalize_tags,
+    valid_display_order,
+)
 from ...utils.totp import clean_totp_secret
 from ...utils.validation import (
     normalize_start_url,
@@ -24,6 +31,7 @@ def export_to_zip(
     profile_data_dir: str,
     export_path: str,
     include_data: bool = True,
+    exclude_files: frozenset[str] = frozenset(),
 ) -> tuple[bool, str]:
     """Create a ZIP archive of a profile and optionally its browser data."""
     try:
@@ -38,6 +46,8 @@ def export_to_zip(
                 for root, _dirs, files in os.walk(profile_data_dir):
                     for file in files:
                         file_path = os.path.join(root, file)
+                        if os.path.relpath(file_path, profile_data_dir) in exclude_files:
+                            continue
                         arcname = os.path.join(
                             "data",
                             os.path.relpath(file_path, profile_data_dir),
@@ -90,8 +100,15 @@ def import_from_zip(
             if not valid:
                 return False, f"Invalid profile name in archive: {msg}"
 
+            tags = normalize_tags(profile_data.get("tags", []))
+            display_order = profile_data.get("display_order")
+            if not valid_display_order(display_order):
+                return False, "Invalid display order in archive"
             profile = Profile(
                 name=name,
+                core_version=profile_data.get("core_version")
+                if isinstance(profile_data.get("core_version"), str)
+                else None,
                 proxy=profile_data.get("proxy"),
                 os_type=profile_data.get("os_type", "windows"),
                 timezone=valid_or_none(profile_data.get("timezone"), validate_timezone),
@@ -99,7 +116,9 @@ def import_from_zip(
                 engine=profile_data.get("engine")
                 if profile_data.get("engine") in ENGINES
                 else "camoufox",
-                group=(profile_data.get("group") or "").strip() or None,
+                group=tags[0] if tags else (profile_data.get("group") or "").strip() or None,
+                tags=tags,
+                display_order=display_order,
                 account_uid=(profile_data.get("account_uid") or "").strip() or None,
                 account_password=profile_data.get("account_password") or None,
                 two_fa_secret=clean_totp_secret(profile_data.get("two_fa_secret")) or None,

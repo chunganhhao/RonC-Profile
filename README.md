@@ -319,3 +319,13 @@ Released under the [MIT License](LICENSE). Copyright (c) 2026 chienbm98.
 - The [Camoufox](https://github.com/daijro/camoufox) browser by daijro.
 - [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) by adryfish for the Chrome engine (BSD-3).
 - The [Be Vietnam Pro](https://github.com/bettergui/BeVietnamPro) and [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) fonts, SIL Open Font License (`src/assets/fonts/`).
+
+### Safe core management
+
+Open **Browser cores** in the desktop or web sidebar. Inventory is read-only. Explicit downloads use an approved version list and SHA-256 verification, in a separate staging cache; no automatic activation or arbitrary `latest`/URL installs.
+
+Applying requires a **stopped profile**, a staged core of the **same engine**, and separate **local backup** and **apply** confirmations. The app verifies the private backup before changing only the profile's future `core_version` binding. It never launches the browser or resets its device identity. Busy profiles, native browser lock artifacts, concurrent data/metadata changes, missing recovery runtime, and downgrades are refused. Existing profiles are not modified by opening this feature.
+
+Backups contain account/session data: never commit or upload them. Defaults are local `core-backups` beside the engine cache (0700 directories, 0600 archives/manifests on POSIX). `FOXPROFILE_CORE_HOME` and `FOXPROFILE_CORE_BACKUP_HOME` can relocate staging and backups, but not into profile data/active core caches. Recovery needs the **old data snapshot and matching old runtime**; automatic restore is intentionally not provided. The allowlist is reviewed, not necessarily upstream-latest. Camoufox staging currently supports the reviewed macOS arm64 asset and paired library stack only. Bound profiles fail closed when the approved core/runtime is missing rather than silently falling back.
+
+Windows currently supports inventory/staging only: Apply fails closed until private backup ACL verification is implemented. POSIX chmod checks are not treated as Windows ACL checks.

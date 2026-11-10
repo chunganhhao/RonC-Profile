@@ -21,6 +21,7 @@ from .components import (
 )
 from .components.profile_card import build_header_row
 from .components.sidebar import build_filter_buttons
+from .dialogs.cores import open_core_manager
 from .dialogs.mcp_guide import open_mcp_guide
 from .dialogs.proxy_pool import open_proxy_pool_dialog
 from .dialogs.warming import open_warming_dialog
@@ -199,6 +200,7 @@ class App:
             on_import=self.h.on_import,
             on_export=lambda _: self.h.on_export_open(),
             on_mcp=lambda _: open_mcp_guide(self.page, self.clipboard),
+            on_open_cores=lambda _: open_core_manager(self.page, self.pm, self.bl),
             on_toggle_log=lambda _: self.h.toggle_log(),
             on_fullscreen_log=lambda _: self.h.open_log_fullscreen(),
             filter_column=self._filter_column,
@@ -261,7 +263,11 @@ class App:
         all_profiles = self.pm.list_profiles()
         if self.filter.startswith("group:"):
             target_group = self.filter.split(":", 1)[1]
-            all_profiles = [p for p in all_profiles if (p.group or "") == target_group]
+            all_profiles = [
+                p
+                for p in all_profiles
+                if target_group in (p.tags or ([p.group] if p.group else []))
+            ]
         else:
             test = self._filter_tests().get(self.filter, lambda p: True)
             all_profiles = [p for p in all_profiles if test(p)]
@@ -271,7 +277,7 @@ class App:
                 for p in all_profiles
                 if q in p.name.lower()
                 or q in (p.proxy or "").lower()
-                or q in (p.group or "").lower()
+                or any(q in tag.lower() for tag in (p.tags or ([p.group] if p.group else [])))
                 or q in (p.account_uid or "").lower()
                 or q in (p.notes or "").lower()
             ]
@@ -279,6 +285,65 @@ class App:
         self.state.current_page = min(self.state.current_page, total)
         start = (self.state.current_page - 1) * ITEMS_PER_PAGE
         return all_profiles, all_profiles[start : start + ITEMS_PER_PAGE], total
+
+    def _on_edit_field(self, name: str, field: str, row_index: int = 1) -> None:
+        from ..services.profile.manager import ProfileStoreChangedError
+        from .dialogs.profile_field import open_profile_field_dialog
+
+        profile = self.pm.profiles.get(name)
+        if not profile or not self.page:
+            return
+
+        def save(value: object) -> str | None:
+            if field == "name" and value != name and self.bl.is_running(name):
+                return get_string("stop_before_rename")
+            # Use the latest in-process values, never a stale dialog-wide snapshot.
+            current = self.pm.profiles.get(name)
+            if not current:
+                return get_string("update_failed")
+            try:
+                ok = self.pm.update_profile(
+                    name,
+                    str(value) if field == "name" else name,
+                    str(value) if field == "proxy" else current.proxy or "",
+                    current.os_type,
+                    current.timezone,
+                    current.locale,
+                    **({field: value} if field not in ("name", "proxy") else {}),
+                )
+            except (ProfileStoreChangedError, OSError, ValueError) as exc:
+                return str(exc) or get_string("update_failed")
+            if not ok:
+                return get_string("update_failed")
+            self._refresh_profiles()
+            return None
+
+        open_profile_field_dialog(
+            self.page,
+            profile,
+            field,
+            save,
+            row_index=row_index,
+            known_tags=sorted(
+                {
+                    tag
+                    for p in self.pm.list_profiles()
+                    for tag in (p.tags or ([p.group] if p.group else []))
+                }
+            ),
+        )
+
+    def _on_copy_user(self, name: str) -> None:
+        profile = self.pm.profiles.get(name)
+        if not profile or not profile.account_uid or not self.page:
+            return
+        uid = profile.account_uid
+
+        async def copy() -> None:
+            await self.clipboard.set(uid)
+            self._log(get_string("copied_user"))
+
+        self.page.run_task(copy)
 
     def _on_copy_pass(self, name: str) -> None:
         profile = self.pm.profiles.get(name)
@@ -330,8 +395,8 @@ class App:
         tests = self._filter_tests()
         group_counts: dict[str, int] = {}
         for p in everything:
-            if p.group:
-                group_counts[p.group] = group_counts.get(p.group, 0) + 1
+            for tag in p.tags or ([p.group] if p.group else []):
+                group_counts[tag] = group_counts.get(tag, 0) + 1
 
         self._filter_column.controls = build_filter_buttons(
             self.filter,
@@ -364,6 +429,8 @@ class App:
                     is_selected=self.state.is_selected(p.name),
                     on_select=self.h.on_toggle_select,
                     on_cookies=self.h.on_cookies,
+                    on_copy_user=self._on_copy_user,
+                    on_edit_field=self._on_edit_field,
                     on_copy_pass=self._on_copy_pass,
                     on_copy_2fa=self._on_copy_2fa,
                     device=self._device_label(p.name),

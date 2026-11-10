@@ -319,3 +319,19 @@ Phát hành theo [giấy phép MIT](LICENSE). Copyright (c) 2026 chienbm98.
 - Trình duyệt [Camoufox](https://github.com/daijro/camoufox) của daijro.
 - [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) của adryfish cho engine Chrome (BSD-3).
 - Font [Be Vietnam Pro](https://github.com/bettergui/BeVietnamPro) và [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), giấy phép SIL Open Font License (`src/assets/fonts/`).
+
+### Quản lý core an toàn
+
+Mở **Quản lý core** ở thanh bên (desktop hoặc web):
+
+1. Xem phiên bản binary được cấu hình, thư viện đi kèm và core đã staging. Mở màn hình này không tải hay kích hoạt core.
+2. Chọn bản trong danh sách đã duyệt, xác nhận tải. App kiểm SHA-256 và lưu riêng vào `core-staging`; không ghi đè core đang dùng. Không nhận URL hoặc phiên bản `latest` tùy ý.
+3. Muốn áp dụng: chọn **profile đã dừng**, chọn core **cùng engine** đã staging, xác nhận **backup cục bộ** và **áp dụng** riêng. App kiểm backup trước, chỉ đổi `core_version` cho lần mở kế tiếp; không mở browser hay reset fingerprint.
+
+Backup chứa cookies, phiên đăng nhập và thông tin tài khoản: giữ cục bộ, không đưa vào Git/cloud. Trên macOS/Linux, thư mục backup riêng tư `0700`, ZIP/manifest `0600`. Có thể đổi vị trí bằng `FOXPROFILE_CORE_BACKUP_HOME`; vùng staging bằng `FOXPROFILE_CORE_HOME`. Không đặt chúng trong thư mục dữ liệu profile hay cache core đang dùng.
+
+App từ chối khi profile đang chạy/bận, có dấu khóa browser, dữ liệu thay đổi lúc backup, thiếu core cũ để phục hồi, hoặc thiếu dung lượng. Không tự xóa khóa. Chặn đổi Firefox ↔ Chromium và hạ phiên bản. Nếu cần phục hồi, phải dùng **snapshot dữ liệu trước cập nhật + runtime cũ tương ứng**; chưa có thao tác phục hồi tự động. Không mở dữ liệu đã nâng cấp bằng core cũ.
+
+Danh sách hiện tại chỉ gồm các bản đã duyệt trong source; không có nghĩa đó là phiên bản mới nhất upstream. Camoufox staging hiện được duyệt cho macOS arm64 với bộ thư viện đã pin. Runtime lệch bộ đã duyệt sẽ bị chặn thay vì tự nâng dependency. Profile chưa chọn core vẫn dùng cơ chế cũ; profile đã chọn sẽ fail-closed nếu thiếu core đã staging, không tự fallback/tải bản khác.
+
+Windows hiện chỉ hỗ trợ xem/tải staging; Apply bị chặn cho tới khi có kiểm tra ACL backup riêng tư. Không coi chmod POSIX là kiểm tra ACL Windows.

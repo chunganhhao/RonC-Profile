@@ -31,9 +31,9 @@ def _filter_row(
     icon: str | None = None,
 ) -> ft.Container:
     is_dark = current_theme_mode() == "dark"
-    active_bg = COLORS["cover_deep"] if is_dark else COLORS["cover_ink"]
-    active_fg = COLORS["cover_ink"] if is_dark else COLORS["sidebar"]
-    idle_fg = COLORS["cover_ink"] if not is_dark else COLORS["cover_muted"]
+    active_bg = COLORS["cover_deep"]
+    active_fg = COLORS["cover_ink"]
+    idle_fg = COLORS["cover_muted"] if is_dark else COLORS["text_sub"]
 
     left_controls: list[ft.Control] = []
     if icon:
@@ -41,7 +41,9 @@ def _filter_row(
             ft.Icon(
                 icon,
                 size=15,
-                color=active_fg if on else COLORS["cover_muted"],
+                color=(COLORS["accent"] if not is_dark else active_fg)
+                if on
+                else COLORS["cover_muted"],
             )
         )
     left_controls.append(
@@ -200,6 +202,7 @@ def build_sidebar(
     on_toggle_theme: Callable[[str], None] | None = None,
     proxy_pool_count: int = 0,
     warming_task_count: int = 0,
+    on_open_cores: Callable | None = None,
 ) -> ft.Container:
     log_toggle_btn.on_click = on_toggle_log
     is_dark = current_theme_mode() == "dark"
@@ -220,6 +223,15 @@ def build_sidebar(
         scroll=ft.ScrollMode.AUTO,
         expand=True,
         controls=[
+            *(
+                [
+                    _nav_action_row(
+                        ft.Icons.DOWNLOAD_OUTLINED, get_string("core_manager"), None, on_open_cores
+                    )
+                ]
+                if on_open_cores
+                else []
+            ),
             _section_header(get_string("nav_profiles_section")),
             filter_column or ft.Column(spacing=2),
             _section_header(get_string("nav_network_section")),
@@ -261,11 +273,6 @@ def build_sidebar(
         width=236,
         bgcolor=COLORS["sidebar"],
         border=ft.Border.only(right=ft.BorderSide(1, COLORS["card_border"])),
-        image=(
-            None
-            if is_dark
-            else ft.DecorationImage(src="rail-guilloche.png", repeat=ft.ImageRepeat.REPEAT, scale=2)
-        ),
         padding=ft.Padding.only(left=14, right=14, top=18, bottom=14),
         content=ft.Column(
             spacing=0,
@@ -275,7 +282,11 @@ def build_sidebar(
                     spacing=10,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
-                        ft.Image(src="logo.png", width=48, height=48),
+                        ft.Image(
+                            src="logo.png" if is_dark else "logo-light.png",
+                            width=46,
+                            height=46,
+                        ),
                         ft.Column(
                             spacing=0,
                             expand=True,

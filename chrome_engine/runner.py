@@ -16,6 +16,7 @@ import asyncio
 import os
 import signal
 import sys
+from time import perf_counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -24,6 +25,7 @@ from chrome_engine.engine import ChromeEngine
 from src.core.config import DATA_DIR, HEADLESS, RESTORE_TABS
 from src.services.browser import control, session
 from src.services.browser.runner import _read_profile_extra, restore_tabs, snapshot_tabs
+from src.services.browser.timing import launch_stage, report_timing
 from src.utils.validation import normalize_start_url
 
 _shutdown = asyncio.Event()
@@ -77,11 +79,25 @@ async def run_browser(
     os_type: str,
     timezone: str = "",
     locale: str = "",
+    core_version: str = "",
 ) -> int:
+    launch_started = perf_counter()
     profile_dir = os.path.join(os.getcwd(), DATA_DIR, profile_name)
     proxy = proxy_str if proxy_str and proxy_str != "None" else None
-    extra = _read_profile_extra(profile_name)
+    with launch_stage("profile_metadata"):
+        extra = _read_profile_extra(profile_name)
+    if extra.get("core_version"):
+        core_version = extra["core_version"]
     engine_kwargs: dict[str, object] = {}
+    if core_version:
+        try:
+            from src.services.browser.cores import bound_executable
+
+            with launch_stage("core_resolve"):
+                engine_kwargs["executable"] = bound_executable("chrome", core_version)
+        except (ValueError, OSError, RuntimeError) as exc:
+            _say(f"LAUNCH_FAILED: {_compact(exc, 220)}")
+            return 1
     if extra.get("webrtc_mode") == "disable":
         engine_kwargs["block_webrtc"] = True
     engine = ChromeEngine(
@@ -96,8 +112,11 @@ async def run_browser(
     )
     _say(f"Starting Chrome engine for {profile_name}...")
     try:
-        await ensure_installed()
-        context = await engine.start()
+        if not core_version:
+            with launch_stage("install_check"):
+                await ensure_installed()
+        with launch_stage("browser_start"):
+            context = await engine.start()
     except asyncio.CancelledError:
         _say("LAUNCH_CANCELLED")
         await engine.stop()
@@ -110,16 +129,17 @@ async def run_browser(
     try:
         for warning in engine.warnings:
             _say(f"Warning: {warning}")
-        if not context.pages:
-            await context.new_page()
-        restored = 0
-        if RESTORE_TABS:
-            restored = await restore_tabs(context, session.load(profile_dir))
-            if restored:
-                _say(f"Restored {restored} tab(s)")
-        start_url = normalize_start_url(extra.get("start_url"))
-        if not restored and start_url:
-            await restore_tabs(context, session.restorable([start_url]))
+        with launch_stage("restore_tabs"):
+            if not context.pages:
+                await context.new_page()
+            restored = 0
+            if RESTORE_TABS:
+                restored = await restore_tabs(context, session.load(profile_dir))
+                if restored:
+                    _say(f"Restored {restored} tab(s)")
+            start_url = normalize_start_url(extra.get("start_url"))
+            if not restored and start_url:
+                await restore_tabs(context, session.restorable([start_url]))
 
         close_event = asyncio.Event()
 
@@ -135,9 +155,11 @@ async def run_browser(
         context.on("page", watch)
         context.on("close", lambda _: close_event.set())
 
-        control_runner, port, token = await control.serve(context)
+        with launch_stage("control_ready"):
+            control_runner, port, token = await control.serve(context)
         # CONTROL must precede BROWSER_STARTED (see the Camoufox runner).
         _say(f"CONTROL:{port}:{token}")
+        report_timing("launch_ready_total", launch_started)
         _say("BROWSER_STARTED")
 
         snapshot_task = (
@@ -172,7 +194,19 @@ async def _async_main(argv: list[str]) -> int:
             loop.add_signal_handler(sig, _shutdown.set)
     except NotImplementedError:
         pass
-    return await run_browser(*argv[:5])
+    from src.services.browser.cores import launch_binding
+    from src.services.browser.lease import profile_lease
+
+    with profile_lease(os.path.join(os.getcwd(), DATA_DIR, argv[0])):
+        args = argv[:5]
+        args += [""] * (5 - len(args))
+        try:
+            with launch_stage("launch_binding"):
+                version = launch_binding(args[0], "chrome", argv[5] if len(argv) > 5 else "")
+        except (ValueError, OSError, RuntimeError) as exc:
+            _say(f"LAUNCH_FAILED: {_compact(exc, 220)}")
+            return 1
+        return await run_browser(*args, version)
 
 
 def main() -> int:

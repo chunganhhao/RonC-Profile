@@ -195,3 +195,11 @@ HANDOFF_CODEX_REVIEW_BATCH*.md
 .impeccable/questions/
 .impeccable/mocks/
 .DS_Store
+
+# Core staging and credential-bearing recovery snapshots (never commit)
+core-staging/
+core-backups/
+
+# Local UI test tooling
+node_modules/
+.e2e/

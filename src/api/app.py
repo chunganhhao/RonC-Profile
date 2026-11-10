@@ -6,10 +6,11 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from ..core.config import API_PORT, API_TOKEN, HEADLESS
 from ..core.logging import get_logger
+from ..services.profile.manager import ProfileStoreChangedError
 from . import mcp_http
 from .auth import require_token
 from .guard import LocalOnlyGuard
@@ -21,6 +22,7 @@ from .routes import (
     proxy_router,
     warming_router,
 )
+from .routes.cores import router as cores_router
 from .schemas.common import SuccessResponse
 
 if TYPE_CHECKING:
@@ -70,6 +72,18 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
         version=VERSION,
     )
     app.state.container = container
+
+    @app.exception_handler(ProfileStoreChangedError)
+    async def stale_store(_request, exc):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(BlockingIOError)
+    async def busy_store(_request, _exc):
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "Profile/store is busy; retry after the current operation finishes"},
+        )
+
     if not API_TOKEN:
         # Token-less means local-only: block CSRF and DNS rebinding from websites.
         app.add_middleware(LocalOnlyGuard)
@@ -81,6 +95,7 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
     app.include_router(proxy_router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(warming_router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(mcp_setup_router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(cores_router, prefix=API_PREFIX, dependencies=protected)
     app.router.routes.append(mcp_route)
 
     @app.get(f"{API_PREFIX}/health", response_model=SuccessResponse, tags=["health"])
@@ -114,6 +129,10 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
     @app.get("/assets/icon.png", include_in_schema=False)
     def brand_icon() -> FileResponse:
         return FileResponse(_FONTS.parent / "icon.png", media_type="image/png")
+
+    @app.get("/assets/logo-light.png", include_in_schema=False)
+    def brand_logo_light() -> FileResponse:
+        return FileResponse(_FONTS.parent / "logo-light.png", media_type="image/png")
 
     logger.info("FastAPI application created")
     return app

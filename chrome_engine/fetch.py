@@ -55,14 +55,27 @@ def engine_home() -> Path:
 
 def installed_executable(version: str | None = None, home: Path | None = None) -> Path | None:
     """The browser executable of an installed version, or None."""
-    release = get_release(version)
-    marker = (home or engine_home()) / release.version / MARKER
+    return installed_release(get_release(version), home or engine_home())
+
+
+def installed_release(release: Release, home: Path) -> Path | None:
+    """Inspect an approved release without resolving or downloading another core."""
+    marker = home / release.version / MARKER
+    if marker.parent.is_symlink() or marker.is_symlink():
+        return None
     try:
         data = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    exe = marker.parent / data.get("executable", "")
-    return exe if exe.is_file() else None
+    if not isinstance(data, dict) or data.get("version") != release.version:
+        return None
+    if data.get("sha256") not in {asset.sha256 for asset in release.assets.values()}:
+        return None
+    relative = data.get("executable")
+    if not isinstance(relative, str):
+        return None
+    exe = (marker.parent / relative).resolve()
+    return exe if exe.is_relative_to(marker.parent.resolve()) and exe.is_file() else None
 
 
 def install(
@@ -79,26 +92,37 @@ def install(
     """
     release = get_release(version)
     home = home or engine_home()
-    existing = installed_executable(release.version, home)
+    existing = installed_release(release, home)
     if existing:
         return existing
     asset = release.asset_for(host or host_platform())
+    return install_release(release, asset, home, progress)
+
+
+def install_release(
+    release: Release,
+    asset: Asset,
+    home: Path,
+    progress: Progress | None = None,
+    prepare: Callable[[Path, Path], None] | None = None,
+) -> Path:
+    """Stage a caller-approved, checksum-pinned release beside existing builds."""
     home.mkdir(parents=True, exist_ok=True)
     lock = home / f"{release.version}.lock"
     while not _try_lock(lock):
         _wait_for_lock(lock, release, asset, home, progress)
-        existing = installed_executable(release.version, home)
+        existing = installed_release(release, home)
         if existing:
             return existing
     try:
-        existing = installed_executable(release.version, home)
+        existing = installed_release(release, home)
         if existing:
             return existing
         _remove_leftovers(home, release.version)
         archive = home / f"{release.version}.{asset.kind}.{os.getpid()}.part"
         try:
             download(asset, archive, progress)
-            return unpack(release, asset, archive, home)
+            return unpack(release, asset, archive, home, prepare=prepare)
         finally:
             with contextlib.suppress(OSError):
                 archive.unlink()
@@ -168,7 +192,7 @@ def _wait_for_lock(
 ) -> None:
     """Wait while another live process installs, reporting its download progress."""
     while (owner := _lock_owner(lock)) is not None:
-        if installed_executable(release.version, home):
+        if installed_release(release, home):
             return
         if progress:
             part = home / f"{release.version}.{asset.kind}.{owner}.part"
@@ -212,7 +236,14 @@ def download(asset: Asset, dest: Path, progress: Progress | None = None) -> None
         )
 
 
-def unpack(release: Release, asset: Asset, archive: Path, home: Path) -> Path:
+def unpack(
+    release: Release,
+    asset: Asset,
+    archive: Path,
+    home: Path,
+    *,
+    prepare: Callable[[Path, Path], None] | None = None,
+) -> Path:
     """Extract a verified archive into <home>/<version> and return the executable."""
     target = home / release.version
     staging = Path(tempfile.mkdtemp(prefix=f".{release.version}-", dir=home))
@@ -232,9 +263,11 @@ def unpack(release: Release, asset: Asset, archive: Path, home: Path) -> Path:
 
         exe = _locate_executable(staging, asset.executable)
         _make_executable(exe)
+        if prepare:
+            prepare(staging, exe)
         relative = exe.relative_to(staging).as_posix()
         # Another process finished first: keep its copy, which may already be running.
-        finished = installed_executable(release.version, home)
+        finished = installed_release(release, home)
         if finished:
             shutil.rmtree(staging, ignore_errors=True)
             return finished
@@ -246,14 +279,14 @@ def unpack(release: Release, asset: Asset, archive: Path, home: Path) -> Path:
         )
         # A target without a marker is an unfinished copy; one with a marker is
         # in use and is never removed.
-        if target.exists() and not installed_executable(release.version, home):
+        if target.exists() and not installed_release(release, home):
             shutil.rmtree(target, ignore_errors=True)
         for attempt in range(_RENAME_ATTEMPTS):
             try:
                 staging.rename(target)
                 break
             except OSError:
-                finished = installed_executable(release.version, home)
+                finished = installed_release(release, home)
                 if finished:
                     shutil.rmtree(staging, ignore_errors=True)
                     return finished

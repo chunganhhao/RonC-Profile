@@ -83,7 +83,17 @@ def main():
                         expect(
                             page.get_by_role("row").filter(has_text="ronc-branding-fixture")
                         ).to_be_visible()
-                        page.screenshot(path=str(OUT / "panel.png"), full_page=True)
+                        page.screenshot(
+                            path=str(OUT / "panel.png"), full_page=True, animations="disabled"
+                        )
+                        page.locator("[data-theme-btn='dark']").click()
+                        page.wait_for_function(
+                            "document.querySelector('#app .brand img').naturalWidth > 0"
+                        )
+                        page.screenshot(
+                            path=str(OUT / "panel-dark.png"), full_page=True, animations="disabled"
+                        )
+                        page.locator("[data-theme-btn='light']").click()
                         assert (
                             page.request.delete(
                                 origin + "/api/v1/profiles/ronc-branding-fixture",

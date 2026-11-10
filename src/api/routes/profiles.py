@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse
 
 from ...core.config import DATA_DIR
 from ...core.logging import get_logger
-from ...models.profile import CANVAS_MODES, ENGINES, WEBRTC_MODES
+from ...models.profile import CANVAS_MODES, ENGINES, WEBRTC_MODES, normalize_tags
 from ...services.browser import chrome_prefetch, cookies, fingerprint
 from ...services.browser.launcher import ProfileBusyError
 from ...services.proxy.geo_check import check_geo
@@ -69,6 +69,14 @@ def _require_engine(engine: str) -> None:
         raise HTTPException(status_code=400, detail=f"Chrome engine unavailable here: {reason}")
 
 
+def _require_tags(tags: list[str] | None) -> None:
+    if tags is not None:
+        try:
+            normalize_tags(tags)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _require_geo(timezone: str | None, locale: str | None) -> None:
     for validate, value in ((validate_timezone, timezone), (validate_locale, locale)):
         valid, msg = validate(value or "")
@@ -103,12 +111,17 @@ def create_profile(
     _require_os(body.os_type)
     _require_engine(body.engine)
     _require_geo(body.timezone, body.locale)
+    _require_tags(body.tags)
 
     if body.proxy:
         valid, msg = validate_proxy_format(body.proxy)
         if not valid:
             raise HTTPException(status_code=400, detail=msg)
-    if body.two_fa_secret and body.two_fa_secret.strip() and not clean_totp_secret(body.two_fa_secret):
+    if (
+        body.two_fa_secret
+        and body.two_fa_secret.strip()
+        and not clean_totp_secret(body.two_fa_secret)
+    ):
         raise HTTPException(
             status_code=400,
             detail="Invalid 2FA TOTP secret (must be Base32 or standard SHA1/6-digit/30s otpauth://totp URI)",
@@ -117,9 +130,13 @@ def create_profile(
     if not valid_url:
         raise HTTPException(status_code=400, detail=url_msg)
     if body.webrtc_mode not in WEBRTC_MODES:
-        raise HTTPException(status_code=400, detail=f"webrtc_mode must be one of: {', '.join(WEBRTC_MODES)}")
+        raise HTTPException(
+            status_code=400, detail=f"webrtc_mode must be one of: {', '.join(WEBRTC_MODES)}"
+        )
     if body.canvas_mode not in CANVAS_MODES:
-        raise HTTPException(status_code=400, detail=f"canvas_mode must be one of: {', '.join(CANVAS_MODES)}")
+        raise HTTPException(
+            status_code=400, detail=f"canvas_mode must be one of: {', '.join(CANVAS_MODES)}"
+        )
 
     if not pm.add_profile(
         body.name,
@@ -129,6 +146,8 @@ def create_profile(
         body.locale or None,
         body.engine,
         group=body.group,
+        tags=body.tags,
+        display_order=body.display_order,
         account_uid=body.account_uid,
         account_password=body.account_password,
         two_fa_secret=body.two_fa_secret,
@@ -174,6 +193,7 @@ def update_profile(
 ) -> ProfileResponse:
     profile = require_profile(name, pm)
     supplied = body.model_dump(exclude_unset=True)
+    _require_tags(body.tags)
 
     new_name = supplied.get("name", name)
     new_proxy = supplied.get("proxy", profile.proxy)
@@ -215,14 +235,20 @@ def update_profile(
         if not valid_url:
             raise HTTPException(status_code=400, detail=url_msg)
     if "webrtc_mode" in supplied and supplied["webrtc_mode"] not in WEBRTC_MODES:
-        raise HTTPException(status_code=400, detail=f"webrtc_mode must be one of: {', '.join(WEBRTC_MODES)}")
+        raise HTTPException(
+            status_code=400, detail=f"webrtc_mode must be one of: {', '.join(WEBRTC_MODES)}"
+        )
     if "canvas_mode" in supplied and supplied["canvas_mode"] not in CANVAS_MODES:
-        raise HTTPException(status_code=400, detail=f"canvas_mode must be one of: {', '.join(CANVAS_MODES)}")
+        raise HTTPException(
+            status_code=400, detail=f"canvas_mode must be one of: {', '.join(CANVAS_MODES)}"
+        )
 
     extra_update = {
         k: supplied[k]
         for k in (
             "group",
+            "tags",
+            "display_order",
             "account_uid",
             "account_password",
             "two_fa_secret",

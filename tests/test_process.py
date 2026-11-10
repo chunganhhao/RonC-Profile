@@ -73,6 +73,19 @@ def test_virtual_display_is_stopped_when_the_launch_fails(monkeypatch, tmp_path,
     assert seen["records"] == ["sweep", ("record", 4242, ":99"), "clear"]
 
 
+def test_search_policy_is_repaired_before_browser_launch(monkeypatch, tmp_path):
+    seen = _patch_launch(monkeypatch, tmp_path, True)
+
+    def repair():
+        assert not seen["config"]
+        seen["records"].append("search repaired")
+
+    monkeypatch.setattr(runner, "ensure_google_search", repair)
+    assert asyncio.run(runner.run_browser("p", "None", "windows")) == 1
+    assert seen["records"] == ["search repaired"]
+    assert seen["config"]
+
+
 def test_virtual_display_setup_error_reports_launch_failed(monkeypatch, tmp_path, capsys):
     _patch_launch(monkeypatch, tmp_path, "virtual")
     FakeDisplay.fail_on_init = True

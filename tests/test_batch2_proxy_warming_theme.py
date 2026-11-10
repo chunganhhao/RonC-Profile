@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.core.container import Container
-from src.models.profile import Profile
 from src.services.profile import manager as pm_mod
 from src.services.proxy.pool import ProxyPoolService
 from src.services.warming.scheduler import WarmingSchedulerService
@@ -62,8 +61,8 @@ def test_theme_switching_updates_colors_and_styles():
         toggle_theme_mode()
         refresh_styles()
         assert current_theme_mode() == "light"
-        assert COLORS["bg"] == "#F3F4EF"
-        assert DLG_FIELD_KWARGS["bgcolor"] == "#FBFBF8"
+        assert COLORS["bg"] == "#F8FAFC"
+        assert DLG_FIELD_KWARGS["bgcolor"] == "#FFFFFF"
     finally:
         set_theme_mode(orig)
         refresh_styles()
@@ -440,6 +439,7 @@ def test_full_app_e2e_lifecycle_theme_and_dialogs(tmp_path, monkeypatch):
 
 def test_b2_f1_to_f4_warming_concurrency_duration_and_api_lifespan(tmp_path, monkeypatch):
     import threading
+
     from src.core import config as app_config
     from src.services.warming import scheduler as sched_mod
 

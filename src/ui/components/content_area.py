@@ -77,12 +77,9 @@ def build_content_area(
     """Main PionLogin-style workspace: Top header, Action toolbar, Data table, Pagination & Status bar."""
     is_dark = current_theme_mode() == "dark"
 
-    sheet = ft.Container(
-        expand=True,
-        bgcolor=COLORS["card_bg"],
-        border=ft.Border.all(1, COLORS["card_border"]),
-        border_radius=10,
-        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+    # Keep field labels readable on narrow desktop windows; only the table scrolls.
+    table = ft.Container(
+        width=1140,
         content=ft.Column(
             spacing=0,
             expand=True,
@@ -91,6 +88,28 @@ def build_content_area(
                 *([] if header_slot is None else [header_slot]),
                 profile_list,
             ],
+        ),
+    )
+
+    def resize_table(event: ft.LayoutSizeChangeEvent) -> None:
+        width = max(1140, event.width - 2)
+        if table.width != width:
+            table.width = width
+            table.update()
+
+    sheet = ft.Container(
+        expand=True,
+        bgcolor=COLORS["card_bg"],
+        border=ft.Border.all(1, COLORS["card_border"]),
+        border_radius=10,
+        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+        on_size_change=resize_table,
+        content=ft.Row(
+            spacing=0,
+            expand=True,
+            scroll=ft.ScrollMode.AUTO,
+            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
+            controls=[table],
         ),
     )
 
@@ -210,16 +229,8 @@ def build_content_area(
                     font_family=FONT_DATA,
                     color=COLORS["text_sub"],
                 ),
-                *(
-                    [_status_sep(), footer_proxy_text]
-                    if footer_proxy_text is not None
-                    else []
-                ),
-                *(
-                    [_status_sep(), footer_warming_text]
-                    if footer_warming_text is not None
-                    else []
-                ),
+                *([_status_sep(), footer_proxy_text] if footer_proxy_text is not None else []),
+                *([_status_sep(), footer_warming_text] if footer_warming_text is not None else []),
                 ft.Container(expand=True),
                 ft.Text(
                     get_string("footer_version"),

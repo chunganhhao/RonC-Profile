@@ -20,7 +20,7 @@ def runner_command(profile: Profile) -> list[str]:
         runner = ["-m", "chrome_engine.runner"]
     else:
         runner = [os.path.join(pathlib.Path(__file__).parent, "runner.py")]
-    return [
+    command = [
         sys.executable,
         *runner,
         profile.name,
@@ -29,6 +29,9 @@ def runner_command(profile: Profile) -> list[str]:
         profile.timezone or "",
         profile.locale or "",
     ]
+    if profile.core_version:
+        command.append(profile.core_version)
+    return command
 
 
 def spawn_browser(profile: Profile) -> subprocess.Popen:
