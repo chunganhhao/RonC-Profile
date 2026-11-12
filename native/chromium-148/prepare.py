@@ -15,7 +15,7 @@ PATCH_SHA256 = "df190001a4ab19a97acad9758a0c0dd03a800584e9b96c81c33484a5bedd6ce2
 RUST_SHA256 = "a7cfb30246204096d1d77481e0aa274b98762c529f85bd5a2064fcb68b777d97"
 PATCH = Path(__file__).with_name("patches") / "109-canvas-pixel-addressing.patch"
 NATIVE_PATCH = Path(__file__).with_name("patches") / "022-native-gpu-realms.patch"
-NATIVE_PATCH_SHA256 = "d550bc6a18121153b2050f84d6edf1528dcd2265504406340fbfe7a7562cf1bd"
+NATIVE_PATCH_SHA256 = "e197fd91382ccf39dd1f43b36b9b89042331f09021344ee7d661133e1bc3420c"
 NATIVE_SERIES_ENTRY = "extra/fingerprint/022-native-gpu-realms.patch"
 
 

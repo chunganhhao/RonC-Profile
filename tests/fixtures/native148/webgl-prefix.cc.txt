@@ -1,0 +1,70 @@
+// Copyright 2024 The ungoogled-chromium Authors
+
+#include "third_party/blink/renderer/modules/webgl/webgl_fingerprint.h"
+
+#include <array>
+#include <string>
+
+#include "base/command_line.h"
+#include "base/containers/span.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/time/time.h"
+#include "components/ungoogled/ungoogled_switches.h"
+#include "components/ungoogled/webgl_config_data.h"
+#include "third_party/blink/renderer/bindings/modules/v8/webgl_any.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+
+namespace blink {
+
+namespace {
+
+using ungoogled::fingerprint::kMacOSWebGLConfigs;
+using ungoogled::fingerprint::kWindowsWebGLConfigs;
+using ungoogled::fingerprint::WebGLConfig;
+using ungoogled::fingerprint::WebGLParamSet;
+
+// Returns the active per-device config, or nullptr when WebGL spoofing is off
+// for this process (no --fingerprint, disabled via --disable-spoofing=gpu, or a
+// platform with no config data such as linux).
+const WebGLConfig* GetActiveWebGLConfig() {
+  const base::CommandLine* command_line =
+      base::CommandLine::ForCurrentProcess();
+  if (!command_line->HasSwitch(switches::kFingerprint)) {
+    return nullptr;
+  }
+  if (command_line->HasSwitch(switches::kDisableSpoofing) &&
+      command_line->GetSwitchValueASCII(switches::kDisableSpoofing)
+              .find("gpu") != std::string::npos) {
+    return nullptr;
+  }
+
+  std::string platform = "windows";
+  if (command_line->HasSwitch(switches::kFingerprintPlatform)) {
+    platform = base::ToLowerASCII(
+        command_line->GetSwitchValueASCII(switches::kFingerprintPlatform));
+  }
+
+  base::span<const WebGLConfig> configs;
+  if (platform == "windows") {
+    configs = base::span(kWindowsWebGLConfigs);
+  } else if (platform == "macos") {
+    configs = base::span(kMacOSWebGLConfigs);
+  } else {
+    // linux / unknown platform: no config data, do not spoof.
+    return nullptr;
+  }
+
+  uint64_t seed = 0;
+  base::StringToUint64(
+      command_line->GetSwitchValueASCII(switches::kFingerprint), &seed);
+  return &configs[static_cast<size_t>(seed % configs.size())];
+}
+
+const WebGLParamSet& ActiveParamSet(const WebGLConfig& config, bool is_webgl2) {
+  return is_webgl2 ? config.gl2 : config.gl1;
+}
+
+// WEBGL_debug_renderer_info enums (webgl_debug_renderer_info.h). These are
+// extension-gated upstream and handled at their case sites, not at the top.
+constexpr unsigned kUnmaskedVendorWebgl = 0x9245;
