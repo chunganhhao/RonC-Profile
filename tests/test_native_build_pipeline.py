@@ -122,7 +122,7 @@ def test_checkout_revision_and_dirty_guard(tmp_path, monkeypatch):
     [
         ("Linux", "aarch64", 300, 32, "macOS arm64"),
         ("Darwin", "x86_64", 300, 32, "macOS arm64"),
-        ("Darwin", "arm64", 14, 32, "100 GiB"),
+        ("Darwin", "arm64", 14, 32, "90 GiB"),
         ("Darwin", "arm64", 300, 4, "7 GiB"),
     ],
 )
@@ -132,7 +132,7 @@ def test_resource_fail_closed(system, machine, disk, ram, error):
 
 
 def test_resource_budget_passes():
-    native.check_resources("Darwin", "arm64", 100 * 1024**3, 7 * 1024**3)
+    native.check_resources("Darwin", "arm64", 90 * 1024**3, 7 * 1024**3)
 
 
 def test_preflight_rejects_non_mac_before_xcode_or_downloads(tmp_path, monkeypatch):
