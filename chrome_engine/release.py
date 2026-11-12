@@ -30,6 +30,8 @@ class Asset:
     kind: str
     # Path of the browser executable inside the extracted archive.
     executable: str
+    # Per-platform artifact, enabled only after the native matrix + integrity review.
+    native_realms: bool = False
 
 
 @dataclass(frozen=True)

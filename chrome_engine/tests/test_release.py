@@ -22,6 +22,12 @@ def test_150_is_not_the_default():
     assert not release.DEFAULT_VERSION.startswith("150.")
 
 
+def test_current_assets_do_not_silently_retire_legacy_shield():
+    assert not any(
+        asset.native_realms for rel in release.RELEASES.values() for asset in rel.assets.values()
+    )
+
+
 def test_unknown_version():
     with pytest.raises(ValueError, match="Unknown fingerprint-chromium version"):
         release.get_release("1.2.3")

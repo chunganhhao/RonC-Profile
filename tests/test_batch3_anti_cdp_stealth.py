@@ -78,7 +78,19 @@ def test_bezier_curve_and_keystroke_delays():
     assert stealth.keystroke_delays_ms("") == []
 
 
-def test_chrome_engine_block_webrtc_and_init_script_injection(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("native_realms", "explicit_executable", "selected_host", "expected_scripts"),
+    [
+        (False, False, "macos", 1),
+        (False, True, "macos", 1),
+        (True, False, "macos", 0),
+        (True, True, "macos", 1),
+        (True, False, "windows-x64", 1),
+    ],
+)
+def test_chrome_engine_block_webrtc_and_init_script_injection(
+    tmp_path, monkeypatch, native_realms, explicit_executable, selected_host, expected_scripts
+):
     """Verify ChromeEngine sets WEBRTC_POLICY_PROXY when block_webrtc=True and injects init script."""
     exe = tmp_path / "chrome"
     exe.write_bytes(b"")
@@ -113,6 +125,18 @@ def test_chrome_engine_block_webrtc_and_init_script_injection(tmp_path, monkeypa
 
     monkeypatch.setattr(pw, "async_playwright", lambda: FakeStarter())
     monkeypatch.setattr(engine_mod, "host_os", lambda: "macos")
+    from chrome_engine.release import Asset, Release
+
+    mixed = Release(
+        "fixture",
+        {
+            "macos": Asset("fixture", "test", 0, "zip", "chrome", native_realms),
+            "windows-x64": Asset("fixture", "test", 0, "zip", "chrome"),
+        },
+    )
+    monkeypatch.setattr(engine_mod, "get_release", lambda _: mixed)
+    monkeypatch.setattr(engine_mod, "host_platform", lambda: selected_host)
+    monkeypatch.setattr(engine_mod.fetch, "installed_executable", lambda _: exe)
     from chrome_engine import search
 
     async def no_search(context):
@@ -124,7 +148,7 @@ def test_chrome_engine_block_webrtc_and_init_script_injection(tmp_path, monkeypa
     eng = ChromeEngine(
         profile_dir,
         platform="macos",
-        executable=exe,
+        executable=exe if explicit_executable else None,
         block_webrtc=True,
         stealth_js=True,
     )
@@ -132,8 +156,9 @@ def test_chrome_engine_block_webrtc_and_init_script_injection(tmp_path, monkeypa
     try:
         prefs = json.loads((profile_dir / "Default" / "Preferences").read_text("utf-8"))
         assert prefs["webrtc"]["ip_handling_policy"] == engine_mod.WEBRTC_POLICY_PROXY
-        assert len(added_scripts) == 1
-        assert "clampDeviceMemory" in added_scripts[0]
+        assert len(added_scripts) == expected_scripts
+        if expected_scripts:
+            assert "clampDeviceMemory" in added_scripts[0]
         assert "--disable-blink-features=AutomationControlled" not in build_args(eng.persona)
         assert "--disable-blink-features=AutomationControlled" in engine_mod.IGNORED_DEFAULT_ARGS
     finally:
