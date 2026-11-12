@@ -182,7 +182,7 @@ new file mode 100644
 diff --git a/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc b/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc
 --- a/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc
 +++ b/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc
-@@ -3,14 +3,10 @@
+@@ -3,15 +3,11 @@
  #include "third_party/blink/renderer/modules/webgl/webgl_fingerprint.h"
  
  #include <array>
@@ -192,13 +192,14 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc b/thi
  #include "base/containers/span.h"
 -#include "base/strings/string_number_conversions.h"
 -#include "base/strings/string_util.h"
+ #include "base/time/time.h"
  #include "components/ungoogled/ungoogled_switches.h"
 -#include "components/ungoogled/webgl_config_data.h"
 +#include "components/ungoogled/fingerprint_gpu.h"
  #include "third_party/blink/renderer/bindings/modules/v8/webgl_any.h"
  #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
  
-@@ -18,8 +14,6 @@
+@@ -19,8 +15,6 @@
  
  namespace {
  
@@ -207,7 +208,7 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc b/thi
  using ungoogled::fingerprint::WebGLConfig;
  using ungoogled::fingerprint::WebGLParamSet;
  
-@@ -27,37 +21,7 @@
+@@ -28,37 +22,7 @@
  // for this process (no --fingerprint, disabled via --disable-spoofing=gpu, or a
  // platform with no config data such as linux).
  const WebGLConfig* GetActiveWebGLConfig() {
@@ -333,7 +334,7 @@ diff --git a/third_party/blink/renderer/core/frame/navigator_device_memory.cc b/
    const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
  
 -  // navigator.deviceMemory caps high-memory devices at 32GB.
-+  // Keep RonC's conservative 8 GiB persona policy in every navigator realm.
++  // Keep the RonC 8 GiB persona policy in every navigator realm.
    if (command_line->HasSwitch(switches::kFingerprint)) {
 -    std::string fingerprint_str =
 -        command_line->GetSwitchValueASCII(switches::kFingerprint);

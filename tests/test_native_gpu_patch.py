@@ -140,6 +140,22 @@ int main() {
     subprocess.run([str(exe)], check=True, capture_output=True, timeout=10)
 
 
+def test_overlay_applies_after_upstream_020_timing_include(tmp_path):
+    relative = "third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc"
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    fixture = Path(__file__).with_name("fixtures") / "native148/webgl-prefix.cc.txt"
+    target.write_bytes(fixture.read_bytes())
+    assert '#include "base/time/time.h"' in target.read_text()
+    subprocess.run(
+        ["git", "apply", "--check", "--include=" + relative, str(PATCH)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 @pytest.fixture
 def sample():
     return {
