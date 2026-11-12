@@ -1,0 +1,346 @@
+diff --git a/components/ungoogled/webgl_config_data.h b/components/ungoogled/webgl_config_data.h
+--- a/components/ungoogled/webgl_config_data.h
++++ b/components/ungoogled/webgl_config_data.h
+@@ -44,6 +44,8 @@
+ struct WebGLConfig {
+   WebGLParamSet gl1;
+   WebGLParamSet gl2;
++  const char* webgpu_vendor;
++  const char* webgpu_architecture;
+ };
+ 
+ // ---- Windows config #0 gl1 (ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)) ----
+@@ -1985,67 +1987,80 @@
+   // [0] ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin0_gl1_i32, kWin0_gl1_u32, {}, kWin0_gl1_f32, kWin0_gl1_farray, kWin0_gl1_iarray, kWin0_gl1_str, kWin0_gl1_prec, true},
+-    {kWin0_gl2_i32, kWin0_gl2_u32, kWin0_gl2_i64, kWin0_gl2_f32, kWin0_gl2_farray, kWin0_gl2_iarray, kWin0_gl2_str, kWin0_gl2_prec, true}
++    {kWin0_gl2_i32, kWin0_gl2_u32, kWin0_gl2_i64, kWin0_gl2_f32, kWin0_gl2_farray, kWin0_gl2_iarray, kWin0_gl2_str, kWin0_gl2_prec, true},
++    "intel", "gen-12lp"
+   },
+   // [1] ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x000046A6) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin1_gl1_i32, kWin1_gl1_u32, {}, kWin1_gl1_f32, kWin1_gl1_farray, kWin1_gl1_iarray, kWin1_gl1_str, kWin1_gl1_prec, true},
+-    {kWin1_gl2_i32, kWin1_gl2_u32, kWin1_gl2_i64, kWin1_gl2_f32, kWin1_gl2_farray, kWin1_gl2_iarray, kWin1_gl2_str, kWin1_gl2_prec, true}
++    {kWin1_gl2_i32, kWin1_gl2_u32, kWin1_gl2_i64, kWin1_gl2_f32, kWin1_gl2_farray, kWin1_gl2_iarray, kWin1_gl2_str, kWin1_gl2_prec, true},
++    "intel", "gen-12lp"
+   },
+   // [2] ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Laptop GPU (0x00002560) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin2_gl1_i32, kWin2_gl1_u32, {}, kWin2_gl1_f32, kWin2_gl1_farray, kWin2_gl1_iarray, kWin2_gl1_str, kWin2_gl1_prec, true},
+-    {kWin2_gl2_i32, kWin2_gl2_u32, kWin2_gl2_i64, kWin2_gl2_f32, kWin2_gl2_farray, kWin2_gl2_iarray, kWin2_gl2_str, kWin2_gl2_prec, true}
++    {kWin2_gl2_i32, kWin2_gl2_u32, kWin2_gl2_i64, kWin2_gl2_f32, kWin2_gl2_farray, kWin2_gl2_iarray, kWin2_gl2_str, kWin2_gl2_prec, true},
++    "nvidia", "ampere"
+   },
+   // [3] ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x0000A7A0) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin3_gl1_i32, kWin3_gl1_u32, {}, kWin3_gl1_f32, kWin3_gl1_farray, kWin3_gl1_iarray, kWin3_gl1_str, kWin3_gl1_prec, true},
+-    {kWin3_gl2_i32, kWin3_gl2_u32, kWin3_gl2_i64, kWin3_gl2_f32, kWin3_gl2_farray, kWin3_gl2_iarray, kWin3_gl2_str, kWin3_gl2_prec, true}
++    {kWin3_gl2_i32, kWin3_gl2_u32, kWin3_gl2_i64, kWin3_gl2_f32, kWin3_gl2_farray, kWin3_gl2_iarray, kWin3_gl2_str, kWin3_gl2_prec, true},
++    "intel", "gen-12lp"
+   },
+   // [4] ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x0000A7A0) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin4_gl1_i32, kWin4_gl1_u32, {}, kWin4_gl1_f32, kWin4_gl1_farray, kWin4_gl1_iarray, kWin4_gl1_str, kWin4_gl1_prec, true},
+-    {kWin4_gl2_i32, kWin4_gl2_u32, kWin4_gl2_i64, kWin4_gl2_f32, kWin4_gl2_farray, kWin4_gl2_iarray, kWin4_gl2_str, kWin4_gl2_prec, true}
++    {kWin4_gl2_i32, kWin4_gl2_u32, kWin4_gl2_i64, kWin4_gl2_f32, kWin4_gl2_farray, kWin4_gl2_iarray, kWin4_gl2_str, kWin4_gl2_prec, true},
++    "intel", "gen-12lp"
+   },
+   // [5] ANGLE (AMD, AMD Radeon(TM) Graphics (0x00001638) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin5_gl1_i32, kWin5_gl1_u32, {}, kWin5_gl1_f32, kWin5_gl1_farray, kWin5_gl1_iarray, kWin5_gl1_str, kWin5_gl1_prec, true},
+-    {kWin5_gl2_i32, kWin5_gl2_u32, kWin5_gl2_i64, kWin5_gl2_f32, kWin5_gl2_farray, kWin5_gl2_iarray, kWin5_gl2_str, kWin5_gl2_prec, true}
++    {kWin5_gl2_i32, kWin5_gl2_u32, kWin5_gl2_i64, kWin5_gl2_f32, kWin5_gl2_farray, kWin5_gl2_iarray, kWin5_gl2_str, kWin5_gl2_prec, true},
++    "amd", "gcn-5"
+   },
+   // [6] ANGLE (Intel, Intel(R) UHD Graphics (0x00009B41) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin6_gl1_i32, kWin6_gl1_u32, {}, kWin6_gl1_f32, kWin6_gl1_farray, kWin6_gl1_iarray, kWin6_gl1_str, kWin6_gl1_prec, true},
+-    {kWin6_gl2_i32, kWin6_gl2_u32, kWin6_gl2_i64, kWin6_gl2_f32, kWin6_gl2_farray, kWin6_gl2_iarray, kWin6_gl2_str, kWin6_gl2_prec, true}
++    {kWin6_gl2_i32, kWin6_gl2_u32, kWin6_gl2_i64, kWin6_gl2_f32, kWin6_gl2_farray, kWin6_gl2_iarray, kWin6_gl2_str, kWin6_gl2_prec, true},
++    "intel", "gen-9"
+   },
+   // [7] ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x000046A6) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin7_gl1_i32, kWin7_gl1_u32, {}, kWin7_gl1_f32, kWin7_gl1_farray, kWin7_gl1_iarray, kWin7_gl1_str, kWin7_gl1_prec, true},
+-    {kWin7_gl2_i32, kWin7_gl2_u32, kWin7_gl2_i64, kWin7_gl2_f32, kWin7_gl2_farray, kWin7_gl2_iarray, kWin7_gl2_str, kWin7_gl2_prec, true}
++    {kWin7_gl2_i32, kWin7_gl2_u32, kWin7_gl2_i64, kWin7_gl2_f32, kWin7_gl2_farray, kWin7_gl2_iarray, kWin7_gl2_str, kWin7_gl2_prec, true},
++    "intel", "gen-12lp"
+   },
+   // [8] ANGLE (Intel, Intel(R) Arc(TM) Graphics (0x00007D55) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin8_gl1_i32, kWin8_gl1_u32, {}, kWin8_gl1_f32, kWin8_gl1_farray, kWin8_gl1_iarray, kWin8_gl1_str, kWin8_gl1_prec, true},
+-    {kWin8_gl2_i32, kWin8_gl2_u32, kWin8_gl2_i64, kWin8_gl2_f32, kWin8_gl2_farray, kWin8_gl2_iarray, kWin8_gl2_str, kWin8_gl2_prec, true}
++    {kWin8_gl2_i32, kWin8_gl2_u32, kWin8_gl2_i64, kWin8_gl2_f32, kWin8_gl2_farray, kWin8_gl2_iarray, kWin8_gl2_str, kWin8_gl2_prec, true},
++    "intel", "xe-lpg"
+   },
+   // [9] ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin9_gl1_i32, kWin9_gl1_u32, {}, kWin9_gl1_f32, kWin9_gl1_farray, kWin9_gl1_iarray, kWin9_gl1_str, kWin9_gl1_prec, true},
+-    {kWin9_gl2_i32, kWin9_gl2_u32, kWin9_gl2_i64, kWin9_gl2_f32, kWin9_gl2_farray, kWin9_gl2_iarray, kWin9_gl2_str, kWin9_gl2_prec, true}
++    {kWin9_gl2_i32, kWin9_gl2_u32, kWin9_gl2_i64, kWin9_gl2_f32, kWin9_gl2_farray, kWin9_gl2_iarray, kWin9_gl2_str, kWin9_gl2_prec, true},
++    "intel", "gen-12lp"
+   },
+   // [10] ANGLE (Intel, Intel(R) UHD Graphics 620 (0x00003EA0) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin10_gl1_i32, kWin10_gl1_u32, {}, kWin10_gl1_f32, kWin10_gl1_farray, kWin10_gl1_iarray, kWin10_gl1_str, kWin10_gl1_prec, true},
+-    {kWin10_gl2_i32, kWin10_gl2_u32, kWin10_gl2_i64, kWin10_gl2_f32, kWin10_gl2_farray, kWin10_gl2_iarray, kWin10_gl2_str, kWin10_gl2_prec, true}
++    {kWin10_gl2_i32, kWin10_gl2_u32, kWin10_gl2_i64, kWin10_gl2_f32, kWin10_gl2_farray, kWin10_gl2_iarray, kWin10_gl2_str, kWin10_gl2_prec, true},
++    "intel", "gen-9"
+   },
+   // [11] ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Laptop GPU (0x000028E0) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin11_gl1_i32, kWin11_gl1_u32, {}, kWin11_gl1_f32, kWin11_gl1_farray, kWin11_gl1_iarray, kWin11_gl1_str, kWin11_gl1_prec, true},
+-    {kWin11_gl2_i32, kWin11_gl2_u32, kWin11_gl2_i64, kWin11_gl2_f32, kWin11_gl2_farray, kWin11_gl2_iarray, kWin11_gl2_str, kWin11_gl2_prec, true}
++    {kWin11_gl2_i32, kWin11_gl2_u32, kWin11_gl2_i64, kWin11_gl2_f32, kWin11_gl2_farray, kWin11_gl2_iarray, kWin11_gl2_str, kWin11_gl2_prec, true},
++    "nvidia", "lovelace"
+   },
+   // [12] ANGLE (Intel, Intel(R) UHD Graphics (0x0000A78B) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+     {kWin12_gl1_i32, kWin12_gl1_u32, {}, kWin12_gl1_f32, kWin12_gl1_farray, kWin12_gl1_iarray, kWin12_gl1_str, kWin12_gl1_prec, true},
+-    {kWin12_gl2_i32, kWin12_gl2_u32, kWin12_gl2_i64, kWin12_gl2_f32, kWin12_gl2_farray, kWin12_gl2_iarray, kWin12_gl2_str, kWin12_gl2_prec, true}
++    {kWin12_gl2_i32, kWin12_gl2_u32, kWin12_gl2_i64, kWin12_gl2_f32, kWin12_gl2_farray, kWin12_gl2_iarray, kWin12_gl2_str, kWin12_gl2_prec, true},
++    "intel", "gen-12lp"
+   }
+ };
+ 
+@@ -2053,12 +2068,14 @@
+   // [0] ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)
+   {
+     {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac0_gl1_str, kMac0_gl1_prec, true},
+-    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac0_gl2_str, kMac0_gl2_prec, true}
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac0_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
+   },
+   // [1] ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)
+   {
+     {kMac1_gl1_i32, kMac1_gl1_u32, {}, kMac1_gl1_f32, kMac1_gl1_farray, kMac1_gl1_iarray, kMac1_gl1_str, kMac1_gl1_prec, true},
+-    {kMac1_gl2_i32, kMac1_gl2_u32, kMac1_gl2_i64, kMac1_gl2_f32, kMac1_gl2_farray, kMac1_gl2_iarray, kMac1_gl2_str, kMac1_gl2_prec, true}
++    {kMac1_gl2_i32, kMac1_gl2_u32, kMac1_gl2_i64, kMac1_gl2_f32, kMac1_gl2_farray, kMac1_gl2_iarray, kMac1_gl2_str, kMac1_gl2_prec, true},
++    "apple", "metal-3"
+   }
+ };
+ 
+diff --git a/components/ungoogled/fingerprint_gpu.h b/components/ungoogled/fingerprint_gpu.h
+new file mode 100644
+--- /dev/null
++++ b/components/ungoogled/fingerprint_gpu.h
+@@ -0,0 +1,53 @@
++// Copyright 2026 The RonC Profile Authors
++// Use of this source code is governed by the BSD-style license in LICENSE.
++#ifndef COMPONENTS_UNGOOGLED_FINGERPRINT_GPU_H_
++#define COMPONENTS_UNGOOGLED_FINGERPRINT_GPU_H_
++
++#include <string>
++
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
++#include "components/ungoogled/ungoogled_switches.h"
++#include "components/ungoogled/webgl_config_data.h"
++
++namespace ungoogled::fingerprint {
++
++// One seed-selected GPU identity for Window and every renderer worker realm.
++inline const WebGLConfig* GetActiveGPUConfig() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (!command_line->HasSwitch(switches::kFingerprint)) {
++    return nullptr;
++  }
++  if (command_line->HasSwitch(switches::kDisableSpoofing) &&
++      command_line->GetSwitchValueASCII(switches::kDisableSpoofing)
++              .find("gpu") != std::string::npos) {
++    return nullptr;
++  }
++
++  std::string platform = "windows";
++  if (command_line->HasSwitch(switches::kFingerprintPlatform)) {
++    platform = base::ToLowerASCII(
++        command_line->GetSwitchValueASCII(switches::kFingerprintPlatform));
++  }
++
++  base::span<const WebGLConfig> configs;
++  if (platform == "windows") {
++    configs = base::span(kWindowsWebGLConfigs);
++  } else if (platform == "macos") {
++    configs = base::span(kMacOSWebGLConfigs);
++  } else {
++    // linux / unknown platform: no config data, do not spoof.
++    return nullptr;
++  }
++
++  uint64_t seed = 0;
++  base::StringToUint64(
++      command_line->GetSwitchValueASCII(switches::kFingerprint), &seed);
++  return &configs[static_cast<size_t>(seed % configs.size())];
++}
++
++}  // namespace ungoogled::fingerprint
++
++#endif  // COMPONENTS_UNGOOGLED_FINGERPRINT_GPU_H_
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc b/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc
+--- a/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc
+@@ -3,14 +3,10 @@
+ #include "third_party/blink/renderer/modules/webgl/webgl_fingerprint.h"
+ 
+ #include <array>
+-#include <string>
+ 
+-#include "base/command_line.h"
+ #include "base/containers/span.h"
+-#include "base/strings/string_number_conversions.h"
+-#include "base/strings/string_util.h"
+ #include "components/ungoogled/ungoogled_switches.h"
+-#include "components/ungoogled/webgl_config_data.h"
++#include "components/ungoogled/fingerprint_gpu.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/webgl_any.h"
+ #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+ 
+@@ -18,8 +14,6 @@
+ 
+ namespace {
+ 
+-using ungoogled::fingerprint::kMacOSWebGLConfigs;
+-using ungoogled::fingerprint::kWindowsWebGLConfigs;
+ using ungoogled::fingerprint::WebGLConfig;
+ using ungoogled::fingerprint::WebGLParamSet;
+ 
+@@ -27,37 +21,7 @@
+ // for this process (no --fingerprint, disabled via --disable-spoofing=gpu, or a
+ // platform with no config data such as linux).
+ const WebGLConfig* GetActiveWebGLConfig() {
+-  const base::CommandLine* command_line =
+-      base::CommandLine::ForCurrentProcess();
+-  if (!command_line->HasSwitch(switches::kFingerprint)) {
+-    return nullptr;
+-  }
+-  if (command_line->HasSwitch(switches::kDisableSpoofing) &&
+-      command_line->GetSwitchValueASCII(switches::kDisableSpoofing)
+-              .find("gpu") != std::string::npos) {
+-    return nullptr;
+-  }
+-
+-  std::string platform = "windows";
+-  if (command_line->HasSwitch(switches::kFingerprintPlatform)) {
+-    platform = base::ToLowerASCII(
+-        command_line->GetSwitchValueASCII(switches::kFingerprintPlatform));
+-  }
+-
+-  base::span<const WebGLConfig> configs;
+-  if (platform == "windows") {
+-    configs = base::span(kWindowsWebGLConfigs);
+-  } else if (platform == "macos") {
+-    configs = base::span(kMacOSWebGLConfigs);
+-  } else {
+-    // linux / unknown platform: no config data, do not spoof.
+-    return nullptr;
+-  }
+-
+-  uint64_t seed = 0;
+-  base::StringToUint64(
+-      command_line->GetSwitchValueASCII(switches::kFingerprint), &seed);
+-  return &configs[static_cast<size_t>(seed % configs.size())];
++  return ungoogled::fingerprint::GetActiveGPUConfig();
+ }
+ 
+ const WebGLParamSet& ActiveParamSet(const WebGLConfig& config, bool is_webgl2) {
+diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
+--- a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
++++ b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "third_party/blink/renderer/modules/webgpu/gpu_adapter.h"
+ 
++#include "components/ungoogled/fingerprint_gpu.h"
+ #include "services/metrics/public/cpp/ukm_builders.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
+@@ -125,12 +126,23 @@
+ GPUAdapterInfo* GPUAdapter::CreateAdapterInfoForAdapter() {
+   bool is_fallback_adapter = adapter_type_ == wgpu::AdapterType::CPU;
+ 
++  const auto* fingerprint = ungoogled::fingerprint::GetActiveGPUConfig();
++  String vendor = vendor_;
++  String architecture = architecture_;
++  // A forced software adapter must retain its honest software identity.
++  if (fingerprint && !is_fallback_adapter) {
++    vendor = String::FromUtf8(fingerprint->webgpu_vendor);
++    architecture = String::FromUtf8(fingerprint->webgpu_architecture);
++  }
++
+   GPUAdapterInfo* info;
+-  if (RuntimeEnabledFeatures::WebGPUDeveloperFeaturesEnabled()) {
++  // Developer diagnostics expose the host driver/backend/heaps; redact them
++  // while a fingerprint is active rather than fabricating GPU capabilities.
++  if (!fingerprint && RuntimeEnabledFeatures::WebGPUDeveloperFeaturesEnabled()) {
+     // If WebGPU developer features have been enabled then provide all available
+     // adapter info values.
+     info = MakeGarbageCollected<GPUAdapterInfo>(
+-        vendor_, architecture_, subgroup_min_size_, subgroup_max_size_,
++        vendor, architecture, subgroup_min_size_, subgroup_max_size_,
+         is_fallback_adapter, device_, description_, driver_,
+         FromDawnEnum(backend_type_), FromDawnEnum(adapter_type_),
+         d3d_shader_model_, vk_driver_version_, FromDawnEnum(power_preference_));
+@@ -144,7 +156,7 @@
+     }
+   } else {
+     info = MakeGarbageCollected<GPUAdapterInfo>(
+-        vendor_, architecture_, subgroup_min_size_, subgroup_max_size_,
++        vendor, architecture, subgroup_min_size_, subgroup_max_size_,
+         is_fallback_adapter);
+   }
+ 
+diff --git a/components/ungoogled/BUILD.gn b/components/ungoogled/BUILD.gn
+--- a/components/ungoogled/BUILD.gn
++++ b/components/ungoogled/BUILD.gn
+@@ -5,6 +5,7 @@
+ component("ungoogled_switches") {
+   sources = [
+     "fingerprint_data.h",
++    "fingerprint_gpu.h",
+     "webgl_config_data.h",
+     "ungoogled_switches.h",
+     "ungoogled_switches.cc",
+diff --git a/third_party/blink/renderer/modules/webgl/BUILD.gn b/third_party/blink/renderer/modules/webgl/BUILD.gn
+--- a/third_party/blink/renderer/modules/webgl/BUILD.gn
++++ b/third_party/blink/renderer/modules/webgl/BUILD.gn
+@@ -197,6 +197,7 @@
+ 
+   public_deps = [ "//device/vr/public/mojom:vr_service_blink" ]
+   deps = [
++    "//components/ungoogled:ungoogled_switches",
+     "//device/vr/buildflags",
+     "//gpu/command_buffer/client:gles2_implementation",
+     "//gpu/command_buffer/client:gles2_interface",
+diff --git a/third_party/blink/renderer/modules/webgpu/BUILD.gn b/third_party/blink/renderer/modules/webgpu/BUILD.gn
+--- a/third_party/blink/renderer/modules/webgpu/BUILD.gn
++++ b/third_party/blink/renderer/modules/webgpu/BUILD.gn
+@@ -107,6 +107,7 @@
+     "wgsl_language_features.h",
+   ]
+   deps = [
++    "//components/ungoogled:ungoogled_switches",
+     "//gpu/command_buffer/client:webgpu_interface",
+     "//services/metrics/public/cpp:ukm_builders",
+     "//skia",
+diff --git a/third_party/blink/renderer/core/frame/navigator_device_memory.cc b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
+--- a/third_party/blink/renderer/core/frame/navigator_device_memory.cc
++++ b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
+@@ -17,13 +17,9 @@
+ float NavigatorDeviceMemory::deviceMemory() const {
+   const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+ 
+-  // navigator.deviceMemory caps high-memory devices at 32GB.
++  // Keep RonC's conservative 8 GiB persona policy in every navigator realm.
+   if (command_line->HasSwitch(switches::kFingerprint)) {
+-    std::string fingerprint_str =
+-        command_line->GetSwitchValueASCII(switches::kFingerprint);
+-    uint32_t fingerprint = static_cast<uint32_t>(std::stoull(fingerprint_str));
+-    static const float kDeviceMemoryValues[] = {8, 16, 32};
+-    return kDeviceMemoryValues[fingerprint % 3];
++    return 8.0f;
+   }
+ 
+   return ApproximatedDeviceMemory::GetApproximatedDeviceMemory();

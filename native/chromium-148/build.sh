@@ -28,11 +28,15 @@ cd "$src"
 ./tools/gn/bootstrap/bootstrap.py -o out/Default/gn --skip-generate-buildfiles
 ./tools/rust/build_bindgen.py --skip-test
 ./out/Default/gn gen out/Default --fail-on-unused-args
-ninja -j 4 -C out/Default chrome chromedriver
+# Default ARM hosted runners have limited RAM; no parallel compiler burst.
+ninja -j 1 -C out/Default chrome chromedriver
 
 # Upstream's dev-signing alternative; no Developer ID/notarization secrets used.
 codesign --force --deep --sign - out/Default/Chromium.app
 codesign --verify --deep --strict out/Default/Chromium.app
+
+# No app JS shim: reject the build if native realm/CSP/canvas gates fail.
+python3 "$kit/verify.py" out/Default/Chromium.app/Contents/MacOS/Chromium "$root/native-acceptance.json"
 
 output="$root/artifacts"
 package="$root/package/experimental-chromium-148-arm64"
@@ -41,6 +45,8 @@ ditto out/Default/Chromium.app "$package/Chromium.app"
 cp out/Default/chromedriver "$package/chromedriver"
 cp "$root/source-provenance.json" "$output/source-provenance.json"
 cp "$root/source-provenance.json" "$package/source-provenance.json"
+cp "$root/native-acceptance.json" "$output/native-acceptance.json"
+cp "$root/native-acceptance.json" "$package/native-acceptance.json"
 cp "$kit/README.md" "$package/ACCEPTANCE.md"
 mkdir -p "$package/licenses"
 cp "$root/LICENSE" "$package/licenses/platform-LICENSE"

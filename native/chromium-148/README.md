@@ -44,10 +44,9 @@ the test. This proves pointer arithmetic, not complete Chromium behavior.
   do not change the developer directory or install Xcode automatically.
 - A compiled, integrity-pinned core tested in disposable profiles: solid fills,
   edge noise, repeated readback, encoded canvas paths and OffscreenCanvas.
-- Separate native WebGPU/worker fix and strict-CSP tests. PR109 does NOT fix
-  ServiceWorker GPU exposure or the JavaScript Blob-worker CSP incompatibility.
-  Fury's BSD native WebGPU design is a reference, not a drop-in patch: its
-  configuration plumbing and Chromium API differ from this seed-based 148 core.
+- Native correction022 is staged (details below), but must pass the compiled
+  realm/CSP matrix before the app may retire its legacy JS shield for that exact
+  platform artifact. PR109 alone does not address WebGPU or CSP.
 - Keep existing production core/profile bindings unchanged until compatibility
   and independent review pass. Never substitute Chromium150: Engram #7202
   records its canvas renderer crash. No anonymity guarantee follows from this
@@ -58,18 +57,26 @@ the test. This proves pointer arithmetic, not complete Chromium behavior.
 `.github/workflows/native-chromium.yml` prepares and builds this source on CI;
 local Xcode is not required. It has **workflow_dispatch only**, no push/PR build,
 release publishing, production activation or signing secrets. Do not dispatch it
-until the intended source changes are reviewed. The initial artifact is canvas-only
-and **EXPERIMENTAL**, not a fix for the two remaining WebGPU/CSP findings.
+until the intended source changes are reviewed. Artifacts remain **EXPERIMENTAL** until the native realm matrix and independent
+release review pass. Installed binaries are not changed by source preparation.
 
-Supply a dedicated disposable **macOS arm64 runner label**, with selected full
-Xcode26, at least16GiB RAM and200GiB free disk. These are conservative job budgets,
-not a guarantee a full build fits; the single job has a360-minute timeout and no
-incremental-resume support. Ordinary GitHub-hosted macOS runners (including
-`-xlarge`) are advertised with14GB SSD and must not be assumed sufficient:
-[GitHub runner specifications](https://docs.github.com/en/actions/reference/runners/larger-runners).
-No paid runner is selected automatically. Runner provisioning and the actual
-compile remain unverified until an authorized CI run; no local runner registration
-or Xcode installation is performed by these files.
+The workflow targets **default GitHub-hosted `macos-15` ARM64 only**. Its default
+`phase=inspect` just records actual RAM, free disk and Xcode; it does not fetch
+Chromium/toolchains, install packages or compile. `phase=build` is a separate
+explicit manual choice, with a conservative operational budget of100GiB free
+and7GiB RAM, Xcode26 and single-worker Ninja. These are not measured universal
+Chromium minimums or a guarantee a compile fits; the single job has a360-minute
+timeout and no incremental resume. GitHub advertises only14GB guaranteed SSD
+for these runners, so measure actual free disk before requesting the full build.
+No paid/larger/self-hosted label or Xcode cleanup is selected automatically.
+[GitHub runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
+Pinned upstream's20-job resume chain uses Depot runners and restores the entire
+source/object tree in each job. It bypasses the time limit, not peak disk/RAM;
+we do not present that as proof default GitHub runners can build this core.
+No local Xcode installation is needed. Standard private-repo Actions still
+consume the account's compute allowance; inspection is not a promise of free
+unlimited full-core compilation.
 
 The workflow checks out macOS scaffold `6a00dfe08591a15cfb0aed0edd292ba789d9a0d7`
 and replaces its stock ungoogled submodule with the fingerprint revision above.
@@ -90,3 +97,40 @@ or Apple notarization. App+chromedriver are archived with `ditto` before artifac
 upload so executable bits/symlinks survive. SHA256 and source identity accompany
 the archive. Do not add the artifact to the app's core allowlist or migrate profiles
 until native runtime acceptance and independent review succeed.
+
+## Native realm correction022
+
+`patches/022-native-gpu-realms.patch` applies to the already-patched Chromium tree,
+after upstream021. It shares the existing WebGL seed selector through
+`components/ungoogled/fingerprint_gpu.h`. The15source GPU entries carry matching
+WebGPU vendor/architecture, using Chromium148's pinned Dawn
+[`78a9030d63048d832c4b822839bffe38ad4f20e5`](https://dawn.googlesource.com/dawn/+/78a9030d63048d832c4b822839bffe38ad4f20e5/src/dawn/gpu_info.json).
+This is not the old Python Random GPU table. Software fallback adapters keep their
+software identity; real adapter features/limits are not invented or enlarged.
+Developer-info mode is redacted while persona spoofing is active instead of
+revealing real backend/driver/heaps. Linux has no upstream GPU table and remains
+unsupported for this native mapping; cross-OS launch refusal remains unchanged.
+
+Native deviceMemory is set to RonC's conservative8GiB persona policy in the
+shared Navigator/WorkerNavigator mixin, matching the existing JS contract.
+**Correction to older notes:** Chromium148's optional2026memory-limits rollout
+can legitimately expose32GiB;8is a compatibility policy here, not a universal
+claim about Chrome's maximum. See
+[the pinned implementation](https://github.com/chromium/chromium/blob/148.0.7778.215/third_party/blink/common/device_memory/approximated_device_memory.cc).
+
+`verify.py` launches the built binary with no app init script, only disposable
+contexts and a loopback server. It checks Window/classic/module/shared/blob,
+iframe-owned parent-Blob worker, ServiceWorker, borrowed getters, native CPU20,
+memory8, console getter/global probes, solid canvas/OffscreenCanvas, emoji smoke,
+SharedWorker null/default-name semantics and strict `worker-src 'self'`. A failure
+prevents packaging/upload of a usable experimental binary. The existing installed
+148 is a negative control, not an accepted corrected core.
+
+The app's `Asset.native_realms` capability is **false for every currently approved
+asset**. Only a reviewed, integrity-pinned platform artifact with passing native
+acceptance may set it true; that retires the JS worker shim and preserves native
+worker URL/CSP semantics. A release version string or arbitrary executable path
+never activates this capability. No corrected asset/SHA is registered yet, so
+production behavior and old protections are intentionally retained. This closes
+the source integration path, not installed-runtime acceptance or all hardware
+fingerprint surfaces.

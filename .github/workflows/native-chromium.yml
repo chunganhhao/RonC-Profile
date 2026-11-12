@@ -3,10 +3,11 @@ name: Experimental Chromium 148 core (manual)
 on:
   workflow_dispatch:
     inputs:
-      runner_label:
-        description: "Dedicated macOS arm64 runner label: Xcode26, >=16GiB RAM, >=200GiB free disk"
-        required: true
-        type: string
+      phase:
+        description: "Inspect runner only (no Chromium download), or request full experimental build"
+        type: choice
+        default: inspect
+        options: [inspect, build]
 
 permissions:
   contents: read
@@ -16,8 +17,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  inspect:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Measure default GitHub-hosted runner (no installs or core downloads)
+        run: python3 native/chromium-148/prepare.py --inspect "$GITHUB_WORKSPACE" | tee runner-capacity.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-runner-capacity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: runner-capacity.json
+          retention-days: 7
   build:
-    runs-on: ${{ inputs.runner_label }}
+    if: ${{ inputs.phase == 'build' }}
+    needs: inspect
+    runs-on: macos-15
     timeout-minutes: 360
     defaults:
       run:
@@ -46,10 +66,12 @@ jobs:
           ref: 13b89eae304123f0710f2d33fd0816a2f61d7ffc
           path: .native-build/platform/ungoogled-chromium
           persist-credentials: false
-      - name: Apply reviewed canvas overlay before Chromium patch-series
+      - name: Apply reviewed canvas and native-realm corrections before Chromium patch-series
         run: python3 native/chromium-148/prepare.py "$GITHUB_WORKSPACE/.native-build/platform"
       - name: Install required CI build tools only
-        run: brew install ninja coreutils
+        run: |
+          brew install ninja coreutils
+          python3 -m pip install playwright==1.62.0
       - name: Compile and package experimental core (no release or activation)
         run: |
           bash native/chromium-148/build.sh "$GITHUB_WORKSPACE/.native-build/platform" 2>&1 | tee native-build.log
@@ -68,5 +90,6 @@ jobs:
           path: |
             native-build.log
             .native-build/platform/source-provenance.json
+            .native-build/platform/native-acceptance.json
           if-no-files-found: warn
           retention-days: 7

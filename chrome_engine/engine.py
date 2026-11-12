@@ -33,7 +33,7 @@ from . import fetch
 from . import persona as personas
 from .geo import ExitGeo, lookup, remembered_locale
 from .proxy_bridge import ProxyBridge, Upstream
-from .release import host_os
+from .release import get_release, host_os, host_platform
 from .stealth import build_anti_cdp_init_script
 
 # Playwright defaults a page can observe, or that make the browser behave
@@ -348,7 +348,12 @@ class ChromeEngine:
                 chromium_sandbox=self.sandbox,
                 accept_downloads=True,
             )
-        if self.stealth_js and hasattr(self.context, "add_init_script"):
+        # Never infer native protection from a version string or an arbitrary executable.
+        native_realms = (
+            not self._executable
+            and get_release(self._version).asset_for(host_platform()).native_realms
+        )
+        if self.stealth_js and not native_realms and hasattr(self.context, "add_init_script"):
             await self.context.add_init_script(build_anti_cdp_init_script(persona))
         if initialize_profile_search:
             from .search import initialize_search
