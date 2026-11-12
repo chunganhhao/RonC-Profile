@@ -63,7 +63,7 @@ release review pass. Installed binaries are not changed by source preparation.
 The workflow targets **default GitHub-hosted `macos-26` ARM64 only**. Its default
 `phase=inspect` just records actual RAM, free disk and Xcode; it does not fetch
 Chromium/toolchains, install packages or compile. `phase=build` is a separate
-explicit manual choice, with a conservative operational budget of100GiB free
+explicit manual choice, with a conservative operational budget of90GiB free
 and7GiB RAM, Xcode26 and single-worker Ninja. These are not measured universal
 Chromium minimums or a guarantee a compile fits; the single job has a360-minute
 timeout and no incremental resume. GitHub advertises only14GB guaranteed SSD
