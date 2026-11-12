@@ -1,0 +1,72 @@
+name: Experimental Chromium 148 core (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "Dedicated macOS arm64 runner label: Xcode26, >=16GiB RAM, >=200GiB free disk"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-chromium-148
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Reject insufficient runner before downloading source/toolchains
+        run: python3 native/chromium-148/prepare.py --preflight "$GITHUB_WORKSPACE"
+      - name: Checkout pinned macOS build scaffold (not its stock submodule)
+        uses: actions/checkout@v4
+        with:
+          repository: ungoogled-software/ungoogled-chromium-macos
+          ref: 6a00dfe08591a15cfb0aed0edd292ba789d9a0d7
+          path: .native-build/platform
+          submodules: false
+          persist-credentials: false
+      - name: Checkout fingerprint fork in place of stock ungoogled
+        uses: actions/checkout@v4
+        with:
+          repository: adryfish/fingerprint-chromium
+          ref: 13b89eae304123f0710f2d33fd0816a2f61d7ffc
+          path: .native-build/platform/ungoogled-chromium
+          persist-credentials: false
+      - name: Apply reviewed canvas overlay before Chromium patch-series
+        run: python3 native/chromium-148/prepare.py "$GITHUB_WORKSPACE/.native-build/platform"
+      - name: Install required CI build tools only
+        run: brew install ninja coreutils
+      - name: Compile and package experimental core (no release or activation)
+        run: |
+          bash native/chromium-148/build.sh "$GITHUB_WORKSPACE/.native-build/platform" 2>&1 | tee native-build.log
+      - name: Keep experimental archive and integrity metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: EXPERIMENTAL-chromium-148-macos-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .native-build/platform/artifacts/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Keep failure/build logs and source identity
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-build-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            native-build.log
+            .native-build/platform/source-provenance.json
+          if-no-files-found: warn
+          retention-days: 7

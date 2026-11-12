@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import contextlib
+import pathlib
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
+
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+
+from ..core.config import API_PORT, API_TOKEN, HEADLESS
+from ..core.logging import get_logger
+from ..services.profile.manager import ProfileStoreChangedError
+from . import mcp_http
+from .auth import require_token
+from .guard import LocalOnlyGuard
+from .routes import (
+    browser_router,
+    extensions_router,
+    mcp_setup_router,
+    page_router,
+    profiles_router,
+    proxy_router,
+    warming_router,
+)
+from .routes.cores import router as cores_router
+from .schemas.common import SuccessResponse
+
+if TYPE_CHECKING:
+    from ..core.container import Container
+
+logger = get_logger("api")
+
+API_PREFIX = "/api/v1"
+VERSION = "2.4.0"
+_PANEL = pathlib.Path(__file__).resolve().parents[1] / "web" / "index.html"
+_FONTS = pathlib.Path(__file__).resolve().parents[1] / "assets" / "fonts"
+# Served to the panel without a token: it needs them before login.
+_FONT_FILES = {f.name: f for f in _FONTS.glob("*.ttf")}
+
+
+def create_app(container: Container, self_url: str | None = None) -> FastAPI:
+    """Build the FastAPI application.
+
+    `self_url` is where this process's own API is reachable over loopback; the
+    MCP endpoint's tools call back into it.
+    """
+    mcp_route, mcp_lifespan = mcp_http.build(
+        self_url or f"http://127.0.0.1:{API_PORT}",
+        API_TOKEN,
+    )
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        container.warming_scheduler.start_daemon(
+            container.profile_manager,
+            container.browser_launcher,
+            on_update=container.event_bus.emit,
+        )
+        try:
+            async with mcp_lifespan:
+                yield
+        finally:
+            container.warming_scheduler.stop_daemon()
+
+    app = FastAPI(
+        lifespan=lifespan,
+        title="RonC Profile API",
+        description=(
+            "REST API for RonC Profile (Camoufox profile manager). When "
+            "FOXPROFILE_API_TOKEN is set, send it as `Authorization: Bearer <token>`."
+        ),
+        version=VERSION,
+    )
+    app.state.container = container
+
+    @app.exception_handler(ProfileStoreChangedError)
+    async def stale_store(_request, exc):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(BlockingIOError)
+    async def busy_store(_request, _exc):
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "Profile/store is busy; retry after the current operation finishes"},
+        )
+
+    if not API_TOKEN:
+        # Token-less means local-only: block CSRF and DNS rebinding from websites.
+        app.add_middleware(LocalOnlyGuard)
+
+    protected = [Depends(require_token)]
+    app.include_router(profiles_router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(browser_router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(page_router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(proxy_router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(extensions_router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(warming_router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(mcp_setup_router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(cores_router, prefix=API_PREFIX, dependencies=protected)
+    app.router.routes.append(mcp_route)
+
+    @app.get(f"{API_PREFIX}/health", response_model=SuccessResponse, tags=["health"])
+    def health_check() -> SuccessResponse:
+        return SuccessResponse(message="RonC Profile API is running")
+
+    @app.get(f"{API_PREFIX}/info", tags=["health"])
+    def info() -> dict:
+        """Public, secret-free facts the web panel needs before logging in."""
+        return {
+            "name": "RonC Profile",
+            "version": VERSION,
+            "auth_required": bool(API_TOKEN),
+            "headless": HEADLESS,
+            "mcp_path": mcp_http.MCP_PATH,
+        }
+
+    @app.get("/", include_in_schema=False)
+    def panel() -> FileResponse:
+        return FileResponse(_PANEL, headers={"Cache-Control": "no-store"})
+
+    @app.get("/assets/fonts/{name}", include_in_schema=False)
+    def font(name: str) -> FileResponse:
+        path = _FONT_FILES.get(name)
+        if path is None:
+            raise HTTPException(status_code=404)
+        return FileResponse(
+            path, media_type="font/ttf", headers={"Cache-Control": "public, max-age=604800"}
+        )
+
+    @app.get("/assets/icon.png", include_in_schema=False)
+    def brand_icon() -> FileResponse:
+        return FileResponse(_FONTS.parent / "icon.png", media_type="image/png")
+
+    @app.get("/assets/logo-light.png", include_in_schema=False)
+    def brand_logo_light() -> FileResponse:
+        return FileResponse(_FONTS.parent / "logo-light.png", media_type="image/png")
+
+    logger.info("FastAPI application created")
+    return app
