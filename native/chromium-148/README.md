@@ -60,7 +60,7 @@ release publishing, production activation or signing secrets. Do not dispatch it
 until the intended source changes are reviewed. Artifacts remain **EXPERIMENTAL** until the native realm matrix and independent
 release review pass. Installed binaries are not changed by source preparation.
 
-The workflow targets **default GitHub-hosted `macos-15` ARM64 only**. Its default
+The workflow targets **default GitHub-hosted `macos-26` ARM64 only**. Its default
 `phase=inspect` just records actual RAM, free disk and Xcode; it does not fetch
 Chromium/toolchains, install packages or compile. `phase=build` is a separate
 explicit manual choice, with a conservative operational budget of100GiB free
