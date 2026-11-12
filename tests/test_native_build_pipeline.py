@@ -160,7 +160,7 @@ def test_manual_workflow_contract():
     assert "contents: read" in workflow and "write" not in workflow
     assert native.PLATFORM_REV in workflow and native.FINGERPRINT_REV in workflow
     assert "submodules: false" in workflow
-    assert "runs-on: macos-15" in workflow
+    assert "runs-on: macos-26" in workflow
     assert "default: inspect" in workflow
     assert "if: ${{ inputs.phase == 'build' }}" in workflow
     assert "self-hosted" not in workflow and "xlarge" not in workflow

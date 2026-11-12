@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   inspect:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
   build:
     if: ${{ inputs.phase == 'build' }}
     needs: inspect
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 360
     defaults:
       run:
