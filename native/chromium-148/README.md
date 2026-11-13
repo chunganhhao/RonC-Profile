@@ -64,7 +64,7 @@ The workflow targets **default GitHub-hosted `macos-26` ARM64 only**. Its defaul
 `phase=inspect` just records actual RAM, free disk and Xcode; it does not fetch
 Chromium/toolchains, install packages or compile. `phase=build` is a separate
 explicit manual choice, with a conservative operational budget of90GiB free
-and14GiB RAM, Xcode26 and three-worker Ninja. These are not measured universal
+and7GiB RAM, Xcode26 and two-worker Ninja. These are not measured universal
 Chromium minimums or a guarantee a compile fits; the single job has a360-minute
 timeout and no incremental resume. GitHub advertises only14GB guaranteed SSD
 for these runners, so measure actual free disk before requesting the full build.
@@ -72,11 +72,27 @@ No paid/larger/self-hosted label or Xcode cleanup is selected automatically.
 [GitHub runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
 Run43322184857 reached25671/55906 Ninja tasks before the six-hour cancellation
-with one worker. Three workers now use the measured14GiB runner's CPU capacity;
-preflight rejects smaller RAM allocations before source/toolchain downloads.
-This is a bounded parallelism trial, not a proven sub-six-hour build or an
-incremental resume. The old run retained logs/provenance only, not object files;
-a new dispatch starts from source. Do not rerun unchanged after another timeout.
+with one worker. A later public run43373909155 measured only7GiB RAM and was
+rejected by the previous14GiB guard. The public-runner configuration now uses
+two workers with one concurrent link, no ThinLTO, no debug symbols or dSYMs.
+`ci-build.gn` is appended after upstream flags so these overrides actually win;
+official non-debug, standalone-app behavior, PGO0 and all native patches remain.
+These resource reductions accompany the7GiB preflight budget; we do not merely
+remove the guard or run three full-release compiler jobs on half the RAM.
+
+The settings are declared in pinned Chromium148
+[`compiler.gni`](https://github.com/chromium/chromium/blob/148.0.7778.215/build/config/compiler/compiler.gni),
+[`symbols.gni`](https://github.com/chromium/chromium/blob/148.0.7778.215/build/config/apple/symbols.gni)
+and [`concurrent_links.gni`](https://github.com/chromium/chromium/blob/148.0.7778.215/build/toolchain/concurrent_links.gni).
+Turning off symbols sacrifices symbolized native crash backtraces; disabling LTO
+can affect binary size/runtime performance. This remains an experimental build,
+not an installed release. `/usr/bin/time -l` records compiler-stage resource use;
+effective `args.gn` is logged, retained on failure and included with the archive.
+
+This is a bounded low-memory CI trial, not proof of sub-six-hour completion or
+an incremental resume. The old run retained logs/provenance only, not object
+files; a new dispatch starts from source. Do not rerun unchanged after another
+timeout or OOM. No runtime/profile/acceptance gate is bypassed.
 
 Pinned upstream's20-job resume chain uses Depot runners and restores the entire
 source/object tree in each job. It bypasses the time limit, not peak disk/RAM;

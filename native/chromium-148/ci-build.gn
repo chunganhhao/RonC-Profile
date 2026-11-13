@@ -1,0 +1,7 @@
+# Experimental standard-hosted ARM build: avoid release-symbol and LTO overhead.
+# Keep official release behavior and a standalone app, not a component build.
+target_cpu = "arm64"
+symbol_level = 0
+enable_dsyms = false
+use_thin_lto = false
+concurrent_links = 1
