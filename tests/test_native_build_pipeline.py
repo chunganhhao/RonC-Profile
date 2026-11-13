@@ -162,6 +162,7 @@ def test_inspect_only_reports_capacity_without_installs_or_downloads(tmp_path, m
 
 def test_manual_workflow_contract():
     workflow = (ROOT / ".github/workflows/native-chromium.yml").read_text()
+    workflow += (ROOT / ".github/workflows/native-chromium-chunk.yml").read_text()
     assert "workflow_dispatch:" in workflow
     assert "pull_request:" not in workflow and "  push:" not in workflow
     assert "contents: read" in workflow and "write" not in workflow
@@ -178,8 +179,13 @@ def test_manual_workflow_contract():
     assert "EXPERIMENTAL-chromium" in workflow
     build = (KIT / "build.sh").read_text()
     assert "--preflight" in build and 'test ! -e "$root/build"' in build
-    assert build.index('patches.py" apply') < build.index("gn gen") < build.index("ninja -j")
-    assert "/usr/bin/time -l ninja -j 2 -C out/Default chrome chromedriver" in build
+    assert (
+        build.index('patches.py" apply')
+        < build.index("gn gen")
+        < build.index('checkpoint.py" mark')
+    )
+    assert 'checkpoint.py" run' in build
+    assert 'checkpoint.py" validate' in build
     assert '"$fork/flags.gn" "$root/flags.macos.gn" "$kit/ci-build.gn"' in build
     assert ".native-build/platform/build/src/out/Default/args.gn" in workflow
     assert build.index("ditto -c -k") < build.index("shasum -a 256")
@@ -190,7 +196,9 @@ def test_manual_workflow_contract():
 def test_low_memory_flags_and_upstream_override_order(tmp_path):
     # Execute the actual composition command with conflicting upstream defaults.
     build = (KIT / "build.sh").read_text()
-    command = next(line for line in build.splitlines() if line.startswith('cat "$fork/flags.gn"'))
+    command = next(
+        line for line in build.splitlines() if line.lstrip().startswith('cat "$fork/flags.gn"')
+    )
     fork = tmp_path / "fork"
     fork.mkdir()
     (fork / "flags.gn").write_text("chrome_pgo_phase = 0\n")
