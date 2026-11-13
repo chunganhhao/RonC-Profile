@@ -91,5 +91,6 @@ jobs:
             native-build.log
             .native-build/platform/source-provenance.json
             .native-build/platform/native-acceptance.json
+            .native-build/platform/build/src/out/Default/args.gn
           if-no-files-found: warn
           retention-days: 7

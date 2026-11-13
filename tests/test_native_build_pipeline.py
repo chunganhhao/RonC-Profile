@@ -123,8 +123,8 @@ def test_checkout_revision_and_dirty_guard(tmp_path, monkeypatch):
         ("Linux", "aarch64", 300, 32, "macOS arm64"),
         ("Darwin", "x86_64", 300, 32, "macOS arm64"),
         ("Darwin", "arm64", 14, 32, "90 GiB"),
-        ("Darwin", "arm64", 300, 7, "14 GiB"),
-        ("Darwin", "arm64", 300, 13, "14 GiB"),
+        ("Darwin", "arm64", 300, 4, "7 GiB"),
+        ("Darwin", "arm64", 300, 6, "7 GiB"),
     ],
 )
 def test_resource_fail_closed(system, machine, disk, ram, error):
@@ -132,8 +132,14 @@ def test_resource_fail_closed(system, machine, disk, ram, error):
         native.check_resources(system, machine, disk * 1024**3, ram * 1024**3)
 
 
-def test_resource_budget_passes():
-    native.check_resources("Darwin", "arm64", 90 * 1024**3, 14 * 1024**3)
+@pytest.mark.parametrize("ram", [7, 14])
+def test_resource_budget_passes(ram):
+    native.check_resources("Darwin", "arm64", 90 * 1024**3, ram * 1024**3)
+
+
+def test_resource_error_reports_actual_capacity():
+    with pytest.raises(ValueError, match="got 89.0 GiB free and 6.0 GiB RAM"):
+        native.check_resources("Darwin", "arm64", 89 * 1024**3, 6 * 1024**3)
 
 
 def test_preflight_rejects_non_mac_before_xcode_or_downloads(tmp_path, monkeypatch):
@@ -173,7 +179,42 @@ def test_manual_workflow_contract():
     build = (KIT / "build.sh").read_text()
     assert "--preflight" in build and 'test ! -e "$root/build"' in build
     assert build.index('patches.py" apply') < build.index("gn gen") < build.index("ninja -j")
-    assert "ninja -j 3 -C out/Default chrome chromedriver" in build
+    assert "/usr/bin/time -l ninja -j 2 -C out/Default chrome chromedriver" in build
+    assert '"$fork/flags.gn" "$root/flags.macos.gn" "$kit/ci-build.gn"' in build
+    assert ".native-build/platform/build/src/out/Default/args.gn" in workflow
     assert build.index("ditto -c -k") < build.index("shasum -a 256")
     assert "sign_and_package_app.sh" not in build
     assert "notarytool" not in build and "rm -rf" not in build
+
+
+def test_low_memory_flags_and_upstream_override_order(tmp_path):
+    # Execute the actual composition command with conflicting upstream defaults.
+    build = (KIT / "build.sh").read_text()
+    command = next(line for line in build.splitlines() if line.startswith('cat "$fork/flags.gn"'))
+    fork = tmp_path / "fork"
+    fork.mkdir()
+    (fork / "flags.gn").write_text("chrome_pgo_phase = 0\n")
+    (tmp_path / "flags.macos.gn").write_text(
+        "is_official_build = true\nis_debug = false\nsymbol_level = 1\n"
+    )
+    (tmp_path / "out/Default").mkdir(parents=True)
+    subprocess.run(
+        ["bash", "-c", command],
+        env={"fork": str(fork), "root": str(tmp_path), "src": str(tmp_path), "kit": str(KIT)},
+        check=True,
+    )
+    flags = {}
+    for line in (tmp_path / "out/Default/args.gn").read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            key, value = line.split("=", 1)
+            flags[key.strip()] = value.strip()
+    assert flags == {
+        "chrome_pgo_phase": "0",
+        "is_official_build": "true",
+        "is_debug": "false",
+        "target_cpu": '"arm64"',
+        "symbol_level": "0",
+        "enable_dsyms": "false",
+        "use_thin_lto": "false",
+        "concurrent_links": "1",
+    }

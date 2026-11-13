@@ -78,9 +78,10 @@ def check_resources(system: str, machine: str, free_bytes: int, memory_bytes: in
     if system != "Darwin" or machine != "arm64":
         raise ValueError("This build targets a macOS arm64 runner only")
     # Conservative job budgets, not a promise a full build fits the runner/time limit.
-    if free_bytes < 90 * 1024**3 or memory_bytes < 14 * 1024**3:
+    if free_bytes < 90 * 1024**3 or memory_bytes < 7 * 1024**3:
         raise ValueError(
-            "Experimental three-worker build budget: >=90 GiB free disk and >=14 GiB RAM"
+            "Experimental low-memory build budget: >=90 GiB free disk and >=7 GiB RAM; "
+            f"got {free_bytes / 1024**3:.1f} GiB free and {memory_bytes / 1024**3:.1f} GiB RAM"
         )
 
 
@@ -90,6 +91,7 @@ def preflight(root: Path) -> None:
         raise ValueError("This build targets a macOS arm64 runner only")
     memory = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True))
     check_resources(system, machine, shutil.disk_usage(root).free, memory)
+    print(f"Preflight RAM: {memory / 1024**3:.1f} GiB (two-worker, no-LTO build)")
     version = subprocess.check_output(["xcodebuild", "-version"], text=True)
     if not version.startswith("Xcode 26."):
         raise ValueError("Select a full Xcode26 installation on the CI runner before dispatch")
