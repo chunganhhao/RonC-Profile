@@ -123,7 +123,8 @@ def test_checkout_revision_and_dirty_guard(tmp_path, monkeypatch):
         ("Linux", "aarch64", 300, 32, "macOS arm64"),
         ("Darwin", "x86_64", 300, 32, "macOS arm64"),
         ("Darwin", "arm64", 14, 32, "90 GiB"),
-        ("Darwin", "arm64", 300, 4, "7 GiB"),
+        ("Darwin", "arm64", 300, 7, "14 GiB"),
+        ("Darwin", "arm64", 300, 13, "14 GiB"),
     ],
 )
 def test_resource_fail_closed(system, machine, disk, ram, error):
@@ -132,7 +133,7 @@ def test_resource_fail_closed(system, machine, disk, ram, error):
 
 
 def test_resource_budget_passes():
-    native.check_resources("Darwin", "arm64", 90 * 1024**3, 7 * 1024**3)
+    native.check_resources("Darwin", "arm64", 90 * 1024**3, 14 * 1024**3)
 
 
 def test_preflight_rejects_non_mac_before_xcode_or_downloads(tmp_path, monkeypatch):
@@ -172,6 +173,7 @@ def test_manual_workflow_contract():
     build = (KIT / "build.sh").read_text()
     assert "--preflight" in build and 'test ! -e "$root/build"' in build
     assert build.index('patches.py" apply') < build.index("gn gen") < build.index("ninja -j")
+    assert "ninja -j 3 -C out/Default chrome chromedriver" in build
     assert build.index("ditto -c -k") < build.index("shasum -a 256")
     assert "sign_and_package_app.sh" not in build
     assert "notarytool" not in build and "rm -rf" not in build

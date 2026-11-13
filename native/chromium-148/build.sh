@@ -28,8 +28,8 @@ cd "$src"
 ./tools/gn/bootstrap/bootstrap.py -o out/Default/gn --skip-generate-buildfiles
 ./tools/rust/build_bindgen.py --skip-test
 ./out/Default/gn gen out/Default --fail-on-unused-args
-# Default ARM hosted runners have limited RAM; no parallel compiler burst.
-ninja -j 1 -C out/Default chrome chromedriver
+# shortcut: cap at three workers for the >=14 GiB CI budget; tune only after CI measurements.
+ninja -j 3 -C out/Default chrome chromedriver
 
 # Upstream's dev-signing alternative; no Developer ID/notarization secrets used.
 codesign --force --deep --sign - out/Default/Chromium.app
