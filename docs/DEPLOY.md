@@ -18,7 +18,7 @@ Ubuntu 22.04: dùng `libgtk-3-0` và `libasound2` (không có hậu tố `t64`).
 ```bash
 runuser -u foxprofile -- bash -c '
 cd /opt/foxprofile
-git clone https://github.com/chienbm98/foxprofile.git app
+git clone https://github.com/chunganhhao/RonC-Profile.git app
 cd app
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt

@@ -10,7 +10,6 @@
     <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+" />
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Windows | macOS | Linux" />
     <a href="LICENSE"><img src="https://img.shields.io/github/license/chunganhhao/RonC-Profile" alt="MIT License" /></a>
-    <a href="https://buymeacoffee.com/chienbm98"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" /></a>
   </p>
 
   <p>English · <a href="README.vi.md">Tiếng Việt</a></p>
@@ -23,21 +22,14 @@
   </p>
 </div>
 
-RonC Profile is a local rebrand of [FoxProfile by chienbm98](https://github.com/chienbm98/foxprofile). Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
+RonC Profile is a local rebrand of FoxProfile by chienbm98. Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
 
 ![RonC Profile](docs/images/en/main.png)
 
 RonC Profile manages anti-detect browser profiles: each profile is a separate identity with its own device fingerprint, cookies, proxy, timezone and locale. The default browser is [Camoufox](https://github.com/daijro/camoufox), a Firefox build that spoofs fingerprints at the engine level; a Chrome engine based on [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) is also available. It is a self-hosted alternative, on your machine or a VPS, to paid anti-detect browsers such as GoLogin, GPM or MoreLogin.
 
-## Support
-
-RonC Profile is free and open source, built in my spare time, and will stay that way. If it saves you time or money, you can buy me a coffee; it goes toward bug fixes, keeping up with upstream browser releases and faster replies on issues.
-
-<a href="https://buymeacoffee.com/chienbm98"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" /></a>
-
 ## Contents
 
-- [Support](#support)
 - [Features](#features)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)

@@ -10,7 +10,6 @@
     <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+" />
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Windows | macOS | Linux" />
     <a href="LICENSE"><img src="https://img.shields.io/github/license/chunganhhao/RonC-Profile" alt="MIT License" /></a>
-    <a href="https://buymeacoffee.com/chienbm98"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" /></a>
   </p>
 
   <p><a href="README.md">English</a> · Tiếng Việt</p>
@@ -23,21 +22,14 @@
   </p>
 </div>
 
-RonC Profile is a local rebrand of [FoxProfile by chienbm98](https://github.com/chienbm98/foxprofile). Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
+RonC Profile is a local rebrand of FoxProfile by chienbm98. Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
 
 ![RonC Profile](docs/images/main.png)
 
 RonC Profile quản lý các profile trình duyệt chống phát hiện: mỗi profile là một danh tính riêng với fingerprint thiết bị, cookie, proxy, timezone và locale của nó. Trình duyệt mặc định là [Camoufox](https://github.com/daijro/camoufox), một bản Firefox được chỉnh sửa ở tầng mã nguồn để giả lập fingerprint; ngoài ra có engine Chrome dựa trên [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium). RonC Profile là lựa chọn tự host, chạy trên máy bạn hoặc VPS, thay cho các antidetect browser trả phí như GoLogin, GPM hay MoreLogin.
 
-## Ủng hộ
-
-RonC Profile miễn phí, mã nguồn mở, được làm vào thời gian rảnh và sẽ luôn như vậy. Nếu nó tiết kiệm cho bạn thời gian hay chi phí, bạn có thể mời mình một ly cà phê; cà phê sẽ thành bug fix, cập nhật theo bản mới của Camoufox và Chrome, và trả lời issue nhanh hơn.
-
-<a href="https://buymeacoffee.com/chienbm98"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" /></a>
-
 ## Mục lục
 
-- [Ủng hộ](#ủng-hộ)
 - [Tính năng](#tính-năng)
 - [Yêu cầu](#yêu-cầu)
 - [Bắt đầu nhanh](#bắt-đầu-nhanh)
