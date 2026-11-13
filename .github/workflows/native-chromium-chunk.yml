@@ -1,0 +1,143 @@
+name: Native ARM64 build chunk
+
+on:
+  workflow_call:
+    inputs:
+      chunk:
+        type: number
+        required: true
+      source_run:
+        type: string
+        default: ""
+      checkpoint_name:
+        type: string
+        default: ""
+      last_chunk:
+        type: boolean
+        default: false
+    outputs:
+      state:
+        value: ${{ jobs.compile.outputs.state }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compile:
+    runs-on: macos-26
+    timeout-minutes: 360
+    outputs:
+      state: ${{ steps.build.outputs.state }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Start four-hour wall-clock compile window
+        run: echo "NATIVE_CHUNK_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate public repository and checkpoint source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.source_run }}
+          CHECKPOINT_NAME: ${{ inputs.checkpoint_name }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY" --jq .private > private.json
+          python3 -c 'import json; assert json.load(open("private.json")) is False, "Public repository required; no paid/private fallback"'
+          if [[ -z "$SOURCE_RUN" && -z "$CHECKPOINT_NAME" ]]; then exit 0; fi
+          [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
+          [[ "$CHECKPOINT_NAME" =~ ^native-checkpoint-${SOURCE_RUN}-[0-9]+-[1-4]$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > source-run.json
+          python3 - <<'PY'
+          import json, os
+          run = json.load(open("source-run.json"))
+          assert run["head_sha"] == os.environ["GITHUB_SHA"], "Resume requires the exact reviewed commit"
+          assert run["head_branch"] == os.environ["GITHUB_REF_NAME"]
+          assert run["event"] == "workflow_dispatch"
+          assert run["path"] == ".github/workflows/native-chromium.yml"
+          PY
+      - name: Reject insufficient runner before downloads
+        run: python3 native/chromium-148/prepare.py --preflight "$GITHUB_WORKSPACE"
+      - name: Checkout pinned macOS build scaffold
+        uses: actions/checkout@v4
+        with:
+          repository: ungoogled-software/ungoogled-chromium-macos
+          ref: 6a00dfe08591a15cfb0aed0edd292ba789d9a0d7
+          path: .native-build/platform
+          submodules: false
+          persist-credentials: false
+      - name: Checkout fingerprint fork
+        uses: actions/checkout@v4
+        with:
+          repository: adryfish/fingerprint-chromium
+          ref: 13b89eae304123f0710f2d33fd0816a2f61d7ffc
+          path: .native-build/platform/ungoogled-chromium
+          persist-credentials: false
+      - name: Prepare verified inputs without touching restored sources
+        run: python3 native/chromium-148/prepare.py "$GITHUB_WORKSPACE/.native-build/platform"
+      - name: Install CI tools only
+        run: |
+          brew install ninja coreutils
+          python3 -m pip install playwright==1.62.0
+      - uses: actions/download-artifact@v4
+        if: ${{ inputs.checkpoint_name != '' }}
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+          name: ${{ inputs.checkpoint_name }}
+          path: incoming/
+      - name: Verify and restore full source/object checkpoint
+        if: ${{ inputs.checkpoint_name != '' }}
+        run: |
+          python3 native/chromium-148/checkpoint.py restore "$GITHUB_WORKSPACE/.native-build/platform" "$GITHUB_WORKSPACE/incoming"
+          rm incoming/source.tar.gz
+      - name: Compile bounded chunk; accept/package only on completion
+        id: build
+        env:
+          CHECKPOINT_NAME: ${{ inputs.checkpoint_name }}
+        run: |
+          mode=fresh
+          if [[ -n "$CHECKPOINT_NAME" ]]; then mode=resume; fi
+          bash native/chromium-148/build.sh "$GITHUB_WORKSPACE/.native-build/platform" "$mode" 2>&1 | tee native-build.log
+      - name: Save consistent full source/object checkpoint
+        if: ${{ steps.build.outputs.state == 'partial' }}
+        run: python3 native/chromium-148/checkpoint.py save "$GITHUB_WORKSPACE/.native-build/platform" "$GITHUB_WORKSPACE/checkpoint"
+      - uses: actions/upload-artifact@v4
+        if: ${{ steps.build.outputs.state == 'partial' }}
+        with:
+          name: native-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.chunk }}
+          path: checkpoint/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Keep accepted experimental archive only
+        uses: actions/upload-artifact@v4
+        if: ${{ steps.build.outputs.state == 'complete' }}
+        with:
+          name: EXPERIMENTAL-chromium-148-macos-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .native-build/platform/artifacts/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Keep logs and effective build inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-build-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.chunk }}
+          path: |
+            native-build.log
+            .native-build/platform/source-provenance.json
+            .native-build/platform/native-acceptance.json
+            .native-build/platform/build/src/out/Default/args.gn
+            checkpoint/manifest.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Stop after four chunks; keep checkpoint for explicit resume
+        if: ${{ inputs.last_chunk && steps.build.outputs.state == 'partial' }}
+        run: |
+          echo "::error::Four-chunk budget exhausted. Resume this exact commit with run $GITHUB_RUN_ID and the last native-checkpoint artifact; no automatic infinite retry."
+          exit 1

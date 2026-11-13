@@ -4,13 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       phase:
-        description: "Inspect runner only (no Chromium download), or request full experimental build"
+        description: "Inspect runner only (no Chromium download), or request checkpointed experimental build"
         type: choice
         default: inspect
         options: [inspect, build]
+      resume_run_id:
+        description: "Optional previous run ID; requires resume_artifact and this exact commit"
+        type: string
+        default: ""
+      resume_artifact:
+        description: "Optional full native-checkpoint artifact name from that run"
+        type: string
+        default: ""
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: native-chromium-148
@@ -18,6 +27,7 @@ concurrency:
 
 jobs:
   inspect:
+    if: ${{ !github.event.repository.private }}
     runs-on: macos-26
     timeout-minutes: 10
     steps:
@@ -37,60 +47,33 @@ jobs:
   build:
     if: ${{ inputs.phase == 'build' }}
     needs: inspect
-    runs-on: macos-26
-    timeout-minutes: 360
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Reject insufficient runner before downloading source/toolchains
-        run: python3 native/chromium-148/prepare.py --preflight "$GITHUB_WORKSPACE"
-      - name: Checkout pinned macOS build scaffold (not its stock submodule)
-        uses: actions/checkout@v4
-        with:
-          repository: ungoogled-software/ungoogled-chromium-macos
-          ref: 6a00dfe08591a15cfb0aed0edd292ba789d9a0d7
-          path: .native-build/platform
-          submodules: false
-          persist-credentials: false
-      - name: Checkout fingerprint fork in place of stock ungoogled
-        uses: actions/checkout@v4
-        with:
-          repository: adryfish/fingerprint-chromium
-          ref: 13b89eae304123f0710f2d33fd0816a2f61d7ffc
-          path: .native-build/platform/ungoogled-chromium
-          persist-credentials: false
-      - name: Apply reviewed canvas and native-realm corrections before Chromium patch-series
-        run: python3 native/chromium-148/prepare.py "$GITHUB_WORKSPACE/.native-build/platform"
-      - name: Install required CI build tools only
-        run: |
-          brew install ninja coreutils
-          python3 -m pip install playwright==1.62.0
-      - name: Compile and package experimental core (no release or activation)
-        run: |
-          bash native/chromium-148/build.sh "$GITHUB_WORKSPACE/.native-build/platform" 2>&1 | tee native-build.log
-      - name: Keep experimental archive and integrity metadata
-        uses: actions/upload-artifact@v4
-        with:
-          name: EXPERIMENTAL-chromium-148-macos-arm64-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .native-build/platform/artifacts/
-          if-no-files-found: error
-          retention-days: 7
-      - name: Keep failure/build logs and source identity
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-build-logs-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            native-build.log
-            .native-build/platform/source-provenance.json
-            .native-build/platform/native-acceptance.json
-            .native-build/platform/build/src/out/Default/args.gn
-          if-no-files-found: warn
-          retention-days: 7
+    uses: ./.github/workflows/native-chromium-chunk.yml
+    with:
+      chunk: 1
+      source_run: ${{ inputs.resume_run_id }}
+      checkpoint_name: ${{ inputs.resume_artifact }}
+  resume_2:
+    needs: build
+    if: ${{ needs.build.result == 'success' && needs.build.outputs.state == 'partial' }}
+    uses: ./.github/workflows/native-chromium-chunk.yml
+    with:
+      chunk: 2
+      source_run: ${{ github.run_id }}
+      checkpoint_name: native-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}-1
+  resume_3:
+    needs: resume_2
+    if: ${{ needs.resume_2.result == 'success' && needs.resume_2.outputs.state == 'partial' }}
+    uses: ./.github/workflows/native-chromium-chunk.yml
+    with:
+      chunk: 3
+      source_run: ${{ github.run_id }}
+      checkpoint_name: native-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}-2
+  resume_4:
+    needs: resume_3
+    if: ${{ needs.resume_3.result == 'success' && needs.resume_3.outputs.state == 'partial' }}
+    uses: ./.github/workflows/native-chromium-chunk.yml
+    with:
+      chunk: 4
+      source_run: ${{ github.run_id }}
+      checkpoint_name: native-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}-3
+      last_chunk: true

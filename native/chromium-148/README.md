@@ -65,8 +65,8 @@ The workflow targets **default GitHub-hosted `macos-26` ARM64 only**. Its defaul
 Chromium/toolchains, install packages or compile. `phase=build` is a separate
 explicit manual choice, with a conservative operational budget of90GiB free
 and7GiB RAM, Xcode26 and two-worker Ninja. These are not measured universal
-Chromium minimums or a guarantee a compile fits; the single job has a360-minute
-timeout and no incremental resume. GitHub advertises only14GB guaranteed SSD
+Chromium minimums or a guarantee a compile fits; each job has a360-minute
+timeout. The bounded checkpoint chain below preserves progress between jobs. GitHub advertises only14GB guaranteed SSD
 for these runners, so measure actual free disk before requesting the full build.
 No paid/larger/self-hosted label or Xcode cleanup is selected automatically.
 [GitHub runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
@@ -89,10 +89,10 @@ can affect binary size/runtime performance. This remains an experimental build,
 not an installed release. `/usr/bin/time -l` records compiler-stage resource use;
 effective `args.gn` is logged, retained on failure and included with the archive.
 
-This is a bounded low-memory CI trial, not proof of sub-six-hour completion or
-an incremental resume. The old run retained logs/provenance only, not object
-files; a new dispatch starts from source. Do not rerun unchanged after another
-timeout or OOM. No runtime/profile/acceptance gate is bypassed.
+This is a bounded low-memory CI trial, not proof of sub-six-hour completion.
+Old runs retained logs/provenance only, not object files; their missing objects
+cannot be recovered. The checkpoint chain applies only to future runs. No
+runtime/profile/acceptance gate is bypassed.
 
 Pinned upstream's20-job resume chain uses Depot runners and restores the entire
 source/object tree in each job. It bypasses the time limit, not peak disk/RAM;
@@ -157,3 +157,60 @@ never activates this capability. No corrected asset/SHA is registered yet, so
 production behavior and old protections are intentionally retained. This closes
 the source integration path, not installed-runtime acceptance or all hardware
 fingerprint surfaces.
+
+
+## Checkpointed macOS ARM64 builds (future runs only)
+
+The target remains one macOS ARM64 core suitable for Apple Silicon/M4; no
+Windows/Linux/Intel/universal compile is added. These artifacts are core inputs,
+not the RonC application DMG. No local Xcode or Codex daemon is needed.
+
+`native-checkpoint-probe.yml` manually tests a tiny archive across two separate
+standard `macos-26` jobs, verifying bytes, executable mode, mtime and an absolute
+internal toolchain symlink converted to a portable relative link. It does not
+fetch Chromium, install build tools, change quotas or cancel a current build.
+
+`native-chromium.yml` calls one shared chunk workflow at most four times. Each
+chunk's compile budget ends four hours after the job's first step, including
+restore/setup time; the remaining two hours of the hosted six-hour limit are
+reserved for stopping, serialization and transfer. On a controlled timeout,
+the whole compile session (including Ninja's separate command process groups)
+must stop before saving. Unexpected visible detached sessions fail closed. Genuine compiler
+errors, OOM/forced termination, an uncooperative child, incompatible inputs or
+invalid checkpoints fail rather than pretending a partial build is complete.
+A hard runner loss can still lose work since the previous completed checkpoint.
+
+`checkpoint.py` archives the entire prepared `build/src` (including generated
+files, toolchains, `.ninja_log`, `.ninja_deps` and objects) using standard-library
+tar/gzip at level1. Download caches, credentials and git checkouts are excluded.
+SHA256, pinned source provenance, exact kit/GN settings, host/workspace,
+Xcode/SDK, Python and Ninja identity are checked before restore. Safe extraction
+rejects path/symlink escapes and existing build trees, preserving timestamps and
+modes. Resume does NOT redownload/repatch/regenerate the source tree. At least
+8GiB free disk remains reserved for resumed work; extraction also checks space
+for the expanded archive. Changed inputs require a fresh build.
+
+Checkpoints are **not accepted browser releases**, even if they contain partial
+executables. Only completed Ninja, ad-hoc signature verification and all native
+acceptance gates can produce the existing `EXPERIMENTAL` archive. Production
+bindings and installed cores remain untouched.
+
+Checkpoint artifact names are
+`native-checkpoint-<run_id>-<run_attempt>-<chunk>`, retained for **one day**.
+Artifacts are immutable and earlier checkpoints are NOT overwritten or deleted
+while a new one uploads. Four exhausted chunks make the workflow fail with a
+clear resume instruction, preserving its last checkpoint instead of silently
+starting an infinite loop. To resume before expiry, manually dispatch `phase=build`
+on the **exact same reviewed commit and branch** with `resume_run_id` and the
+full `resume_artifact` name. Repository/run/event/workflow identity must match.
+Rerunning only a later failed job is intentionally fail-closed if its previous
+attempt's artifact name does not match; use these explicit resume inputs.
+
+This uses GitHub's artifact transfer, NOT the10GB dependency-cache pool; existing
+Python caches and storage limits are unchanged. Public standard runners are
+required, with no private/paid/larger/self-hosted fallback. Compressed full-tree
+size and transfer duration are not yet measured at real Chromium scale. The
+small probe proves mechanics/access only, not large-file capacity or sub-six-hour
+completion. If disk, transfer or artifact quota fails, stop and inspect; never
+raise a paid quota automatically. An already-running old workflow cannot gain
+checkpoint steps from a later source push and is left alone.
