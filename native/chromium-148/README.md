@@ -64,12 +64,19 @@ The workflow targets **default GitHub-hosted `macos-26` ARM64 only**. Its defaul
 `phase=inspect` just records actual RAM, free disk and Xcode; it does not fetch
 Chromium/toolchains, install packages or compile. `phase=build` is a separate
 explicit manual choice, with a conservative operational budget of90GiB free
-and7GiB RAM, Xcode26 and single-worker Ninja. These are not measured universal
+and14GiB RAM, Xcode26 and three-worker Ninja. These are not measured universal
 Chromium minimums or a guarantee a compile fits; the single job has a360-minute
 timeout and no incremental resume. GitHub advertises only14GB guaranteed SSD
 for these runners, so measure actual free disk before requesting the full build.
 No paid/larger/self-hosted label or Xcode cleanup is selected automatically.
 [GitHub runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
+Run43322184857 reached25671/55906 Ninja tasks before the six-hour cancellation
+with one worker. Three workers now use the measured14GiB runner's CPU capacity;
+preflight rejects smaller RAM allocations before source/toolchain downloads.
+This is a bounded parallelism trial, not a proven sub-six-hour build or an
+incremental resume. The old run retained logs/provenance only, not object files;
+a new dispatch starts from source. Do not rerun unchanged after another timeout.
 
 Pinned upstream's20-job resume chain uses Depot runners and restores the entire
 source/object tree in each job. It bypasses the time limit, not peak disk/RAM;

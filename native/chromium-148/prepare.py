@@ -78,9 +78,9 @@ def check_resources(system: str, machine: str, free_bytes: int, memory_bytes: in
     if system != "Darwin" or machine != "arm64":
         raise ValueError("This build targets a macOS arm64 runner only")
     # Conservative job budgets, not a promise a full build fits the runner/time limit.
-    if free_bytes < 90 * 1024**3 or memory_bytes < 7 * 1024**3:
+    if free_bytes < 90 * 1024**3 or memory_bytes < 14 * 1024**3:
         raise ValueError(
-            "Experimental single-worker build budget: >=90 GiB free disk and >=7 GiB RAM"
+            "Experimental three-worker build budget: >=90 GiB free disk and >=14 GiB RAM"
         )
 
 
