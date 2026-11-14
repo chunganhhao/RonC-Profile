@@ -35,7 +35,7 @@ jobs:
     steps:
       - name: Start four-hour wall-clock compile window
         run: echo "NATIVE_CHUNK_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -63,7 +63,7 @@ jobs:
       - name: Reject insufficient runner before downloads
         run: python3 native/chromium-148/prepare.py --preflight "$GITHUB_WORKSPACE"
       - name: Checkout pinned macOS build scaffold
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ungoogled-software/ungoogled-chromium-macos
           ref: 6a00dfe08591a15cfb0aed0edd292ba789d9a0d7
@@ -71,7 +71,7 @@ jobs:
           submodules: false
           persist-credentials: false
       - name: Checkout fingerprint fork
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: adryfish/fingerprint-chromium
           ref: 13b89eae304123f0710f2d33fd0816a2f61d7ffc
