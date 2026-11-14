@@ -33,6 +33,8 @@ if [[ "$mode" == "fresh" ]]; then
   python3 "$kit/checkpoint.py" mark "$root"
 elif [[ "$mode" == "resume" ]]; then
   python3 "$kit/checkpoint.py" validate "$root"
+  echo "Ninja resume explain preview:"
+  ninja -C "$src/out/Default" -n -d explain chrome chromedriver 2>&1 | head -n 60 || true
 else
   echo "Expected fresh or resume build mode" >&2
   exit 2
@@ -53,11 +55,16 @@ if [[ "$status" != 0 ]]; then
 fi
 
 # Upstream's dev-signing alternative; no Developer ID/notarization secrets used.
-codesign --force --deep --sign - out/Default/Chromium.app
-codesign --verify --deep --strict out/Default/Chromium.app
-
-# No app JS shim: reject the build if native realm/CSP/canvas gates fail.
-python3 "$kit/verify.py" out/Default/Chromium.app/Contents/MacOS/Chromium "$root/native-acceptance.json"
+# No app JS shim: reject the build if native realm/CSP/canvas gates fail, while preserving compiled objects for recovery.
+if ! (
+  codesign --force --deep --sign - out/Default/Chromium.app &&
+  codesign --verify --deep --strict out/Default/Chromium.app &&
+  python3 "$kit/verify.py" out/Default/Chromium.app/Contents/MacOS/Chromium "$root/native-acceptance.json"
+); then
+  echo "state=verify_failed" >> "$GITHUB_OUTPUT"
+  echo "::error::Post-build sign or acceptance failed; checkpointing compiled objects." >&2
+  exit 1
+fi
 
 output="$root/artifacts"
 package="$root/package/experimental-chromium-148-arm64"

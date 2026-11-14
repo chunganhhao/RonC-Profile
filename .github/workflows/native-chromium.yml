@@ -9,7 +9,7 @@ on:
         default: inspect
         options: [inspect, build]
       resume_run_id:
-        description: "Optional previous run ID; requires resume_artifact and this exact commit"
+        description: "Optional previous run ID; requires resume_artifact on this branch"
         type: string
         default: ""
       resume_artifact:

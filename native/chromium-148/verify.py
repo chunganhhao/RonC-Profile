@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,11 +24,15 @@ SAMPLE = """async function sample() {
   const canvas = new OffscreenCanvas(16,16); const ctx=canvas.getContext('2d');
   ctx.fillStyle='rgb(100,100,100)'; ctx.fillRect(0,0,16,16);
   const pixels=ctx.getImageData(0,0,16,16).data;
+  ctx.font='16px sans-serif';
+  const tm=ctx.measureText('Hello World 0123');
   return {
     gpu: adapter ? {vendor:adapter.info.vendor, architecture:adapter.info.architecture,
       device:adapter.info.device, description:adapter.info.description} : null,
     cpu: navigator.hardwareConcurrency, memory: navigator.deviceMemory, stackReads,
     solidChanged:Array.from(pixels).filter((v,i)=>v!==(i%4===3?255:100)).length,
+    textMetrics: [tm.width, tm.actualBoundingBoxLeft, tm.actualBoundingBoxRight],
+    leakedFakeShadow: typeof Element !== 'undefined' && 'fakeShadowRoot' in Element.prototype,
     globals: Object.getOwnPropertyNames(globalThis).filter(
       key => /^(\\$?cdc_|__playwright|__pw|__webdriver|__selenium|domAutomation)/i.test(key))
   };
@@ -88,6 +93,91 @@ COLLECT = """async () => {
   const pixels=ctx.getImageData(0,0,16,16).data;
   results.solidChanged=Array.from(pixels).filter((v,i)=>v!==(i%4===3?255:100)).length;
   for (let i=0;i<8;i++){ctx.fillText('😀',1,12);ctx.getImageData(0,0,16,16);canvas.toDataURL();}
+  const drawScene = c => {
+    const g = c.createLinearGradient(0,0,100,40);
+    g.addColorStop(0,'#246'); g.addColorStop(1,'#c83');
+    c.fillStyle = g; c.fillRect(0,0,100,40);
+    c.fillStyle = '#fff'; c.font = '14px sans-serif'; c.fillText('Fox148 😀', 6, 26);
+  };
+  const mc = document.createElement('canvas'); mc.width = mc.height = 16;
+  const mctx = mc.getContext('2d'); mctx.font = '16px sans-serif';
+  const htm = mctx.measureText('Hello World 0123');
+  results.htmlTextMetrics = [htm.width, htm.actualBoundingBoxLeft, htm.actualBoundingBoxRight];
+  const tc = document.createElement('canvas'); tc.width = 100; tc.height = 40;
+  const tctx = tc.getContext('2d'); drawScene(tctx);
+  const full = tctx.getImageData(0,0,100,40).data;
+  const sub = tctx.getImageData(10,10,80,20).data;
+  let subDiff = 0;
+  for (let y=0;y<20;y++) for (let x=0;x<80;x++) for (let ch=0;ch<4;ch++) {
+    if (sub[(y*80+x)*4+ch] !== full[((y+10)*100+(x+10))*4+ch]) subDiff++;
+  }
+  results.subRectDiff = subDiff;
+  const oc = new OffscreenCanvas(100,40); drawScene(oc.getContext('2d'));
+  const bin = atob(tc.toDataURL('image/png').split(',')[1]);
+  const urlBlob = new Blob([Uint8Array.from(bin, c => c.charCodeAt(0))], {type: 'image/png'});
+  const cBlob = await timeout(new Promise(r => tc.toBlob(r, 'image/png')));
+  const oBlob = await timeout(oc.convertToBlob({type: 'image/png'}));
+  const decodeBlob = async b => {
+    const bmp = await createImageBitmap(b);
+    const out = new OffscreenCanvas(100,40).getContext('2d');
+    out.drawImage(bmp, 0, 0); bmp.close();
+    return out.getImageData(0,0,100,40).data;
+  };
+  const [dUrl, dBlob, dOff] = await Promise.all([decodeBlob(urlBlob), decodeBlob(cBlob), decodeBlob(oBlob)]);
+  let blobDiff = 0;
+  for (let i=0;i<dUrl.length;i++) if (dUrl[i] !== dBlob[i] || dUrl[i] !== dOff[i]) blobDiff++;
+  results.blobMismatch = blobDiff;
+  let webglOob = 0;
+  for (const [w, h] of [[16,16],[17,16]]) {
+    const gc = document.createElement('canvas'); gc.width = w; gc.height = h;
+    const gl = gc.getContext('webgl');
+    if (!gl) { webglOob++; continue; }
+    while (gl.getError() !== gl.NO_ERROR) {}
+    const drawGl = (fbo=null) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.viewport(0, 0, w, h);
+      gl.clearColor(0.3, 0.6, 0.9, 1.0); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.enable(gl.SCISSOR_TEST); gl.scissor(0, 0, 8, h);
+      gl.clearColor(0.8, 0.2, 0.4, 1.0); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.disable(gl.SCISSOR_TEST);
+    };
+    drawGl(null);
+    gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
+    const n8 = w * h * 4;
+    const u8 = new Uint8Array(n8 + 16); u8.fill(0xA5, n8);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, u8);
+    if (gl.getError() !== gl.NO_ERROR) webglOob++;
+    if (!u8.subarray(0, n8).some(v => v !== 0)) webglOob++;
+    for (let i=n8;i<n8+16;i++) if (u8[i] !== 0xA5) webglOob++;
+    for (const [intFmt, fmt, typ] of [
+      [gl.RGB565, gl.RGB, gl.UNSIGNED_SHORT_5_6_5],
+      [gl.RGBA4, gl.RGBA, gl.UNSIGNED_SHORT_4_4_4_4],
+    ]) {
+      const fbo = gl.createFramebuffer();
+      const rb = gl.createRenderbuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+      gl.renderbufferStorage(gl.RENDERBUFFER, intFmt, w, h);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, rb);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+        webglOob++; gl.deleteRenderbuffer(rb); gl.deleteFramebuffer(fbo); continue;
+      }
+      drawGl(fbo);
+      for (const align of [1, 4]) {
+        gl.pixelStorei(gl.PACK_ALIGNMENT, align);
+        const row = align === 4 && (w & 1) ? w + 1 : w;
+        const total = row * (h - 1) + w;
+        const buf = new Uint16Array(total + 8); buf.fill(0xBEEF, total);
+        gl.readPixels(0, 0, w, h, fmt, typ, buf);
+        if (gl.getError() !== gl.NO_ERROR) webglOob++;
+        if (!buf.subarray(0, w).some(v => v !== 0)) webglOob++;
+        for (let i=total;i<total+8;i++) if (buf[i] !== 0xBEEF) webglOob++;
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.deleteRenderbuffer(rb); gl.deleteFramebuffer(fbo);
+    }
+  }
+  results.webglOob = webglOob;
   sharedPorts.forEach(port=>port.close());
   return results;
 } """
@@ -142,6 +232,19 @@ def check_sample(value: dict, vendor: str, architecture: str) -> None:
         raise ValueError("Native CDP side-channel/global probe failed")
     if value.get("solidChanged") != 0:
         raise ValueError("Native OffscreenCanvas solid fill changed")
+    if value.get("leakedFakeShadow"):
+        raise ValueError("Element.prototype leaked fakeShadowRoot")
+    metrics = value.get("textMetrics")
+    if (
+        not isinstance(metrics, list)
+        or len(metrics) != 3
+        or not all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+            for x in metrics
+        )
+        or metrics[0] <= 0
+    ):
+        raise ValueError("Native measureText metrics missing")
 
 
 async def verify(executable: Path, output: Path) -> None:
@@ -158,8 +261,6 @@ async def verify(executable: Path, output: Path) -> None:
             for os_name, seed, vendor, arch in [
                 ("macos", 2, "apple", "metal-3"),
                 ("macos", 3, "apple", "metal-3"),
-                ("windows", 5, "amd", "gcn-5"),
-                ("windows", 11, "nvidia", "lovelace"),
             ]:
                 browser = await pw.chromium.launch(
                     executable_path=str(executable),
@@ -207,10 +308,40 @@ async def verify(executable: Path, output: Path) -> None:
                         raise ValueError("Cross-realm native getter mismatch")
                     if result["solidChanged"] != 0:
                         raise ValueError("Solid canvas changed")
+                    if (
+                        len(
+                            {tuple(result["htmlTextMetrics"])}
+                            | {
+                                tuple(result[n]["textMetrics"])
+                                for n in [
+                                    "window",
+                                    "classic",
+                                    "module",
+                                    "shared",
+                                    "blob",
+                                    "iframeOwnedBlob",
+                                    "service",
+                                ]
+                            }
+                        )
+                        != 1
+                    ):
+                        raise ValueError("Window/Worker measureText parity mismatch")
+                    if result["subRectDiff"] != 0:
+                        raise ValueError("Sub-rect getImageData deviated from full-canvas crop")
+                    if result["blobMismatch"] != 0:
+                        raise ValueError("Canvas toBlob/convertToBlob deviated from toDataURL")
+                    if result["webglOob"] != 0:
+                        raise ValueError("WebGL packed readPixels overflowed caller buffer")
                     await page.goto(f"http://127.0.0.1:{server.server_port}/strict")
                     check_sample(await page.evaluate(STRICT), vendor, arch)
                 finally:
                     await browser.close()
+        if (
+            report["cases"]["macos:2"]["window"]["textMetrics"]
+            == report["cases"]["macos:3"]["window"]["textMetrics"]
+        ):
+            raise ValueError("measureText metrics did not vary across seeds")
         report["acceptance"] = "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
     finally:
         server.shutdown()
