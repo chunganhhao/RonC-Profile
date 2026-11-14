@@ -165,6 +165,8 @@ def sample():
         "stackReads": 0,
         "globals": [],
         "solidChanged": 0,
+        "leakedFakeShadow": False,
+        "textMetrics": [112.5, 0.5, 112.0],
     }
 
 
@@ -181,6 +183,12 @@ def test_complete_native_sample_passes(sample):
         ("stackReads", 1),
         ("globals", ["__pw_leak"]),
         ("solidChanged", 2),
+        ("leakedFakeShadow", True),
+        ("textMetrics", None),
+        ("textMetrics", [1.0, 2.0]),
+        ("textMetrics", [0.0, 1.0, 2.0]),
+        ("textMetrics", [float("nan"), 1.0, 2.0]),
+        ("textMetrics", [True, 1.0, 2.0]),
     ],
 )
 def test_native_acceptance_refuses_missing_or_unprotected_realms(sample, key, value):

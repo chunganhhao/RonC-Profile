@@ -33,12 +33,18 @@ def disk_budget(monkeypatch):
 def source(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
+    stamp = 1700000000123456789
+    sub = src / "sub"
+    sub.mkdir()
+    (sub / "nested.txt").write_text("nested")
     marker = src / ".ninja_deps"
     marker.write_bytes(b"saved objects\x00deps")
     marker.chmod(0o755)
-    os.utime(marker, (1700000000, 1700000000))
+    os.utime(marker, ns=(stamp, stamp))
+    os.utime(sub, ns=(stamp - 111, stamp - 111))
     (src / "relative").symlink_to(".ninja_deps")
     (src / "absolute").symlink_to(marker.resolve())
+    os.utime(src / "relative", ns=(stamp - 222, stamp - 222), follow_symlinks=False)
     return src
 
 
@@ -48,9 +54,12 @@ def test_roundtrip_preserves_outputs_modes_times_and_internal_links(source, tmp_
     checkpoint.pack(source, output, context)
     checkpoint.unpack(tmp_path / "restored", output, context)
     restored = tmp_path / "restored/src/.ninja_deps"
+    stamp = 1700000000123456789
     assert restored.read_bytes() == (source / ".ninja_deps").read_bytes()
-    assert restored.stat().st_mtime == 1700000000
+    assert restored.stat().st_mtime_ns == stamp
+    assert (restored.parent / "sub").stat().st_mtime_ns == stamp - 111
     assert restored.stat().st_mode & 0o777 == 0o755
+    assert (restored.parent / "relative").lstat().st_mtime_ns == stamp - 222
     for name in ("relative", "absolute"):
         link = restored.parent / name
         assert link.is_symlink() and not link.readlink().is_absolute()
@@ -185,10 +194,127 @@ def test_bounded_fixture_work_transfer_and_incremental_resume(tmp_path):
     restored = tmp_path / "restored/src"
     assert checkpoint.run_bounded([sys.executable, str(worker), str(restored)], 5) == 0
     assert len(list(restored.glob("*.o"))) == 5
-    # Tar preserves fractional mtimes, but float conversion can lose nanoseconds.
-    assert all(
-        abs((restored / name).stat().st_mtime_ns - stamp) < 1000 for name, stamp in before.items()
+    # mtime-ns.tsv preserves exact 64-bit integer nanoseconds without float truncation.
+    assert all((restored / name).stat().st_mtime_ns == stamp for name, stamp in before.items())
+
+
+def test_legacy_ninja_log_mtime_repair_and_migration_compatibility(tmp_path):
+    source = tmp_path / "src"
+    out = source / "out/Default"
+    (out / "obj").mkdir(parents=True)
+    (out / "gen").mkdir(parents=True)
+    obj = out / "obj/foo.o"
+    obj.write_bytes(b"ELF-mock")
+    exact_ns = 1700000123456789123
+    os.utime(obj, ns=(exact_ns, exact_ns))
+    hdr = out / "gen/header.h"
+    hdr.write_text("#pragma once\n")
+    hdr_ns = 1700000050123456789
+    os.utime(hdr, ns=(hdr_ns, hdr_ns))
+    (out / ".ninja_log").write_text(
+        "# ninja log v7\n"
+        f"10\t20\t{exact_ns}\tobj/foo.o\tdeadbeef\n"
+        f"5\t15\t{hdr_ns}\tgen/header.h\tcafebabe\n"
+        "1000\t1010\t1700009999000000000\tgen/header.h\tcafebabe\n"
     )
+    saved_ctx = {
+        "format": 1,
+        "workspace": "/work/.native-build/platform",
+        "host": ["Darwin", "arm64"],
+        "python": "3.12.0",
+        "ninja": "1.12.1",
+        "xcode": "Xcode 16",
+        "sdk": "/SDK",
+        "source": {
+            "platform_revision": "rev1",
+            "fingerprint_revision": "rev2",
+            "canvas_overlay_sha256": "abc",
+            "native_realm_patch_sha256": "def",
+            "rust_archive_sha256": "ghi",
+            "acceptance": "EXPERIMENTAL_SOURCE_ONLY",
+            "open_findings": ["a", "b"],
+        },
+        "kit": {"ci-build.gn": "gn-sha", "build.sh": "old", "checkpoint.py": "old"},
+    }
+    ckpt = tmp_path / "legacy-ckpt"
+    checkpoint.pack(source, ckpt, saved_ctx)
+    # Strip mtime-ns.tsv to simulate Run #9 pre-mtime-manifest checkpoint.
+    (ckpt / "mtime-ns.tsv").unlink()
+    manifest = json.loads((ckpt / "manifest.json").read_text())
+    manifest.pop("mtime_sha256")
+    (ckpt / "manifest.json").write_text(json.dumps(manifest))
+
+    new_ctx = json.loads(json.dumps(saved_ctx))
+    new_ctx["source"]["macos_antidetect_patch_sha256"] = "new-023"
+    new_ctx["kit"]["build.sh"] = "updated"
+    new_ctx["kit"]["checkpoint.py"] = "updated"
+
+    checkpoint.unpack(tmp_path / "restored", ckpt, new_ctx)
+    assert (tmp_path / "restored/src/out/Default/obj/foo.o").stat().st_mtime_ns == exact_ns
+    assert (tmp_path / "restored/src/out/Default/gen/header.h").stat().st_mtime_ns == hdr_ns
+
+    bad_gn = json.loads(json.dumps(new_ctx))
+    bad_gn["kit"]["ci-build.gn"] = "changed"
+    with pytest.raises(ValueError, match="mismatch"):
+        checkpoint.unpack(tmp_path / "bad-gn", ckpt, bad_gn)
+
+    bad_rev = json.loads(json.dumps(new_ctx))
+    bad_rev["source"]["platform_revision"] = "tampered"
+    with pytest.raises(ValueError, match="mismatch"):
+        checkpoint.unpack(tmp_path / "bad-rev", ckpt, bad_rev)
+
+    # Once 023 is already present in the saved checkpoint, prepare.py changes are refused.
+    post_ctx = json.loads(json.dumps(new_ctx))
+    post_ctx["kit"]["prepare.py"] = "v1"
+    post_ckpt = tmp_path / "post-ckpt"
+    checkpoint.pack(source, post_ckpt, post_ctx)
+    bad_prepare = json.loads(json.dumps(post_ctx))
+    bad_prepare["kit"]["prepare.py"] = "v2"
+    with pytest.raises(ValueError, match="mismatch"):
+        checkpoint.unpack(tmp_path / "bad-prep", post_ckpt, bad_prepare)
+
+
+def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path, monkeypatch):
+    source = tmp_path / "legacy-src"
+    source.mkdir()
+    (source / "file.txt").write_text("v1")
+    saved_ctx = {
+        "format": 1,
+        "workspace": str((tmp_path / "root").resolve()),
+        "host": ["Darwin", "arm64"],
+        "python": "3.12.0",
+        "ninja": "1.12.1",
+        "xcode": "Xcode 16",
+        "sdk": "/SDK",
+        "source": {"platform_revision": "rev1"},
+        "kit": {"ci-build.gn": "gn-sha", "build.sh": "old"},
+    }
+    ckpt = tmp_path / "ckpt"
+    checkpoint.pack(source, ckpt, saved_ctx)
+    new_ctx = json.loads(json.dumps(saved_ctx))
+    new_ctx["source"]["macos_antidetect_patch_sha256"] = "new-023"
+    new_ctx["kit"]["build.sh"] = "new"
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(checkpoint, "identity", lambda _: new_ctx)
+    monkeypatch.setattr(checkpoint, "validate", Mock())
+    patch_hook = Mock(return_value=True)
+    monkeypatch.setattr(checkpoint, "_apply_incremental_patches", patch_hook)
+    monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root), str(ckpt)])
+    assert checkpoint.main() == 0
+    patch_hook.assert_called_once_with(root / "build/src")
+    assert json.loads((root / "native-ready.json").read_text()) == new_ctx
+
+
+def test_mtime_manifest_rejects_tampering(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "a.txt").write_text("hi")
+    ckpt = tmp_path / "ckpt"
+    checkpoint.pack(source, ckpt, {"probe": "sha"})
+    (ckpt / "mtime-ns.tsv").write_text("a.txt\t999\n")
+    with pytest.raises(ValueError, match="mtime manifest mismatch"):
+        checkpoint.unpack(tmp_path / "restored", ckpt, {"probe": "sha"})
 
 
 def test_validate_rejects_stale_identity_flags_and_low_ram(tmp_path, monkeypatch):
@@ -266,8 +392,9 @@ def test_workflow_chain_is_bounded_and_probe_is_independent():
         assert f"needs: {previous}" in jobs[current]
         assert f"needs.{previous}.outputs.state == 'partial'" in jobs[current]
     assert "last_chunk: true" in jobs["resume_4"]
-    assert "overwrite:" not in chunks and "retention-days: 1" in chunks
-    assert 'run["head_sha"] == os.environ["GITHUB_SHA"]' in chunks
+    assert "overwrite:" not in chunks and "retention-days: 7" in chunks
+    assert 'run["head_branch"] == os.environ["GITHUB_REF_NAME"]' in chunks
+    assert "verify_failed" in chunks
     assert chunks.index("checkpoint.py restore") < chunks.index("mode=resume")
     assert "needs: save" in probe
     assert probe.count("runs-on: macos-26") == 2

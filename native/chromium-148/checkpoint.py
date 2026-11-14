@@ -2,11 +2,13 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import platform
 import shutil
 import signal
+import stat
 import subprocess
 import tarfile
 import time
@@ -59,6 +61,106 @@ def validate(root: Path) -> None:
         raise ValueError("Resumed build requires >=7 GiB RAM and >=8 GiB free disk")
 
 
+def compatible_identity(saved: dict, current: dict) -> bool:
+    if saved == current:
+        return True
+    if not (isinstance(saved.get("kit"), dict) and isinstance(current.get("kit"), dict)):
+        return False
+    if not (isinstance(saved.get("source"), dict) and isinstance(current.get("source"), dict)):
+        return False
+    for key in ("format", "workspace", "host", "python", "ninja", "xcode", "sdk"):
+        if saved.get(key) != current.get(key):
+            return False
+    if saved["kit"].get("ci-build.gn") != current["kit"].get("ci-build.gn"):
+        return False
+    saved_src = dict(saved["source"])
+    curr_src = dict(current["source"])
+    # Allow resuming older Run #9 checkpoints created before patch 023 was added.
+    if "macos_antidetect_patch_sha256" not in saved_src:
+        curr_src.pop("macos_antidetect_patch_sha256", None)
+    elif saved["kit"].get("prepare.py") != current["kit"].get("prepare.py"):
+        return False
+    return saved_src == curr_src
+
+
+def _scan_mtimes(source: Path) -> list[tuple[str, int]]:
+    rows: list[tuple[str, int]] = []
+    stack = [source]
+    while stack:
+        current = stack.pop()
+        with os.scandir(current) as entries:
+            for entry in entries:
+                rel = Path(entry.path).relative_to(source).as_posix()
+                if "\t" in rel or "\n" in rel or "\r" in rel:
+                    raise ValueError(f"Unsupported control character in checkpoint path: {rel!r}")
+                rows.append((rel, entry.stat(follow_symlinks=False).st_mtime_ns))
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(Path(entry.path))
+    rows.sort(key=lambda item: item[0])
+    return rows
+
+
+def _restore_mtimes(src_root: Path, mtime_path: Path) -> None:
+    src_resolved = src_root.resolve()
+    dirs: list[tuple[int, Path, int]] = []
+    for line in mtime_path.read_text().splitlines():
+        if not line:
+            continue
+        rel_str, ns_str = line.split("\t", 1)
+        rel = Path(rel_str)
+        if rel.is_absolute() or ".." in rel.parts:
+            raise ValueError(f"Unsafe checkpoint mtime path: {rel_str!r}")
+        target = src_root / rel
+        if not target.parent.resolve().is_relative_to(src_resolved):
+            raise ValueError(f"Escaping checkpoint mtime path: {rel_str!r}")
+        ns = int(ns_str)
+        if stat.S_ISDIR(target.lstat().st_mode):
+            dirs.append((len(rel.parts), target, ns))
+        else:
+            os.utime(target, ns=(ns, ns), follow_symlinks=False)
+    for _, target, ns in sorted(dirs, key=lambda item: item[0], reverse=True):
+        os.utime(target, ns=(ns, ns), follow_symlinks=False)
+
+
+def _repair_mtimes_from_ninja_log(out_dir: Path) -> None:
+    log_path = out_dir / ".ninja_log"
+    if not log_path.exists():
+        return
+    out_resolved = out_dir.resolve()
+    entries: dict[str, list[int]] = {}
+    for line in log_path.read_text(errors="replace").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        with suppress(ValueError):
+            ns = int(parts[2])
+            if ns > 0:
+                entries.setdefault(parts[3], []).append(ns)
+    for rel_str, stamps in entries.items():
+        rel = Path(rel_str)
+        if rel.is_absolute() or ".." in rel.parts:
+            continue
+        target = out_dir / rel
+        if os.path.lexists(target) and target.parent.resolve().is_relative_to(out_resolved):
+            with suppress(OSError):
+                disk_ns = target.lstat().st_mtime_ns
+                for ns in reversed(stamps):
+                    # Repair tarfile float64 drift (+-256 ns) without jumping restat outputs to command_start_time_.
+                    if abs(disk_ns - ns) <= 1_000_000:
+                        os.utime(target, ns=(ns, ns), follow_symlinks=False)
+                        break
+
+
+def _apply_incremental_patches(src_dir: Path) -> bool:
+    spec = importlib.util.spec_from_file_location("native_prepare", KIT / "prepare.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return bool(module.apply_incremental_patches(src_dir))
+
+
 def pack(source: Path, destination: Path, context: dict) -> None:
     source = source.resolve()
     if destination.resolve().is_relative_to(source):
@@ -75,10 +177,18 @@ def pack(source: Path, destination: Path, context: dict) -> None:
             info.linkname = os.path.relpath(target, parent)
         return info
 
+    rows = _scan_mtimes(source)
+    mtime_path = destination / "mtime-ns.tsv"
+    mtime_path.write_text("".join(f"{rel}\t{ns}\n" for rel, ns in rows))
     archive = destination / "source.tar.gz"
     with tarfile.open(archive, "w:gz", compresslevel=1) as bundle:
         bundle.add(source, arcname="src", filter=safe_link)
-    manifest = {"identity": context, "sha256": digest(archive), "bytes": archive.stat().st_size}
+    manifest = {
+        "identity": context,
+        "sha256": digest(archive),
+        "mtime_sha256": digest(mtime_path),
+        "bytes": archive.stat().st_size,
+    }
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Checkpoint complete: {manifest['bytes']} compressed bytes", flush=True)
 
@@ -86,8 +196,16 @@ def pack(source: Path, destination: Path, context: dict) -> None:
 def unpack(build: Path, checkpoint: Path, context: dict) -> None:
     manifest = json.loads((checkpoint / "manifest.json").read_text())
     archive = checkpoint / "source.tar.gz"
-    if manifest["identity"] != context or manifest["sha256"] != digest(archive):
+    if not compatible_identity(manifest["identity"], context) or manifest["sha256"] != digest(
+        archive
+    ):
         raise ValueError("Checkpoint identity or archive checksum mismatch")
+    mtime_path = checkpoint / "mtime-ns.tsv"
+    if "mtime_sha256" in manifest:
+        if not mtime_path.exists() or manifest["mtime_sha256"] != digest(mtime_path):
+            raise ValueError("Checkpoint mtime manifest mismatch")
+    elif mtime_path.exists():
+        raise ValueError("Unexpected unverified checkpoint mtime manifest")
     if build.exists():
         raise ValueError("Restore requires a fresh build directory")
     with tarfile.open(archive, "r:gz") as bundle:
@@ -100,6 +218,10 @@ def unpack(build: Path, checkpoint: Path, context: dict) -> None:
         build.mkdir()
         try:
             bundle.extractall(build, members=members, filter="data")
+            if "mtime_sha256" in manifest:
+                _restore_mtimes(build / "src", mtime_path)
+            else:
+                _repair_mtimes_from_ninja_log(build / "src/out/Default")
         except BaseException:
             shutil.rmtree(build)
             raise
@@ -183,13 +305,14 @@ def run_bounded(command: list[str], seconds: float, grace: float = 120) -> int:
 
 def probe(root: Path, restoring: bool) -> None:
     context = {"probe": os.environ["GITHUB_SHA"]}
+    stamp = 1700000000123456789
     if not restoring:
         source = root / "src"
         source.mkdir(parents=True)
         marker = source / ".ninja_log"
         marker.write_text("checkpoint-probe\n")
         marker.chmod(0o755)
-        os.utime(marker, (1700000000, 1700000000))
+        os.utime(marker, ns=(stamp, stamp))
         (source / "tool-link").symlink_to(marker.resolve())
         pack(source, root / "checkpoint", context)
     else:
@@ -197,7 +320,7 @@ def probe(root: Path, restoring: bool) -> None:
         marker = root / "restored/src/.ninja_log"
         if (
             marker.read_text() != "checkpoint-probe\n"
-            or marker.stat().st_mtime != 1700000000
+            or marker.stat().st_mtime_ns != stamp
             or marker.stat().st_mode & 0o777 != 0o755
             or not (marker.parent / "tool-link").is_symlink()
             or (marker.parent / "tool-link").read_text() != marker.read_text()
@@ -222,8 +345,11 @@ def main() -> int:
         (root / "native-ready.json").write_text(json.dumps(identity(root), indent=2) + "\n")
         validate(root)
     elif args.mode == "restore":
+        saved_identity = json.loads((args.checkpoint / "manifest.json").read_text())["identity"]
         context = identity(root)
         unpack(root / "build", args.checkpoint, context)
+        if "macos_antidetect_patch_sha256" not in saved_identity.get("source", {}):
+            _apply_incremental_patches(root / "build/src")
         (root / "native-ready.json").write_text(json.dumps(context, indent=2) + "\n")
         validate(root)
     else:

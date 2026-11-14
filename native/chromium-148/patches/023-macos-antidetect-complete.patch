@@ -1,0 +1,360 @@
+diff --git a/components/ungoogled/fingerprint_gpu.h b/components/ungoogled/fingerprint_gpu.h
+index 163775d..2f594ab 100644
+--- a/components/ungoogled/fingerprint_gpu.h
++++ b/components/ungoogled/fingerprint_gpu.h
+@@ -26,7 +26,7 @@ inline const WebGLConfig* GetActiveGPUConfig() {
+     return nullptr;
+   }
+ 
+-  std::string platform = "windows";
++  std::string platform = "macos";
+   if (command_line->HasSwitch(switches::kFingerprintPlatform)) {
+     platform = base::ToLowerASCII(
+         command_line->GetSwitchValueASCII(switches::kFingerprintPlatform));
+diff --git a/content/browser/devtools/protocol/input_handler.cc b/content/browser/devtools/protocol/input_handler.cc
+index 9364acb..8df6609 100644
+--- a/content/browser/devtools/protocol/input_handler.cc
++++ b/content/browser/devtools/protocol/input_handler.cc
+@@ -1402,6 +1402,9 @@ void InputHandler::HandleMouseEvent(
+     return;
+   }
+ 
++  event->SetPositionInScreen(ConvertWidgetPointToScreenPoint(
++      CHECK_DEREF(widget_host->GetView()), event->PositionInWidget()));
++
+   auto findWidgetAndDispatchEvent = base::BindOnce(
+       [](base::WeakPtr<InputHandler> self,
+          base::WeakPtr<RenderWidgetHostImpl> widget_host,
+diff --git a/third_party/blink/renderer/core/dom/element.idl b/third_party/blink/renderer/core/dom/element.idl
+index 636fa6c..4be4d66 100644
+--- a/third_party/blink/renderer/core/dom/element.idl
++++ b/third_party/blink/renderer/core/dom/element.idl
+@@ -78,7 +78,6 @@ dictionary SetHTMLUnsafeOptions {
+ 
+     [RaisesException, MeasureAs=ElementAttachShadow] ShadowRoot attachShadow(ShadowRootInit shadowRootInitDict);
+     [PerWorldBindings, ImplementedAs=OpenShadowRoot] readonly attribute ShadowRoot? shadowRoot;
+-    [PerWorldBindings, ImplementedAs=FakeShadowRoot] readonly attribute ShadowRoot? fakeShadowRoot;
+ 
+     [RaisesException] Element? closest(DOMString selectors);
+     [RaisesException] boolean matches(DOMString selectors);
+diff --git a/third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.cc b/third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.cc
+index adb616d..263e980 100644
+--- a/third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.cc
++++ b/third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.cc
+@@ -4,10 +4,14 @@
+ 
+ #include "third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.h"
+ 
++#include <string>
++
++#include "base/command_line.h"
+ #include "base/location.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "build/build_config.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/public/platform/task_type.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+@@ -32,6 +36,7 @@
+ #include "third_party/blink/renderer/platform/wtf/functional.h"
+ #include "third_party/blink/renderer/platform/wtf/text/base64.h"
+ #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
++#include "third_party/skia/include/core/SkData.h"
+ #include "third_party/skia/include/core/SkSurface.h"
+ #include "third_party/skia/include/encode/SkPngRustEncoder.h"
+ 
+@@ -180,6 +185,36 @@ CanvasAsyncBlobCreator::CanvasAsyncBlobCreator(
+   image_ = image->MakeUnaccelerated();
+ 
+   if (image_) {
++    const base::CommandLine* command_line =
++        base::CommandLine::ForCurrentProcess();
++    if (command_line->HasSwitch(switches::kFingerprint) &&
++        (!command_line->HasSwitch(switches::kDisableSpoofing) ||
++         command_line->GetSwitchValueASCII(switches::kDisableSpoofing)
++                 .find("canvas") == std::string::npos)) {
++      SkImageInfo image_info = SkImageInfo::Make(
++          image_->width(), image_->height(), kRGBA_8888_SkColorType,
++          kUnpremul_SkAlphaType);
++      const size_t row_bytes = image_info.minRowBytes();
++      const size_t buffer_size = image_info.computeByteSize(row_bytes);
++      constexpr size_t kMaxCanvasNoiseBytes = 256u * 1024u * 1024u;
++      if (buffer_size > 0 && !SkImageInfo::ByteSizeOverflowed(buffer_size) &&
++          buffer_size <= kMaxCanvasNoiseBytes) {
++        sk_sp<SkData> modified_data = SkData::MakeUninitialized(buffer_size);
++        PaintImage original_paint_image = image_->PaintImageForCurrentFrame();
++        if (modified_data &&
++            original_paint_image.readPixels(
++                image_info, modified_data->writable_data(), row_bytes, 0, 0)) {
++          StaticBitmapImage::ShuffleSubchannelColorData(
++              modified_data->writable_data(), image_info, 0, 0);
++          if (scoped_refptr<StaticBitmapImage> noised =
++                  StaticBitmapImage::Create(std::move(modified_data),
++                                            image_info,
++                                            image_->Orientation())) {
++            image_ = std::move(noised);
++          }
++        }
++      }
++    }
+     skia_image_ = image_->PaintImageForCurrentFrame().GetSwSkImage();
+     CHECK(skia_image_);
+     CHECK(!skia_image_->isTextureBacked());
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
+index 7033430..3dd1123 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
+@@ -10,6 +10,7 @@
+ #include <memory>
+ #include <optional>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/check.h"
+ #include "base/check_op.h"
+@@ -542,7 +543,37 @@ ImageData* BaseRenderingContext2D::getImageDataInternal(
+     if (read_pixels_successful && command_line->HasSwitch(switches::kFingerprint) &&
+         (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+          command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") == std::string::npos)) {
+-      StaticBitmapImage::ShuffleSubchannelColorData(image_data_pixmap.addr(), image_data_pixmap.info(), sx, sy);
++      if (sx == 0 && sy == 0 && sw == snapshot_rect.width() &&
++          sh == snapshot_rect.height()) {
++        StaticBitmapImage::ShuffleSubchannelColorData(
++            image_data_pixmap.writable_addr(), image_data_pixmap.info(), 0, 0);
++      } else {
++        SkImageInfo full_info = image_data_pixmap.info().makeWH(
++            snapshot_rect.width(), snapshot_rect.height());
++        const size_t full_row_bytes = full_info.minRowBytes();
++        const size_t full_size = full_info.computeByteSize(full_row_bytes);
++        constexpr size_t kMaxFullCanvasNoiseBytes = 256u * 1024u * 1024u;
++        bool full_noised = false;
++        if (!full_info.isEmpty() &&
++            !SkImageInfo::ByteSizeOverflowed(full_size) &&
++            full_size > 0 && full_size <= kMaxFullCanvasNoiseBytes) {
++          std::vector<uint8_t> full_pixels(full_size);
++          if (snapshot->PaintImageForCurrentFrame().readPixels(
++                  full_info, full_pixels.data(), full_row_bytes, 0, 0)) {
++            StaticBitmapImage::ShuffleSubchannelColorData(full_pixels.data(),
++                                                          full_info, 0, 0);
++            SkPixmap full_pixmap(full_info, full_pixels.data(), full_row_bytes);
++            full_noised = full_pixmap.readPixels(
++                image_data_pixmap.info(), image_data_pixmap.writable_addr(),
++                image_data_pixmap.rowBytes(), sx, sy);
++          }
++        }
++        if (!full_noised) {
++          StaticBitmapImage::ShuffleSubchannelColorData(
++              image_data_pixmap.writable_addr(), image_data_pixmap.info(), sx,
++              sy);
++        }
++      }
+     }
+   }
+ 
+@@ -1200,15 +1231,9 @@ TextMetrics* BaseRenderingContext2D::measureText(const String& text) {
+     uint32_t hash_val_x = std::hash<std::string>{}(combined_rects_x);
+      // 映射到[-0.5, 0.5]范围
+     double norm_x = (hash_val_x & 0xFFFFFFFF) / 4294967295.0 - 0.5;
+-    // 使用 0.00001 作为因子 (相当于原来的 1/100000.0)
+-    double noise_x = norm_x * 0.00001;
+-    if (HostAsOffscreenCanvas()) {
+-      if (auto* window = DynamicTo<LocalDOMWindow>(GetTopExecutionContext())) {
+-        if (window->GetFrame() && window->GetFrame()->GetDocument() && text.length() > 0) {
+-          text_metrics->Shuffle(noise_x);
+-        }
+-      }
+-    } else if (canvas && text.length() > 0) {
++    // Multiplicative factor near 1.0 across Window and all Worker OffscreenCanvas realms.
++    double noise_x = 1.0 + norm_x * 0.00001;
++    if (text.length() > 0 && (HostAsOffscreenCanvas() || canvas)) {
+       text_metrics->Shuffle(noise_x);
+     }
+   }
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+index 8c02a1e..1addbac 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -5200,31 +5200,35 @@ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
+     }
+     ContextGL()->ReadPixels(x, y, width, height, format, type, data);
+ 
+-    // 添加指纹保护：修改已读取的像素数据
++    // Anti-detect pixel noise bounded to verified packed formats (#99, #102).
+     const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+     if (command_line->HasSwitch(switches::kFingerprint) &&
+         (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+          command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") == std::string::npos)) {
+-      // 构建 SkImageInfo 来描述像素格式
+-      SkColorType color_type;
+-      SkAlphaType alpha_type = kUnpremul_SkAlphaType;
+-
+-      // 根据 WebGL 格式映射到 Skia 格式
+-      if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
+-        color_type = kRGBA_8888_SkColorType;
+-      } else if (format == GL_RGB && type == GL_UNSIGNED_BYTE) {
+-        color_type = kRGB_888x_SkColorType;
+-      } else if (format == GL_ALPHA && type == GL_UNSIGNED_BYTE) {
+-        color_type = kAlpha_8_SkColorType;
+-      } else {
+-        // 对于其他格式，假设为 RGBA
+-        color_type = kRGBA_8888_SkColorType;
++      const auto pack_params = GetPackPixelStoreParams();
++      if (pack_params.row_length == 0 && pack_params.skip_pixels == 0 &&
++          pack_params.skip_rows == 0 && pack_params.alignment <= 4) {
++        std::optional<SkImageInfo> image_info;
++        if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
++          image_info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType,
++                                         kUnpremul_SkAlphaType);
++        } else if ((width & 1) == 0 && format == GL_RGB &&
++                   type == GL_UNSIGNED_SHORT_5_6_5) {
++          image_info = SkImageInfo::Make(width, height, kRGB_565_SkColorType,
++                                         kOpaque_SkAlphaType);
++        } else if ((width & 1) == 0 && format == GL_RGBA &&
++                   type == GL_UNSIGNED_SHORT_4_4_4_4) {
++          image_info = SkImageInfo::Make(width, height, kARGB_4444_SkColorType,
++                                         kUnpremul_SkAlphaType);
++        }
++        if (image_info.has_value()) {
++          const size_t min_bytes = image_info->computeMinByteSize();
++          if (!SkImageInfo::ByteSizeOverflowed(min_bytes) &&
++              buffer_size.ValueOrDie() >= min_bytes) {
++            StaticBitmapImage::ShuffleSubchannelColorData(data, *image_info, x, y);
++          }
++        }
+       }
+-
+-      SkImageInfo image_info = SkImageInfo::Make(width, height, color_type, alpha_type);
+-
+-      // 调用指纹保护函数修改已读取的像素数据
+-      StaticBitmapImage::ShuffleSubchannelColorData(data, image_info, 0, 0);
+     }
+   }
+ }
+diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+index 4953725..d859091 100644
+--- a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
++++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+@@ -134,13 +134,6 @@ base::span<const uint8_t> ImageDataBuffer::PixelData() const {
+ bool ImageDataBuffer::EncodeImage(const ImageEncodingMimeType mime_type,
+                                   const double& quality,
+                                   Vector<unsigned char>* encoded_image) const {
+-  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-  if (command_line->HasSwitch(switches::kFingerprint) &&
+-      (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+-       command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") == std::string::npos)) {
+-    // shuffle subchannel color data within the pixmap
+-    StaticBitmapImage::ShuffleSubchannelColorData(pixmap_.writable_addr(), pixmap_.info(), 0, 0);
+-  }
+   return ImageEncoder::Encode(encoded_image, pixmap_, mime_type, quality);
+ }
+ 
+diff --git a/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc b/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc
+index 841b8a6..aa4d387 100644
+--- a/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc
++++ b/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc
+@@ -128,10 +128,10 @@ void StaticBitmapImage::DrawHelper(cc::PaintCanvas* canvas,
+ #define writable_addr(T, p, stride, x, y) (T*)((const char *)(p) + (y) * (stride) + (x) * sizeof(T))
+ 
+ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkImageInfo& info, int srcX, int srcY) {
+-  auto w = info.width() - srcX, h = info.height() - srcY;
++  auto w = info.width(), h = info.height();
+ 
+-  // skip tiny images; info.width()/height() can also be 0
+-  if ((w < 8) || (h < 8)) {
++  // skip null or tiny images; info.width()/height() can also be 0
++  if (!addr || (w < 8) || (h < 8)) {
+     return;
+   }
+ 
+@@ -189,7 +189,7 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+ 
+           if (isEdge && isValidColor) {
+             // 直接处理这个像素
+-            std::string pixel_key_base = seed_str + "_x" + std::to_string(x) + "_y" + std::to_string(y);
++            std::string pixel_key_base = seed_str + "_x" + std::to_string(x + srcX) + "_y" + std::to_string(y + srcY);
+             std::string pixel_key_r = pixel_key_base + "_r";
+             std::string pixel_key_g = pixel_key_base + "_g";
+             std::string pixel_key_b = pixel_key_base + "_b";
+@@ -232,7 +232,7 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+ 
+           if (isEdge && isValidColor) {
+             // 直接处理这个像素
+-            std::string pixel_key_base = seed_str + "_x" + std::to_string(x) + "_y" + std::to_string(y);
++            std::string pixel_key_base = seed_str + "_x" + std::to_string(x + srcX) + "_y" + std::to_string(y + srcY);
+             std::string pixel_key_r = pixel_key_base + "_r";
+             std::string pixel_key_g = pixel_key_base + "_g";
+             std::string pixel_key_b = pixel_key_base + "_b";
+@@ -268,7 +268,7 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+ 
+           if (isEdge && isValidColor) {
+             // 直接处理这个像素
+-            std::string pixel_key_base = seed_str + "_x" + std::to_string(x) + "_y" + std::to_string(y);
++            std::string pixel_key_base = seed_str + "_x" + std::to_string(x + srcX) + "_y" + std::to_string(y + srcY);
+             std::string pixel_key_b = pixel_key_base + "_b";
+             uint8_t shuffleB = std::hash<std::string>{}(pixel_key_b) & 1;
+             *current = (*current & ~0x1) | shuffleB;
+@@ -296,7 +296,7 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+ 
+           if (isEdge && isValidColor) {
+             // 直接处理这个像素
+-            std::string pixel_key_base = seed_str + "_x" + std::to_string(x) + "_y" + std::to_string(y);
++            std::string pixel_key_base = seed_str + "_x" + std::to_string(x + srcX) + "_y" + std::to_string(y + srcY);
+             std::string pixel_key_r = pixel_key_base + "_r";
+             std::string pixel_key_g = pixel_key_base + "_g";
+             std::string pixel_key_b = pixel_key_base + "_b";
+@@ -338,7 +338,7 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+ 
+           if (isEdge && isValidColor) {
+             // 直接处理这个像素
+-            std::string pixel_key_base = seed_str + "_x" + std::to_string(x) + "_y" + std::to_string(y);
++            std::string pixel_key_base = seed_str + "_x" + std::to_string(x + srcX) + "_y" + std::to_string(y + srcY);
+             std::string pixel_key_r = pixel_key_base + "_r";
+             std::string pixel_key_g = pixel_key_base + "_g";
+             std::string pixel_key_b = pixel_key_base + "_b";
+@@ -365,45 +365,6 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+         }
+         break;
+ 
+-        case kAlpha_8_SkColorType:
+-        {
+-          auto *current = writable_addr(uint8_t, addr, fRowBytes, x, y);
+-          auto *right = writable_addr(uint8_t, addr, fRowBytes, x + 1, y);
+-          auto *bottom = writable_addr(uint8_t, addr, fRowBytes, x, y + 1);
+-
+-          auto r = SkColorGetR(*current);
+-          auto g = SkColorGetG(*current);
+-          auto b = SkColorGetB(*current);
+-
+-          isValidColor = !((r == 0 && g == 0 && b == 0) || (r == 255 && g == 255 && b == 255));
+-          if (isValidColor) {
+-            isEdge = (*current != *right) || (*current != *bottom);
+-          }
+-
+-          if (isEdge && isValidColor) {
+-            // 直接处理这个像素
+-            std::string pixel_key_base = seed_str + "_x" + std::to_string(x) + "_y" + std::to_string(y);
+-            std::string pixel_key_r = pixel_key_base + "_r";
+-            std::string pixel_key_g = pixel_key_base + "_g";
+-            std::string pixel_key_b = pixel_key_base + "_b";
+-
+-            uint8_t shuffleR = std::hash<std::string>{}(pixel_key_r) & 1;
+-            uint8_t shuffleG = std::hash<std::string>{}(pixel_key_g) & 1;
+-            uint8_t shuffleB = std::hash<std::string>{}(pixel_key_b) & 1;
+-
+-            auto a = SkColorGetA(*current);
+-            r = (r & ~0x1) | shuffleR;
+-            g = (g & ~0x1) | shuffleG;
+-            b = (b & ~0x1) | shuffleB;
+-
+-            *current = SkColorSetARGB(a, r, g, b);
+-            modified_pixels++;
+-            processed_rows.insert(y);
+-            processed_cols.insert(x);
+-          }
+-        }
+-        break;
+-
+         default:
+           break;
+       }

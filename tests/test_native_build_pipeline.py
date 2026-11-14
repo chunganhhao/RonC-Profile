@@ -41,14 +41,18 @@ def test_prepare_applies_after_revision_checks_and_records_incomplete_acceptance
     proof = json.loads((scaffold / "source-provenance.json").read_text())
     assert proof["acceptance"] == "EXPERIMENTAL_SOURCE_ONLY"
     assert proof["native_realm_patch_sha256"] == native.NATIVE_PATCH_SHA256
+    assert proof["macos_antidetect_patch_sha256"] == native.MACOS_ANTIDETECT_PATCH_SHA256
     assert (
         (scaffold / "ungoogled-chromium/patches/series")
         .read_text()
-        .endswith(native.NATIVE_SERIES_ENTRY + "\n")
+        .endswith(native.NATIVE_SERIES_ENTRY + "\n" + native.MACOS_ANTIDETECT_SERIES_ENTRY + "\n")
     )
     assert (
         scaffold / "ungoogled-chromium/patches" / native.NATIVE_SERIES_ENTRY
     ).read_bytes() == native.NATIVE_PATCH.read_bytes()
+    assert (
+        scaffold / "ungoogled-chromium/patches" / native.MACOS_ANTIDETECT_SERIES_ENTRY
+    ).read_bytes() == native.MACOS_ANTIDETECT_PATCH.read_bytes()
     assert len(proof["open_findings"]) == 2
     with pytest.raises(ValueError, match="fresh dedicated checkout"):
         native.prepare(scaffold)
@@ -226,3 +230,58 @@ def test_low_memory_flags_and_upstream_override_order(tmp_path):
         "use_thin_lto": "false",
         "concurrent_links": "1",
     }
+
+
+def test_modified_macos_antidetect_overlay_refused(scaffold, monkeypatch):
+    bad = scaffold / "bad-macos.patch"
+    bad.write_text("unreviewed antidetect changes")
+    monkeypatch.setattr(native, "MACOS_ANTIDETECT_PATCH", bad)
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        native.prepare(scaffold)
+    native.subprocess.run.assert_not_called()
+
+
+def test_apply_incremental_patches_idempotent_with_real_patch(tmp_path, monkeypatch):
+    import hashlib
+
+    src = tmp_path / "src"
+    src.mkdir()
+    target = src / "sample.txt"
+    target.write_text("line1\nold\nline3\n")
+    patch_file = tmp_path / "mini.patch"
+    patch_file.write_text(
+        "--- a/sample.txt\n+++ b/sample.txt\n@@ -1,3 +1,3 @@\n line1\n-old\n+new\n line3\n"
+    )
+    digest = hashlib.sha256(patch_file.read_bytes()).hexdigest()
+    monkeypatch.setattr(native, "MACOS_ANTIDETECT_PATCH", patch_file)
+    monkeypatch.setattr(native, "MACOS_ANTIDETECT_PATCH_SHA256", digest)
+
+    assert native.apply_incremental_patches(src) is True
+    assert target.read_text() == "line1\nnew\nline3\n"
+    # Second invocation detects already-applied patch cleanly and makes no edits.
+    assert native.apply_incremental_patches(src) is False
+    assert target.read_text() == "line1\nnew\nline3\n"
+
+
+def test_verify_matrix_targets_macos_only_and_covers_023_gates():
+    verify_src = (KIT / "verify.py").read_text()
+    assert '("macos", 2, "apple", "metal-3")' in verify_src
+    assert '("macos", 3, "apple", "metal-3")' in verify_src
+    assert '("windows",' not in verify_src
+    for gate in (
+        "textMetrics",
+        "leakedFakeShadow",
+        "subRectDiff",
+        "blobMismatch",
+        "webglOob",
+        "PACK_ALIGNMENT",
+        "gl.NO_ERROR",
+        "htmlTextMetrics",
+    ):
+        assert gate in verify_src
+    assert (
+        'std::string platform = "macos";'
+        in (KIT / "patches/023-macos-antidetect-complete.patch").read_text()
+    )
+    build_src = (KIT / "build.sh").read_text()
+    assert "state=verify_failed" in build_src and "2>&1 | head -n 60" in build_src

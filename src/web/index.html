@@ -1207,7 +1207,7 @@ function openEditor(p) {
   modal((close) => {
     const name = h("input", { id: "f-name", value: p ? p.name : "", required: true, maxlength: 64, autocomplete: "off" });
     const os = h("select", { id: "f-os" }, [["windows", "Windows"], ["macos", "macOS"], ["linux", "Linux"]].map(([v, label]) =>
-      h("option", { value: v, selected: (p ? p.os_type : "windows") === v }, label)));
+      h("option", { value: v, selected: (p ? p.os_type : "macos") === v }, label)));
     const engine = h("select", { id: "f-engine", disabled: !!p },
       [["camoufox", t("engine_camoufox")], ["chrome", t("engine_chrome")]].map(([v, label]) =>
         h("option", { value: v, selected: (p ? p.engine : "camoufox") === v }, label)));
