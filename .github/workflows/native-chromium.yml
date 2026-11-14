@@ -39,7 +39,7 @@ jobs:
           python-version: "3.12"
       - name: Measure default GitHub-hosted runner (no installs or core downloads)
         run: python3 native/chromium-148/prepare.py --inspect "$GITHUB_WORKSPACE" | tee runner-capacity.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-runner-capacity-${{ github.run_id }}-${{ github.run_attempt }}
           path: runner-capacity.json

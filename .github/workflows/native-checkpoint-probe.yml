@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python3 native/chromium-148/checkpoint.py probe-save "$GITHUB_WORKSPACE/probe"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: checkpoint-probe-${{ github.run_id }}-${{ github.run_attempt }}
           path: probe/checkpoint/
