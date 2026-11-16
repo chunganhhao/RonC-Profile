@@ -673,7 +673,7 @@ COLLECT = """async () => {
     document.body.style.margin = '0';
     document.body.style.padding = '0';
     const wrap = document.createElement('div');
-    wrap.innerHTML = '<div id="rZeroBox" style="width:40px;height:20px">A</div><div id="rEmptyBox" style="width:0;height:0"></div>';
+    wrap.innerHTML = '<div id="rEmptyBox" style="width:0;height:0"></div><div id="rZeroBox" style="width:40px;height:20px">A</div>';
     document.body.prepend(wrap);
     try {
       const zBox = document.getElementById('rZeroBox');
@@ -688,7 +688,12 @@ COLLECT = """async () => {
       range.setStart(zBox.firstChild, 0);
       range.collapse(true);
       const rr = range.getBoundingClientRect();
-      if (rr.x !== 0 || rr.y !== 0 || rr.width !== 0 || rr.height !== 0) rectMismatch++;
+      if (rr.x !== 0 || rr.y !== 0 || rr.width !== 0) rectMismatch++;
+      const emptyRange = document.createRange();
+      emptyRange.setStart(eBox, 0);
+      emptyRange.collapse(true);
+      const rr0 = emptyRange.getBoundingClientRect();
+      if (rr0.x !== 0 || rr0.y !== 0 || rr0.width !== 0 || rr0.height !== 0) rectMismatch++;
     } finally {
       wrap.remove();
       document.body.style.margin = prevMargin;
