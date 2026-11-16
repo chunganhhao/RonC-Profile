@@ -24,7 +24,7 @@ SAMPLE = """async function sample() {
   const canvas = new OffscreenCanvas(16,16); const ctx=canvas.getContext('2d');
   ctx.fillStyle='rgb(100,100,100)'; ctx.fillRect(0,0,16,16);
   const pixels=ctx.getImageData(0,0,16,16).data;
-  ctx.font='16px sans-serif';
+  ctx.font='16px Helvetica';
   const tm=ctx.measureText('Hello World 0123');
   return {
     gpu: adapter ? {vendor:adapter.info.vendor, architecture:adapter.info.architecture,
@@ -100,7 +100,7 @@ COLLECT = """async () => {
     c.fillStyle = '#fff'; c.font = '14px sans-serif'; c.fillText('Fox148 😀', 6, 26);
   };
   const mc = document.createElement('canvas'); mc.width = mc.height = 16;
-  const mctx = mc.getContext('2d'); mctx.font = '16px sans-serif';
+  const mctx = mc.getContext('2d'); mctx.font = '16px Helvetica';
   const htm = mctx.measureText('Hello World 0123');
   results.htmlTextMetrics = [htm.width, htm.actualBoundingBoxLeft, htm.actualBoundingBoxRight];
   const tc = document.createElement('canvas'); tc.width = 100; tc.height = 40;
