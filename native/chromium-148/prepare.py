@@ -21,7 +21,7 @@ MACOS_ANTIDETECT_PATCH = Path(__file__).with_name("patches") / "023-macos-antide
 MACOS_ANTIDETECT_PATCH_SHA256 = "98e2131461e38c290d67f929e0729cc187c741b31838c3515da1194ddbd57e4d"
 MACOS_ANTIDETECT_SERIES_ENTRY = "extra/fingerprint/023-macos-antidetect-complete.patch"
 READBACK_PARITY_PATCH = Path(__file__).with_name("patches") / "024-webgl-readback-parity.patch"
-READBACK_PARITY_PATCH_SHA256 = "7e151962b506ed6cfecaef83be1002a339590848c508d8b07b5679b92eb6f795"
+READBACK_PARITY_PATCH_SHA256 = "c7f11bc67333f48224d93e613072321e4d993beba3374e3b69a1906131dad3bb"
 READBACK_PARITY_SERIES_ENTRY = "extra/fingerprint/024-webgl-readback-parity.patch"
 
 

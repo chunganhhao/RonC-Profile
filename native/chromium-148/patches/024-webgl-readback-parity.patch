@@ -100,7 +100,7 @@ diff --git a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc b
 +      if (resources_->texture_id_map.GetClientID(static_cast<GLuint>(object),
 +                                                 &client_id) &&
 +          resources_->texture_object_map.GetServiceID(client_id, &texture) &&
-+          texture && api()->glGetTexLevelParameterivANGLEFn) {
++          texture) {
 +        GLint level = 0;
 +        GLint face = 0;
 +        api()->glGetFramebufferAttachmentParameterivEXTFn(
