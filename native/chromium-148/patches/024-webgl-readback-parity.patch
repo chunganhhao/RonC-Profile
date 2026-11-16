@@ -39,13 +39,17 @@ diff --git a/gpu/command_buffer/service/gles2_cmd_validation_implementation_auto
 diff --git a/gpu/command_buffer/service/gles2_cmd_decoder.cc b/gpu/command_buffer/service/gles2_cmd_decoder.cc
 --- a/gpu/command_buffer/service/gles2_cmd_decoder.cc
 +++ b/gpu/command_buffer/service/gles2_cmd_decoder.cc
-@@ -7387,6 +7387,16 @@
+@@ -7387,6 +7387,20 @@
      GLsizei params_size) {
    const char kFunctionName[] = "glGetFramebufferAttachmentParameteriv";
    Framebuffer* framebuffer = GetFramebufferInfoForTarget(target);
 +  if (pname == GL_TEXTURE_WIDTH || pname == GL_TEXTURE_HEIGHT) {
 +    const Framebuffer::Attachment* att =
 +        framebuffer ? framebuffer->GetAttachment(attachment) : nullptr;
++    if (att && att->samples() > 0) {
++      *params = -1;
++      return;
++    }
 +    const gfx::Size size =
 +        att ? gfx::Size(att->width(), att->height())
 +            : (framebuffer ? framebuffer->GetFramebufferValidSize()
@@ -59,7 +63,7 @@ diff --git a/gpu/command_buffer/service/gles2_cmd_decoder.cc b/gpu/command_buffe
 diff --git a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
 --- a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
 +++ b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
-@@ -1641,6 +1641,77 @@
+@@ -1641,6 +1641,86 @@
  
    CheckErrorCallbackState();
  
@@ -85,11 +89,20 @@ diff --git a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc b
 +        api()->glBindRenderbufferEXTFn(GL_RENDERBUFFER,
 +                                       static_cast<GLuint>(object));
 +      }
-+      api()->glGetRenderbufferParameterivEXTFn(
-+          GL_RENDERBUFFER,
-+          pname == GL_TEXTURE_WIDTH ? GL_RENDERBUFFER_WIDTH
-+                                    : GL_RENDERBUFFER_HEIGHT,
-+          params);
++      GLint samples = 0;
++      if (feature_info_->gl_version_info().is_es3) {
++        api()->glGetRenderbufferParameterivEXTFn(
++            GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &samples);
++      }
++      if (samples > 0) {
++        *params = -1;
++      } else {
++        api()->glGetRenderbufferParameterivEXTFn(
++            GL_RENDERBUFFER,
++            pname == GL_TEXTURE_WIDTH ? GL_RENDERBUFFER_WIDTH
++                                      : GL_RENDERBUFFER_HEIGHT,
++            params);
++      }
 +      if (previous != object) {
 +        api()->glBindRenderbufferEXTFn(GL_RENDERBUFFER,
 +                                       static_cast<GLuint>(previous));
@@ -164,7 +177,7 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
  #include <memory>
  #include <utility>
  
-@@ -5125,6 +5127,184 @@
+@@ -5125,6 +5127,227 @@
    ReadPixelsHelper(x, y, width, height, format, type, pixels.Get(), 0);
  }
  
@@ -179,7 +192,9 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
 +  if (!command->HasSwitch(switches::kFingerprint) ||
 +      command->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") !=
 +          std::string::npos ||
-+      width <= 0 || height <= 0) {
++      width <= 0 || height <= 0 ||
++      !(base::CheckedNumeric<int32_t>(x) + width).IsValid() ||
++      !(base::CheckedNumeric<int32_t>(y) + height).IsValid()) {
 +    return false;
 +  }
 +  SkColorType color_type;
@@ -192,9 +207,25 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
 +  } else {
 +    return false;  // Existing native noise contract excludes FLOAT/integer/HDR.
 +  }
++  const size_t type_align = type == GL_UNSIGNED_BYTE ? 1u : 2u;
++  if (pack_buffer &&
++      (pack_offset < 0 ||
++       (static_cast<uint64_t>(pack_offset) % type_align) != 0)) {
++    return false;
++  }
++  const auto pack = GetPackPixelStoreParams();
++  const int64_t data_store_width = pack.row_length > 0 ? pack.row_length : width;
++  if (static_cast<int64_t>(pack.skip_pixels) + width > data_store_width) {
++    return false;
++  }
 +  const GLenum target = IsWebGL2() ? GL_READ_FRAMEBUFFER : GL_FRAMEBUFFER;
-+  if (ContextGL()->CheckFramebufferStatus(target) != GL_FRAMEBUFFER_COMPLETE ||
-+      (framebuffer && framebuffer->GetReadBuffer() == GL_NONE)) {
++  if (ContextGL()->CheckFramebufferStatus(target) != GL_FRAMEBUFFER_COMPLETE) {
++    return false;
++  }
++  if (framebuffer &&
++      (framebuffer->GetReadBuffer() == GL_NONE ||
++       (!framebuffer->Opaque() &&
++        !framebuffer->GetAttachmentObject(framebuffer->GetReadBuffer())))) {
 +    return false;
 +  }
 +  if (!framebuffer && IsWebGL2()) {
@@ -233,7 +264,10 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
 +        target, framebuffer->GetReadBuffer(), kInternalTextureHeight,
 +        &source_height);
 +  }
-+  if (source_width <= 0 || source_height <= 0) {
++  if (source_width < 0 || source_height < 0) {
++    return false;  // Multisampled attachment -> let driver emit INVALID_OPERATION.
++  }
++  if (source_width == 0 || source_height == 0) {
 +    GLint attachment_type = GL_NONE;
 +    if (framebuffer) {
 +      ContextGL()->GetFramebufferAttachmentParameteriv(
@@ -261,7 +295,6 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
 +                      "Native readback budget exceeded");
 +    return true;  // Fail closed; never fall back to an unprotected read.
 +  }
-+  const auto pack = GetPackPixelStoreParams();
 +  unsigned bytes = 0;
 +  unsigned padding = 0;
 +  unsigned skip = 0;
@@ -285,6 +318,8 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
 +    return true;
 +  }
 +  Vector<uint8_t> source(static_cast<wtf_size_t>(source_size));
++  uint8_t* tail = UNSAFE_TODO(source.data() + source_size - pixel_size);
++  UNSAFE_TODO(std::memset(tail, 0xA5, pixel_size));
 +  if (pack_buffer) {
 +    ContextGL()->BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 +  }
@@ -296,8 +331,29 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
 +  }
 +  ContextGL()->ReadPixels(0, 0, source_width, source_height, format, type,
 +                          source.data());
++  bool read_succeeded = false;
++  for (size_t i = 0; i < pixel_size; ++i) {
++    if (UNSAFE_TODO(tail[i]) != 0xA5) {
++      read_succeeded = true;
++      break;
++    }
++  }
++  if (!read_succeeded) {
++    uint8_t probe[4] = {0x5A, 0x5A, 0x5A, 0x5A};
++    ContextGL()->ReadPixels(source_width - 1, source_height - 1, 1, 1, format,
++                            type, probe);
++    for (size_t i = 0; i < pixel_size; ++i) {
++      if (UNSAFE_TODO(probe[i]) != 0x5A) {
++        read_succeeded = true;
++        break;
++      }
++    }
++  }
 +  DrawingBufferClientRestorePixelPackParameters();
 +  DrawingBufferClientRestorePixelPackBufferBinding();
++  if (!read_succeeded) {
++    return true;
++  }
 +  // Both canvas exports and native noise use top-down source coordinates.
 +  for (int row = 0; row < source_height / 2; ++row) {
 +    uint8_t* top = UNSAFE_TODO(
@@ -349,7 +405,7 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
  void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
                                                   GLint y,
                                                   GLsizei width,
-@@ -5198,37 +5378,9 @@
+@@ -5198,37 +5421,9 @@
      if (!binder.Succeeded()) {
        return;
      }

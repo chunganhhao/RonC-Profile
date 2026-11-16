@@ -402,6 +402,103 @@ COLLECT = """async () => {
     const bad = new Uint16Array(32 * 32);
     gl2.readPixels(0, 0, 32, 32, gl2.RGB, gl2.UNSIGNED_SHORT_5_6_5, bad);
     if (gl2.getError() !== gl2.INVALID_OPERATION) webglParityMismatch++;
+    const msSamples = Math.min(4, gl2.getParameter(gl2.MAX_SAMPLES));
+    if (msSamples >= 2) {
+      const fMs = gl2.createFramebuffer(), rMs = gl2.createRenderbuffer();
+      const fSs = gl2.createFramebuffer(), rSs = gl2.createRenderbuffer();
+      const bMs = gl2.createBuffer();
+      try {
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, fSs);
+        gl2.bindRenderbuffer(gl2.RENDERBUFFER, rSs);
+        gl2.renderbufferStorage(gl2.RENDERBUFFER, gl2.RGBA8, 16, 16);
+        gl2.framebufferRenderbuffer(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.RENDERBUFFER, rSs);
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, fMs);
+        gl2.bindRenderbuffer(gl2.RENDERBUFFER, rMs);
+        gl2.renderbufferStorageMultisample(gl2.RENDERBUFFER, msSamples, gl2.RGBA8, 16, 16);
+        gl2.framebufferRenderbuffer(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.RENDERBUFFER, rMs);
+        while (gl2.getError() !== gl2.NO_ERROR) {}
+        const msArr = new Uint8Array(16).fill(0xA5);
+        gl2.readPixels(0, 0, 2, 2, gl2.RGBA, gl2.UNSIGNED_BYTE, msArr);
+        if (gl2.getError() !== gl2.INVALID_OPERATION || msArr.some(v => v !== 0xA5)) webglParityMismatch++;
+        gl2.bindFramebuffer(gl2.READ_FRAMEBUFFER, fMs);
+        gl2.bindFramebuffer(gl2.DRAW_FRAMEBUFFER, fSs);
+        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, bMs);
+        gl2.bufferData(gl2.PIXEL_PACK_BUFFER, new Uint8Array(64).fill(0xA5), gl2.STREAM_READ);
+        gl2.readPixels(0, 0, 2, 2, gl2.RGBA, gl2.UNSIGNED_BYTE, 8);
+        const msPboErr = gl2.getError();
+        const msPboOut = new Uint8Array(64);
+        gl2.getBufferSubData(gl2.PIXEL_PACK_BUFFER, 0, msPboOut);
+        if (msPboErr !== gl2.INVALID_OPERATION || msPboOut.some(v => v !== 0xA5)) webglParityMismatch++;
+        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
+      } finally {
+        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
+        gl2.deleteBuffer(bMs);
+        gl2.deleteRenderbuffer(rMs);
+        gl2.deleteFramebuffer(fMs);
+        gl2.deleteRenderbuffer(rSs);
+        gl2.deleteFramebuffer(fSs);
+      }
+    }
+    for (const [intFmt, fmt, typ] of [
+      [gl2.RGB565, gl2.RGB, gl2.UNSIGNED_SHORT_5_6_5],
+      [gl2.RGBA4, gl2.RGBA, gl2.UNSIGNED_SHORT_4_4_4_4],
+    ]) {
+      const f = gl2.createFramebuffer(), r = gl2.createRenderbuffer(), b = gl2.createBuffer();
+      try {
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, f);
+        gl2.bindRenderbuffer(gl2.RENDERBUFFER, r);
+        gl2.renderbufferStorage(gl2.RENDERBUFFER, intFmt, 16, 16);
+        gl2.framebufferRenderbuffer(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.RENDERBUFFER, r);
+        gl2.clearColor(0.7, 0.3, 0.5, 1.0); gl2.clear(gl2.COLOR_BUFFER_BIT);
+        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, b);
+        gl2.bufferData(gl2.PIXEL_PACK_BUFFER, new Uint8Array(64).fill(0xA5), gl2.STREAM_READ);
+        while (gl2.getError() !== gl2.NO_ERROR) {}
+        gl2.readPixels(0, 0, 2, 2, fmt, typ, 1);
+        const oddErr = gl2.getError();
+        const oddOut = new Uint8Array(64);
+        gl2.getBufferSubData(gl2.PIXEL_PACK_BUFFER, 0, oddOut);
+        if (oddErr !== gl2.INVALID_OPERATION || oddOut.some(v => v !== 0xA5)) webglParityMismatch++;
+      } finally {
+        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
+        gl2.deleteBuffer(b);
+        gl2.deleteRenderbuffer(r);
+        gl2.deleteFramebuffer(f);
+      }
+    }
+    {
+      const f = gl2.createFramebuffer(), r = gl2.createRenderbuffer();
+      try {
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, f);
+        gl2.bindRenderbuffer(gl2.RENDERBUFFER, r);
+        gl2.renderbufferStorage(gl2.RENDERBUFFER, gl2.RGBA8, 8, 8);
+        gl2.framebufferRenderbuffer(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.RENDERBUFFER, r);
+        while (gl2.getError() !== gl2.NO_ERROR) {}
+        const invPack = new Uint8Array(64).fill(0xA5);
+        gl2.pixelStorei(gl2.PACK_SKIP_PIXELS, 2);
+        gl2.pixelStorei(gl2.PACK_ROW_LENGTH, 0);
+        gl2.readPixels(0, 0, 2, 2, gl2.RGBA, gl2.UNSIGNED_BYTE, invPack);
+        if (gl2.getError() !== gl2.INVALID_OPERATION || invPack.some(v => v !== 0xA5)) webglParityMismatch++;
+        gl2.pixelStorei(gl2.PACK_SKIP_PIXELS, 0);
+        gl2.pixelStorei(gl2.PACK_ROW_LENGTH, 2);
+        gl2.readPixels(0, 0, 4, 2, gl2.RGBA, gl2.UNSIGNED_BYTE, invPack);
+        if (gl2.getError() !== gl2.INVALID_OPERATION || invPack.some(v => v !== 0xA5)) webglParityMismatch++;
+        gl2.pixelStorei(gl2.PACK_ROW_LENGTH, 0);
+        const ovArr = new Uint8Array(16).fill(0xA5);
+        gl2.readPixels(2147483647, 0, 2, 2, gl2.RGBA, gl2.UNSIGNED_BYTE, ovArr);
+        if (gl2.getError() !== gl2.INVALID_OPERATION || ovArr.some(v => v !== 0xA5)) webglParityMismatch++;
+        gl2.enable(0x1234);
+        gl2.readPixels(0, 0, 2, 2, gl2.RGBA, gl2.UNSIGNED_BYTE, ovArr);
+        if (gl2.getError() !== gl2.INVALID_ENUM) webglParityMismatch++;
+      } finally {
+        gl2.pixelStorei(gl2.PACK_SKIP_PIXELS, 0);
+        gl2.pixelStorei(gl2.PACK_ROW_LENGTH, 0);
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
+        gl2.deleteRenderbuffer(r);
+        gl2.deleteFramebuffer(f);
+      }
+    }
   }
   results.webglParityMismatch = webglParityMismatch;
   sharedPorts.forEach(port=>port.close());
