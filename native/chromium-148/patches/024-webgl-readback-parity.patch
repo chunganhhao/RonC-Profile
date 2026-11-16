@@ -1,0 +1,418 @@
+diff --git a/gpu/command_buffer/common/gles2_cmd_utils.cc b/gpu/command_buffer/common/gles2_cmd_utils.cc
+--- a/gpu/command_buffer/common/gles2_cmd_utils.cc
++++ b/gpu/command_buffer/common/gles2_cmd_utils.cc
+@@ -343,6 +343,10 @@
+     case GL_BUFFER_MAP_OFFSET:
+       return 1;
+ 
++    // Internal attachment extents; Blink's JavaScript enum validation is unchanged.
++    case GL_TEXTURE_WIDTH:
++    case GL_TEXTURE_HEIGHT:
++      return 1;
+     // -- glGetFramebufferAttachmentParameteriv
+     case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE:
+       return 1;
+diff --git a/gpu/command_buffer/build_gles2_cmd_buffer.py b/gpu/command_buffer/build_gles2_cmd_buffer.py
+--- a/gpu/command_buffer/build_gles2_cmd_buffer.py
++++ b/gpu/command_buffer/build_gles2_cmd_buffer.py
+@@ -666,6 +666,8 @@
+   'FramebufferAttachmentParameter': {
+     'type': 'GLenum',
+     'valid': [
++      'GL_TEXTURE_WIDTH',
++      'GL_TEXTURE_HEIGHT',
+       'GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE',
+       'GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME',
+       'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL',
+diff --git a/gpu/command_buffer/service/gles2_cmd_validation_implementation_autogen.h b/gpu/command_buffer/service/gles2_cmd_validation_implementation_autogen.h
+--- a/gpu/command_buffer/service/gles2_cmd_validation_implementation_autogen.h
++++ b/gpu/command_buffer/service/gles2_cmd_validation_implementation_autogen.h
+@@ -233,6 +233,8 @@
+ }
+ 
+ static const GLenum valid_framebuffer_attachment_parameter_table[] = {
++    GL_TEXTURE_WIDTH,
++    GL_TEXTURE_HEIGHT,
+     GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
+     GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
+     GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL,
+diff --git a/gpu/command_buffer/service/gles2_cmd_decoder.cc b/gpu/command_buffer/service/gles2_cmd_decoder.cc
+--- a/gpu/command_buffer/service/gles2_cmd_decoder.cc
++++ b/gpu/command_buffer/service/gles2_cmd_decoder.cc
+@@ -7387,6 +7387,16 @@
+     GLsizei params_size) {
+   const char kFunctionName[] = "glGetFramebufferAttachmentParameteriv";
+   Framebuffer* framebuffer = GetFramebufferInfoForTarget(target);
++  if (pname == GL_TEXTURE_WIDTH || pname == GL_TEXTURE_HEIGHT) {
++    const Framebuffer::Attachment* att =
++        framebuffer ? framebuffer->GetAttachment(attachment) : nullptr;
++    const gfx::Size size =
++        att ? gfx::Size(att->width(), att->height())
++            : (framebuffer ? framebuffer->GetFramebufferValidSize()
++                           : GetBoundReadFramebufferSize());
++    *params = pname == GL_TEXTURE_WIDTH ? size.width() : size.height();
++    return;
++  }
+   if (!framebuffer) {
+     if (!feature_info_->IsWebGL2OrES3Context()) {
+       LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, kFunctionName,
+diff --git a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
+--- a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
++++ b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
+@@ -1641,6 +1641,77 @@
+ 
+   CheckErrorCallbackState();
+ 
++  if (pname == GL_TEXTURE_WIDTH || pname == GL_TEXTURE_HEIGHT) {
++    if (bufsize < 1) {
++      *length = 0;
++      InsertError(GL_INVALID_OPERATION, "No space for attachment extent.");
++      return error::kNoError;
++    }
++    GLint object_type = GL_NONE;
++    GLint object = 0;
++    api()->glGetFramebufferAttachmentParameterivEXTFn(
++        target, updated_attachment, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
++        &object_type);
++    api()->glGetFramebufferAttachmentParameterivEXTFn(
++        target, updated_attachment, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
++        &object);
++    *params = 0;
++    if (object_type == GL_RENDERBUFFER && object > 0) {
++      GLint previous = 0;
++      api()->glGetIntegervFn(GL_RENDERBUFFER_BINDING, &previous);
++      if (previous != object) {
++        api()->glBindRenderbufferEXTFn(GL_RENDERBUFFER,
++                                       static_cast<GLuint>(object));
++      }
++      api()->glGetRenderbufferParameterivEXTFn(
++          GL_RENDERBUFFER,
++          pname == GL_TEXTURE_WIDTH ? GL_RENDERBUFFER_WIDTH
++                                    : GL_RENDERBUFFER_HEIGHT,
++          params);
++      if (previous != object) {
++        api()->glBindRenderbufferEXTFn(GL_RENDERBUFFER,
++                                       static_cast<GLuint>(previous));
++      }
++    } else if (object_type == GL_TEXTURE && object > 0) {
++      GLuint client_id = 0;
++      scoped_refptr<TexturePassthrough> texture;
++      if (resources_->texture_id_map.GetClientID(static_cast<GLuint>(object),
++                                                 &client_id) &&
++          resources_->texture_object_map.GetServiceID(client_id, &texture) &&
++          texture && api()->glGetTexLevelParameterivANGLEFn) {
++        GLint level = 0;
++        GLint face = 0;
++        api()->glGetFramebufferAttachmentParameterivEXTFn(
++            target, updated_attachment, GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL,
++            &level);
++        api()->glGetFramebufferAttachmentParameterivEXTFn(
++            target, updated_attachment,
++            GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE, &face);
++        const GLenum tex_target = texture->target();
++        const TextureTarget internal_type = GLenumToTextureTarget(tex_target);
++        if (internal_type < TextureTarget::kUnkown) {
++          const auto& unit_bindings =
++              bound_textures_[static_cast<size_t>(internal_type)];
++          const GLuint old_texture =
++              active_texture_unit_ < unit_bindings.size() &&
++                      unit_bindings[active_texture_unit_].texture
++                  ? unit_bindings[active_texture_unit_].texture->service_id()
++                  : 0;
++          if (old_texture != static_cast<GLuint>(object)) {
++            api()->glBindTextureFn(tex_target, static_cast<GLuint>(object));
++          }
++          api()->glGetTexLevelParameterivANGLEFn(
++              face ? static_cast<GLenum>(face) : tex_target, level, pname,
++              params);
++          if (old_texture != static_cast<GLuint>(object)) {
++            api()->glBindTextureFn(tex_target, old_texture);
++          }
++        }
++      }
++    }
++    *length = CheckErrorCallbackState() ? 0 : 1;
++    return error::kNoError;
++  }
+   api()->glGetFramebufferAttachmentParameterivRobustANGLEFn(
+       target, updated_attachment, pname, bufsize, length, params);
+ 
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h
+@@ -1958,6 +1958,11 @@
+   gfx::Rect SafeGetImageSize(Image*);
+   gfx::Rect GetImageDataSize(ImageData*);
+ 
++  // Canonical source readback for the native RGBA8/565/4444 noise contract.
++  bool ReadFingerprintPixels(WebGLFramebuffer*, GLint, GLint, GLsizei, GLsizei,
++                             GLenum, GLenum, uint8_t*, size_t, GLuint = 0,
++                             int64_t = 0);
++
+   // Helper implementing readPixels for WebGL 1.0 and 2.0.
+   void ReadPixelsHelper(GLint x,
+                         GLint y,
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -25,6 +25,8 @@
+ 
+ #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h"
+ 
++#include <algorithm>
++#include <cstring>
+ #include <memory>
+ #include <utility>
+ 
+@@ -5125,6 +5127,184 @@
+   ReadPixelsHelper(x, y, width, height, format, type, pixels.Get(), 0);
+ }
+ 
++
++bool WebGLRenderingContextBase::ReadFingerprintPixels(
++    WebGLFramebuffer* framebuffer, GLint x, GLint y, GLsizei width,
++    GLsizei height, GLenum format, GLenum type, uint8_t* data,
++    size_t destination_size, GLuint pack_buffer, int64_t pack_offset) {
++  constexpr GLenum kInternalTextureWidth = 0x1000;
++  constexpr GLenum kInternalTextureHeight = 0x1001;
++  const auto* command = base::CommandLine::ForCurrentProcess();
++  if (!command->HasSwitch(switches::kFingerprint) ||
++      command->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") !=
++          std::string::npos ||
++      width <= 0 || height <= 0) {
++    return false;
++  }
++  SkColorType color_type;
++  if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
++    color_type = kRGBA_8888_SkColorType;
++  } else if (format == GL_RGB && type == GL_UNSIGNED_SHORT_5_6_5) {
++    color_type = kRGB_565_SkColorType;
++  } else if (format == GL_RGBA && type == GL_UNSIGNED_SHORT_4_4_4_4) {
++    color_type = kARGB_4444_SkColorType;
++  } else {
++    return false;  // Existing native noise contract excludes FLOAT/integer/HDR.
++  }
++  const GLenum target = IsWebGL2() ? GL_READ_FRAMEBUFFER : GL_FRAMEBUFFER;
++  if (ContextGL()->CheckFramebufferStatus(target) != GL_FRAMEBUFFER_COMPLETE ||
++      (framebuffer && framebuffer->GetReadBuffer() == GL_NONE)) {
++    return false;
++  }
++  if (!framebuffer && IsWebGL2()) {
++    GLint read_buffer = GL_BACK;
++    ContextGL()->GetIntegerv(GL_READ_BUFFER, &read_buffer);
++    if (read_buffer == GL_NONE) {
++      return false;
++    }
++  }
++  GLint implementation_format = 0;
++  GLint implementation_type = 0;
++  ContextGL()->GetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT,
++                           &implementation_format);
++  ContextGL()->GetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE,
++                           &implementation_type);
++  const bool is_unorm_implementation_type =
++      implementation_type == GL_UNSIGNED_BYTE ||
++      implementation_type == GL_UNSIGNED_SHORT_5_6_5 ||
++      implementation_type == GL_UNSIGNED_SHORT_4_4_4_4 ||
++      implementation_type == GL_UNSIGNED_SHORT_5_5_5_1;
++  const bool matches_impl =
++      format == static_cast<GLenum>(implementation_format) &&
++      type == static_cast<GLenum>(implementation_type);
++  if (!matches_impl &&
++      !(format == GL_RGBA && type == GL_UNSIGNED_BYTE &&
++        is_unorm_implementation_type)) {
++    return false;  // Preserve the driver's validation for illegal read pairs.
++  }
++  GLint source_width = drawingBufferWidth();
++  GLint source_height = drawingBufferHeight();
++  if (framebuffer) {
++    ContextGL()->GetFramebufferAttachmentParameteriv(
++        target, framebuffer->GetReadBuffer(), kInternalTextureWidth,
++        &source_width);
++    ContextGL()->GetFramebufferAttachmentParameteriv(
++        target, framebuffer->GetReadBuffer(), kInternalTextureHeight,
++        &source_height);
++  }
++  if (source_width <= 0 || source_height <= 0) {
++    GLint attachment_type = GL_NONE;
++    if (framebuffer) {
++      ContextGL()->GetFramebufferAttachmentParameteriv(
++          target, framebuffer->GetReadBuffer(),
++          GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &attachment_type);
++    }
++    if (!framebuffer || attachment_type == GL_NONE) {
++      return false;  // Unattached readBuffer -> let driver emit INVALID_OPERATION.
++    }
++    SynthesizeGLError(GL_INVALID_OPERATION, "readPixels",
++                      "Native readback extent unavailable");
++    return true;
++  }
++  const SkAlphaType alpha_type = color_type == kRGB_565_SkColorType
++                                     ? kOpaque_SkAlphaType
++                                     : kUnpremul_SkAlphaType;
++  const SkImageInfo info =
++      SkImageInfo::Make(source_width, source_height, color_type, alpha_type);
++  const size_t source_stride = info.minRowBytes();
++  const size_t source_size = info.computeMinByteSize();
++  constexpr size_t kMaxReadbackBytes = 256u * 1024u * 1024u;
++  if (info.isEmpty() || SkImageInfo::ByteSizeOverflowed(source_size) ||
++      source_size > kMaxReadbackBytes) {
++    SynthesizeGLError(GL_OUT_OF_MEMORY, "readPixels",
++                      "Native readback budget exceeded");
++    return true;  // Fail closed; never fall back to an unprotected read.
++  }
++  const auto pack = GetPackPixelStoreParams();
++  unsigned bytes = 0;
++  unsigned padding = 0;
++  unsigned skip = 0;
++  if (WebGLImageConversion::ComputeImageSizeInBytes(
++          format, type, width, height, 1, pack, &bytes, &padding, &skip) !=
++          GL_NO_ERROR ||
++      static_cast<uint64_t>(bytes) + skip > destination_size) {
++    SynthesizeGLError(GL_INVALID_OPERATION, "readPixels",
++                      "Invalid native pack layout");
++    return true;
++  }
++  const size_t pixel_size = info.bytesPerPixel();
++  const size_t row_bytes = static_cast<size_t>(width) * pixel_size;
++  const size_t stride =
++      static_cast<size_t>(pack.row_length ? pack.row_length : width) *
++          pixel_size +
++      padding;
++  if (row_bytes > kMaxReadbackBytes) {
++    SynthesizeGLError(GL_OUT_OF_MEMORY, "readPixels",
++                      "Native row budget exceeded");
++    return true;
++  }
++  Vector<uint8_t> source(static_cast<wtf_size_t>(source_size));
++  if (pack_buffer) {
++    ContextGL()->BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
++  }
++  ContextGL()->PixelStorei(GL_PACK_ALIGNMENT, 1);
++  if (IsWebGL2()) {
++    ContextGL()->PixelStorei(GL_PACK_ROW_LENGTH, 0);
++    ContextGL()->PixelStorei(GL_PACK_SKIP_PIXELS, 0);
++    ContextGL()->PixelStorei(GL_PACK_SKIP_ROWS, 0);
++  }
++  ContextGL()->ReadPixels(0, 0, source_width, source_height, format, type,
++                          source.data());
++  DrawingBufferClientRestorePixelPackParameters();
++  DrawingBufferClientRestorePixelPackBufferBinding();
++  // Both canvas exports and native noise use top-down source coordinates.
++  for (int row = 0; row < source_height / 2; ++row) {
++    uint8_t* top = UNSAFE_TODO(
++        source.data() + static_cast<size_t>(row) * source_stride);
++    uint8_t* bottom = UNSAFE_TODO(
++        source.data() +
++        static_cast<size_t>(source_height - 1 - row) * source_stride);
++    UNSAFE_TODO(std::swap_ranges(top, top + source_stride, bottom));
++  }
++  StaticBitmapImage::ShuffleSubchannelColorData(source.data(), info, 0, 0);
++  const int64_t left = std::max<int64_t>(0, -static_cast<int64_t>(x));
++  const int64_t right =
++      std::min<int64_t>(width, static_cast<int64_t>(source_width) - x);
++  Vector<uint8_t> pbo_row(
++      static_cast<wtf_size_t>(pack_buffer ? row_bytes : 0));
++  for (int row = 0; row < height; ++row) {
++    const uint64_t destination =
++        static_cast<uint64_t>(skip) + static_cast<uint64_t>(row) * stride;
++    if (destination > destination_size ||
++        row_bytes > destination_size - destination) {
++      SynthesizeGLError(GL_INVALID_OPERATION, "readPixels",
++                        "Native row exceeds destination");
++      return true;
++    }
++    uint8_t* output =
++        pack_buffer ? pbo_row.data() : UNSAFE_TODO(data + destination);
++    UNSAFE_TODO(std::memset(output, 0, row_bytes));
++    const int64_t sy = static_cast<int64_t>(y) + row;
++    if (sy >= 0 && sy < source_height && left < right) {
++      const size_t position =
++          static_cast<size_t>(source_height - 1 - sy) * source_stride +
++          static_cast<size_t>(static_cast<int64_t>(x) + left) * pixel_size;
++      UNSAFE_TODO(std::memcpy(
++          output + static_cast<size_t>(left) * pixel_size,
++          source.data() + position,
++          static_cast<size_t>(right - left) * pixel_size));
++    }
++    if (pack_buffer) {
++      ContextGL()->BufferSubData(
++          GL_PIXEL_PACK_BUFFER,
++          static_cast<GLintptr>(static_cast<uint64_t>(pack_offset) +
++                                destination),
++          static_cast<GLsizeiptr>(row_bytes), output);
++    }
++  }
++  return true;
++}
++
+ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
+                                                  GLint y,
+                                                  GLsizei width,
+@@ -5198,37 +5378,9 @@
+     if (!binder.Succeeded()) {
+       return;
+     }
+-    ContextGL()->ReadPixels(x, y, width, height, format, type, data);
+-
+-    // Anti-detect pixel noise bounded to verified packed formats (#99, #102).
+-    const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-    if (command_line->HasSwitch(switches::kFingerprint) &&
+-        (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+-         command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") == std::string::npos)) {
+-      const auto pack_params = GetPackPixelStoreParams();
+-      if (pack_params.row_length == 0 && pack_params.skip_pixels == 0 &&
+-          pack_params.skip_rows == 0 && pack_params.alignment <= 4) {
+-        std::optional<SkImageInfo> image_info;
+-        if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
+-          image_info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType,
+-                                         kUnpremul_SkAlphaType);
+-        } else if ((width & 1) == 0 && format == GL_RGB &&
+-                   type == GL_UNSIGNED_SHORT_5_6_5) {
+-          image_info = SkImageInfo::Make(width, height, kRGB_565_SkColorType,
+-                                         kOpaque_SkAlphaType);
+-        } else if ((width & 1) == 0 && format == GL_RGBA &&
+-                   type == GL_UNSIGNED_SHORT_4_4_4_4) {
+-          image_info = SkImageInfo::Make(width, height, kARGB_4444_SkColorType,
+-                                         kUnpremul_SkAlphaType);
+-        }
+-        if (image_info.has_value()) {
+-          const size_t min_bytes = image_info->computeMinByteSize();
+-          if (!SkImageInfo::ByteSizeOverflowed(min_bytes) &&
+-              buffer_size.ValueOrDie() >= min_bytes) {
+-            StaticBitmapImage::ShuffleSubchannelColorData(data, *image_info, x, y);
+-          }
+-        }
+-      }
++    if (!ReadFingerprintPixels(framebuffer, x, y, width, height, format, type,
++                               data, buffer_size.ValueOrDie())) {
++      ContextGL()->ReadPixels(x, y, width, height, format, type, data);
+     }
+   }
+ }
+diff --git a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
+--- a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
+@@ -904,13 +904,20 @@
+ 
+   ClearIfComposited(kClearCallerOther);
+ 
++  if (isContextLost() || !GetDrawingBuffer())
++    return;
++
+   {
+     ScopedDrawingBufferBinder binder(GetDrawingBuffer(), framebuffer);
+     if (!binder.Succeeded()) {
+       return;
+     }
+-    ContextGL()->ReadPixels(x, y, width, height, format, type,
+-                            reinterpret_cast<void*>(offset));
++    if (!ReadFingerprintPixels(framebuffer, x, y, width, height, format, type,
++                               nullptr, static_cast<size_t>(size),
++                               buffer->Object(), offset)) {
++      ContextGL()->ReadPixels(x, y, width, height, format, type,
++                              reinterpret_cast<void*>(offset));
++    }
+   }
+ }
+ 

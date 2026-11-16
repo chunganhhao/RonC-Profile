@@ -7,6 +7,7 @@ Passing this matrix is not permission to replace a production core/profile.
 import argparse
 import asyncio
 import hashlib
+import importlib.util
 import json
 import math
 import threading
@@ -178,6 +179,231 @@ COLLECT = """async () => {
     }
   }
   results.webglOob = webglOob;
+  let webglParityMismatch = 0;
+  const sha256Hex = async bytes => Array.from(
+    new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+  ).map(b => b.toString(16).padStart(2, '0')).join('');
+  const drawParityScene = (gl, w, h, fbo=null) => {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, w, h);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.clearColor(0.3, 0.6, 0.9, 1.0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(0, 0, Math.floor(w / 2), h);
+    gl.clearColor(0.8, 0.2, 0.4, 1.0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.scissor(Math.floor(w / 4), Math.floor(h / 4), Math.max(2, Math.floor(w / 2)), Math.max(2, Math.floor(h / 2)));
+    gl.clearColor(0.2, 0.75, 0.45, 1.0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.disable(gl.SCISSOR_TEST);
+  };
+  const pc1 = document.createElement('canvas'); pc1.width = pc1.height = 32;
+  const gl1 = pc1.getContext('webgl', {preserveDrawingBuffer: true, antialias: false});
+  if (!gl1) {
+    webglParityMismatch++;
+    results.webglDigest = '';
+  } else {
+    while (gl1.getError() !== gl1.NO_ERROR) {}
+    drawParityScene(gl1, 32, 32, null);
+    gl1.pixelStorei(gl1.PACK_ALIGNMENT, 4);
+    const full4 = new Uint8Array(32 * 32 * 4);
+    gl1.readPixels(0, 0, 32, 32, gl1.RGBA, gl1.UNSIGNED_BYTE, full4);
+    results.webglDigest = await sha256Hex(full4);
+    gl1.pixelStorei(gl1.PACK_ALIGNMENT, 8);
+    const pack8 = new Uint8Array(32 * 32 * 4);
+    gl1.readPixels(0, 0, 32, 32, gl1.RGBA, gl1.UNSIGNED_BYTE, pack8);
+    gl1.pixelStorei(gl1.PACK_ALIGNMENT, 1);
+    const pack1 = new Uint8Array(32 * 32 * 4);
+    gl1.readPixels(0, 0, 32, 32, gl1.RGBA, gl1.UNSIGNED_BYTE, pack1);
+    const tiny = new Uint8Array(32 * 32 * 4);
+    const px = new Uint8Array(4);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+      gl1.readPixels(x, y, 1, 1, gl1.RGBA, gl1.UNSIGNED_BYTE, px);
+      tiny.set(px, (y * 32 + x) * 4);
+    }
+    for (let i = 0; i < full4.length; i++) {
+      if (pack8[i] !== full4[i] || pack1[i] !== full4[i] || tiny[i] !== full4[i]) webglParityMismatch++;
+    }
+    for (const align of [4, 8]) {
+      gl1.pixelStorei(gl1.PACK_ALIGNMENT, align);
+      const sub = new Uint8Array(24 * 24 * 4);
+      gl1.readPixels(4, 4, 24, 24, gl1.RGBA, gl1.UNSIGNED_BYTE, sub);
+      for (let r = 0; r < 24; r++) for (let c = 0; c < 24 * 4; c++) {
+        if (sub[r * 24 * 4 + c] !== full4[(r + 4) * 32 * 4 + 4 * 4 + c]) webglParityMismatch++;
+      }
+    }
+    gl1.pixelStorei(gl1.PACK_ALIGNMENT, 4);
+    const neg = new Uint8Array(8 * 8 * 4);
+    neg.fill(0x5A);
+    gl1.readPixels(-2, -2, 8, 8, gl1.RGBA, gl1.UNSIGNED_BYTE, neg);
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const dst = (r * 8 + c) * 4;
+      if (r < 2 || c < 2) {
+        if (neg[dst] !== 0 || neg[dst + 1] !== 0 || neg[dst + 2] !== 0 || neg[dst + 3] !== 0) webglParityMismatch++;
+      } else {
+        const src = ((r - 2) * 32 + (c - 2)) * 4;
+        for (let ch = 0; ch < 4; ch++) if (neg[dst + ch] !== full4[src + ch]) webglParityMismatch++;
+      }
+    }
+    if (gl1.getError() !== gl1.NO_ERROR) webglParityMismatch++;
+  }
+  const pc2 = document.createElement('canvas'); pc2.width = pc2.height = 32;
+  const gl2 = pc2.getContext('webgl2', {preserveDrawingBuffer: true, antialias: false});
+  if (!gl2) {
+    webglParityMismatch++;
+  } else {
+    while (gl2.getError() !== gl2.NO_ERROR) {}
+    const checkFboParity = (w, h, intFmt, fmt, typ, Arr, chPerPx, fboSetup) => {
+      const fbo = gl2.createFramebuffer();
+      const cleanup = fboSetup(fbo);
+      try {
+        if (gl2.checkFramebufferStatus(gl2.FRAMEBUFFER) !== gl2.FRAMEBUFFER_COMPLETE) {
+          webglParityMismatch++; return;
+        }
+        drawParityScene(gl2, w, h, fbo);
+        gl2.pixelStorei(gl2.PACK_ALIGNMENT, 4);
+        const a4 = new Arr(w * h * chPerPx);
+        gl2.readPixels(0, 0, w, h, fmt, typ, a4);
+        gl2.pixelStorei(gl2.PACK_ALIGNMENT, 8);
+        const a8 = new Arr(w * h * chPerPx);
+        gl2.readPixels(0, 0, w, h, fmt, typ, a8);
+        for (let i = 0; i < a4.length; i++) if (a8[i] !== a4[i]) webglParityMismatch++;
+        const sx = Math.min(2, w - 1), sy = Math.min(3, h - 1);
+        const sw = Math.max(1, w - 7), sh = Math.max(1, h - 6);
+        const elemBytes = Arr.BYTES_PER_ELEMENT;
+        const pxBytes = chPerPx * elemBytes;
+        const rowElems = sw * chPerPx;
+        for (const align of [4, 8]) {
+          gl2.pixelStorei(gl2.PACK_ALIGNMENT, align);
+          const rowBytes = sw * pxBytes;
+          const strideBytes = Math.ceil(rowBytes / align) * align;
+          const strideElems = strideBytes / elemBytes;
+          const neededBytes = (sh - 1) * strideBytes + rowBytes;
+          const sub = new Arr(Math.ceil(neededBytes / elemBytes));
+          sub.fill(0x55);
+          gl2.readPixels(sx, sy, sw, sh, fmt, typ, sub);
+          for (let r = 0; r < sh; r++) {
+            for (let c = 0; c < rowElems; c++) {
+              if (sub[r * strideElems + c] !== a4[(r + sy) * w * chPerPx + sx * chPerPx + c]) {
+                webglParityMismatch++;
+              }
+            }
+            if (r < sh - 1) {
+              for (let c = rowElems; c < strideElems; c++) {
+                if (sub[r * strideElems + c] !== 0x55) webglParityMismatch++;
+              }
+            }
+          }
+        }
+        gl2.pixelStorei(gl2.PACK_ALIGNMENT, 4);
+        const one = new Arr(chPerPx);
+        gl2.readPixels(sx + 1, sy + 1, 1, 1, fmt, typ, one);
+        for (let ch = 0; ch < chPerPx; ch++) {
+          if (one[ch] !== a4[((sy + 1) * w + sx + 1) * chPerPx + ch]) webglParityMismatch++;
+        }
+        if (fmt === gl2.RGB && typ === gl2.UNSIGNED_SHORT_5_6_5) {
+          gl2.pixelStorei(gl2.PACK_ALIGNMENT, 4);
+          const r4 = new Uint8Array(w * h * 4);
+          gl2.readPixels(0, 0, w, h, gl2.RGBA, gl2.UNSIGNED_BYTE, r4);
+          gl2.pixelStorei(gl2.PACK_ALIGNMENT, 8);
+          const r8 = new Uint8Array(w * h * 4);
+          gl2.readPixels(0, 0, w, h, gl2.RGBA, gl2.UNSIGNED_BYTE, r8);
+          for (let i = 0; i < r4.length; i++) if (r8[i] !== r4[i]) webglParityMismatch++;
+        }
+      } finally {
+        gl2.pixelStorei(gl2.PACK_ALIGNMENT, 4);
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
+        cleanup();
+        gl2.deleteFramebuffer(fbo);
+      }
+    };
+    checkFboParity(24, 20, gl2.RGBA8, gl2.RGBA, gl2.UNSIGNED_BYTE, Uint8Array, 4, fbo => {
+      const rb = gl2.createRenderbuffer();
+      gl2.bindFramebuffer(gl2.FRAMEBUFFER, fbo);
+      gl2.bindRenderbuffer(gl2.RENDERBUFFER, rb);
+      gl2.renderbufferStorage(gl2.RENDERBUFFER, gl2.RGBA8, 24, 20);
+      gl2.framebufferRenderbuffer(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.RENDERBUFFER, rb);
+      return () => gl2.deleteRenderbuffer(rb);
+    });
+    checkFboParity(24, 20, gl2.RGBA8, gl2.RGBA, gl2.UNSIGNED_BYTE, Uint8Array, 4, fbo => {
+      const tex = gl2.createTexture();
+      gl2.bindFramebuffer(gl2.FRAMEBUFFER, fbo);
+      gl2.bindTexture(gl2.TEXTURE_2D, tex);
+      gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA8, 24, 20, 0, gl2.RGBA, gl2.UNSIGNED_BYTE, null);
+      gl2.framebufferTexture2D(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.TEXTURE_2D, tex, 0);
+      return () => gl2.deleteTexture(tex);
+    });
+    checkFboParity(16, 16, gl2.RGBA8, gl2.RGBA, gl2.UNSIGNED_BYTE, Uint8Array, 4, fbo => {
+      const cube = gl2.createTexture();
+      gl2.bindFramebuffer(gl2.FRAMEBUFFER, fbo);
+      gl2.bindTexture(gl2.TEXTURE_CUBE_MAP, cube);
+      for (let f = 0; f < 6; f++) {
+        gl2.texImage2D(gl2.TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, gl2.RGBA8, 16, 16, 0, gl2.RGBA, gl2.UNSIGNED_BYTE, null);
+      }
+      gl2.framebufferTexture2D(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.TEXTURE_CUBE_MAP_POSITIVE_Y, cube, 0);
+      return () => gl2.deleteTexture(cube);
+    });
+    for (const [intFmt, fmt, typ] of [
+      [gl2.RGB565, gl2.RGB, gl2.UNSIGNED_SHORT_5_6_5],
+      [gl2.RGBA4, gl2.RGBA, gl2.UNSIGNED_SHORT_4_4_4_4],
+    ]) {
+      checkFboParity(24, 20, intFmt, fmt, typ, Uint16Array, 1, fbo => {
+        const rb = gl2.createRenderbuffer();
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, fbo);
+        gl2.bindRenderbuffer(gl2.RENDERBUFFER, rb);
+        gl2.renderbufferStorage(gl2.RENDERBUFFER, intFmt, 24, 20);
+        gl2.framebufferRenderbuffer(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.RENDERBUFFER, rb);
+        return () => gl2.deleteRenderbuffer(rb);
+      });
+    }
+    drawParityScene(gl2, 32, 32, null);
+    gl2.pixelStorei(gl2.PACK_ALIGNMENT, 4);
+    gl2.pixelStorei(gl2.PACK_ROW_LENGTH, 0);
+    gl2.pixelStorei(gl2.PACK_SKIP_PIXELS, 0);
+    gl2.pixelStorei(gl2.PACK_SKIP_ROWS, 0);
+    const full2 = new Uint8Array(32 * 32 * 4);
+    gl2.readPixels(0, 0, 32, 32, gl2.RGBA, gl2.UNSIGNED_BYTE, full2);
+    const pbo = gl2.createBuffer();
+    const initBuf = new Uint8Array(2048); initBuf.fill(0xA5);
+    gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, pbo);
+    gl2.bufferData(gl2.PIXEL_PACK_BUFFER, initBuf, gl2.STREAM_READ);
+    gl2.pixelStorei(gl2.PACK_ALIGNMENT, 8);
+    gl2.pixelStorei(gl2.PACK_ROW_LENGTH, 17);
+    gl2.pixelStorei(gl2.PACK_SKIP_PIXELS, 2);
+    gl2.pixelStorei(gl2.PACK_SKIP_ROWS, 1);
+    gl2.readPixels(4, 4, 15, 10, gl2.RGBA, gl2.UNSIGNED_BYTE, 16);
+    if (gl2.getError() !== gl2.NO_ERROR) webglParityMismatch++;
+    if (gl2.getParameter(gl2.PACK_ALIGNMENT) !== 8 ||
+        gl2.getParameter(gl2.PACK_ROW_LENGTH) !== 17 ||
+        gl2.getParameter(gl2.PACK_SKIP_PIXELS) !== 2 ||
+        gl2.getParameter(gl2.PACK_SKIP_ROWS) !== 1 ||
+        gl2.getParameter(gl2.PIXEL_PACK_BUFFER_BINDING) !== pbo) {
+      webglParityMismatch++;
+    }
+    const pboOut = new Uint8Array(2048);
+    gl2.getBufferSubData(gl2.PIXEL_PACK_BUFFER, 0, pboOut);
+    const startOff = 16 + 1 * 72 + 2 * 4;
+    for (let i = 0; i < startOff; i++) if (pboOut[i] !== 0xA5) webglParityMismatch++;
+    for (let r = 0; r < 10; r++) {
+      const rowOff = startOff + r * 72;
+      for (let b = 0; b < 60; b++) {
+        if (pboOut[rowOff + b] !== full2[(r + 4) * 32 * 4 + 4 * 4 + b]) webglParityMismatch++;
+      }
+      if (r < 9) {
+        for (let b = 60; b < 72; b++) if (pboOut[rowOff + b] !== 0xA5) webglParityMismatch++;
+      }
+    }
+    const endOff = startOff + 9 * 72 + 60;
+    for (let i = endOff; i < pboOut.length; i++) if (pboOut[i] !== 0xA5) webglParityMismatch++;
+    gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
+    gl2.deleteBuffer(pbo);
+    gl2.pixelStorei(gl2.PACK_ALIGNMENT, 4);
+    gl2.pixelStorei(gl2.PACK_ROW_LENGTH, 0);
+    gl2.pixelStorei(gl2.PACK_SKIP_PIXELS, 0);
+    gl2.pixelStorei(gl2.PACK_SKIP_ROWS, 0);
+    const bad = new Uint16Array(32 * 32);
+    gl2.readPixels(0, 0, 32, 32, gl2.RGB, gl2.UNSIGNED_SHORT_5_6_5, bad);
+    if (gl2.getError() !== gl2.INVALID_OPERATION) webglParityMismatch++;
+  }
+  results.webglParityMismatch = webglParityMismatch;
   sharedPorts.forEach(port=>port.close());
   return results;
 } """
@@ -253,9 +479,20 @@ async def verify(executable: Path, output: Path) -> None:
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    with executable.open("rb") as binary:
+    resolved_executable = executable.resolve()
+    with resolved_executable.open("rb") as binary:
         binary_sha256 = hashlib.file_digest(binary, "sha256").hexdigest()
     report = {"binary_sha256": binary_sha256, "acceptance": "FAILED_OR_INCOMPLETE", "cases": {}}
+    if resolved_executable.parts[-4:-1] == ("Chromium.app", "Contents", "MacOS"):
+        # Load native_bundle directly so CI need not install full app runtime deps (aiohttp/src).
+        bundle_mod_path = Path(__file__).resolve().parents[2] / "chrome_engine/native_bundle.py"
+        spec = importlib.util.spec_from_file_location(
+            "chrome_engine_native_bundle", bundle_mod_path
+        )
+        assert spec and spec.loader
+        bundle_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bundle_mod)
+        report["bundle_sha256"] = bundle_mod.bundle_sha256(resolved_executable.parents[2])
     try:
         async with async_playwright() as pw:
             for os_name, seed, vendor, arch in [
@@ -333,6 +570,11 @@ async def verify(executable: Path, output: Path) -> None:
                         raise ValueError("Canvas toBlob/convertToBlob deviated from toDataURL")
                     if result["webglOob"] != 0:
                         raise ValueError("WebGL packed readPixels overflowed caller buffer")
+                    if result.get("webglParityMismatch") != 0:
+                        raise ValueError("WebGL readPixels pack/subrect/PBO parity mismatch")
+                    digest = result.get("webglDigest")
+                    if not isinstance(digest, str) or len(digest) != 64:
+                        raise ValueError("WebGL parity digest missing")
                     await page.goto(f"http://127.0.0.1:{server.server_port}/strict")
                     check_sample(await page.evaluate(STRICT), vendor, arch)
                 finally:
@@ -342,6 +584,8 @@ async def verify(executable: Path, output: Path) -> None:
             == report["cases"]["macos:3"]["window"]["textMetrics"]
         ):
             raise ValueError("measureText metrics did not vary across seeds")
+        if report["cases"]["macos:2"]["webglDigest"] == report["cases"]["macos:3"]["webglDigest"]:
+            raise ValueError("WebGL noise digest did not vary across seeds")
         report["acceptance"] = "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
     finally:
         server.shutdown()

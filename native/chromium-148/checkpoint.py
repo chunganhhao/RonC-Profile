@@ -75,10 +75,15 @@ def compatible_identity(saved: dict, current: dict) -> bool:
         return False
     saved_src = dict(saved["source"])
     curr_src = dict(current["source"])
-    # Allow resuming older Run #9 checkpoints created before patch 023 was added.
-    if "macos_antidetect_patch_sha256" not in saved_src:
-        curr_src.pop("macos_antidetect_patch_sha256", None)
-    elif saved["kit"].get("prepare.py") != current["kit"].get("prepare.py"):
+    # Allow resuming older Run #9/#11 checkpoints before 023/024 were added.
+    migrating_incremental = False
+    for key in ("macos_antidetect_patch_sha256", "webgl_readback_patch_sha256"):
+        if key not in saved_src and key in curr_src:
+            curr_src.pop(key, None)
+            migrating_incremental = True
+    if not migrating_incremental and saved["kit"].get("prepare.py") != current["kit"].get(
+        "prepare.py"
+    ):
         return False
     return saved_src == curr_src
 
@@ -348,7 +353,11 @@ def main() -> int:
         saved_identity = json.loads((args.checkpoint / "manifest.json").read_text())["identity"]
         context = identity(root)
         unpack(root / "build", args.checkpoint, context)
-        if "macos_antidetect_patch_sha256" not in saved_identity.get("source", {}):
+        saved_src = saved_identity.get("source", {})
+        if (
+            "macos_antidetect_patch_sha256" not in saved_src
+            or "webgl_readback_patch_sha256" not in saved_src
+        ):
             _apply_incremental_patches(root / "build/src")
         (root / "native-ready.json").write_text(json.dumps(context, indent=2) + "\n")
         validate(root)
