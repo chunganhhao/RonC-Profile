@@ -75,9 +75,13 @@ def compatible_identity(saved: dict, current: dict) -> bool:
         return False
     saved_src = dict(saved["source"])
     curr_src = dict(current["source"])
-    # Allow resuming older Run #9/#11 checkpoints before 023/024 were added.
+    # Allow resuming older Run #9/#11 checkpoints before 023/024/025 were added.
     migrating_incremental = False
-    for key in ("macos_antidetect_patch_sha256", "webgl_readback_patch_sha256"):
+    for key in (
+        "macos_antidetect_patch_sha256",
+        "webgl_readback_patch_sha256",
+        "audio_clientrects_patch_sha256",
+    ):
         if key not in saved_src and key in curr_src:
             curr_src.pop(key, None)
             migrating_incremental = True
@@ -357,6 +361,7 @@ def main() -> int:
         if (
             "macos_antidetect_patch_sha256" not in saved_src
             or "webgl_readback_patch_sha256" not in saved_src
+            or "audio_clientrects_patch_sha256" not in saved_src
         ):
             _apply_incremental_patches(root / "build/src")
         (root / "native-ready.json").write_text(json.dumps(context, indent=2) + "\n")

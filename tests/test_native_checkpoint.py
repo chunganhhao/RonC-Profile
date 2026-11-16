@@ -246,12 +246,23 @@ def test_legacy_ninja_log_mtime_repair_and_migration_compatibility(tmp_path):
 
     new_ctx = json.loads(json.dumps(saved_ctx))
     new_ctx["source"]["macos_antidetect_patch_sha256"] = "new-023"
+    new_ctx["source"]["webgl_readback_patch_sha256"] = "new-024"
+    new_ctx["source"]["audio_clientrects_patch_sha256"] = "new-025"
     new_ctx["kit"]["build.sh"] = "updated"
     new_ctx["kit"]["checkpoint.py"] = "updated"
+    new_ctx["kit"]["prepare.py"] = "updated"
 
     checkpoint.unpack(tmp_path / "restored", ckpt, new_ctx)
     assert (tmp_path / "restored/src/out/Default/obj/foo.o").stat().st_mtime_ns == exact_ns
     assert (tmp_path / "restored/src/out/Default/gen/header.h").stat().st_mtime_ns == hdr_ns
+
+    # Run #11 checkpoint (has 023, lacks 024/025) also migrates cleanly even with updated prepare.py.
+    r11_ctx = json.loads(json.dumps(saved_ctx))
+    r11_ctx["source"]["macos_antidetect_patch_sha256"] = "new-023"
+    r11_ctx["kit"]["prepare.py"] = "r11-prepare"
+    r11_ckpt = tmp_path / "r11-ckpt"
+    checkpoint.pack(source, r11_ckpt, r11_ctx)
+    checkpoint.unpack(tmp_path / "r11-restored", r11_ckpt, new_ctx)
 
     bad_gn = json.loads(json.dumps(new_ctx))
     bad_gn["kit"]["ci-build.gn"] = "changed"
@@ -263,7 +274,7 @@ def test_legacy_ninja_log_mtime_repair_and_migration_compatibility(tmp_path):
     with pytest.raises(ValueError, match="mismatch"):
         checkpoint.unpack(tmp_path / "bad-rev", ckpt, bad_rev)
 
-    # Once 023 is already present in the saved checkpoint, prepare.py changes are refused.
+    # Once 023+024+025 are all present in the saved checkpoint, prepare.py changes are refused.
     post_ctx = json.loads(json.dumps(new_ctx))
     post_ctx["kit"]["prepare.py"] = "v1"
     post_ckpt = tmp_path / "post-ckpt"
@@ -286,14 +297,15 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
         "ninja": "1.12.1",
         "xcode": "Xcode 16",
         "sdk": "/SDK",
-        "source": {"platform_revision": "rev1"},
-        "kit": {"ci-build.gn": "gn-sha", "build.sh": "old"},
+        "source": {"platform_revision": "rev1", "macos_antidetect_patch_sha256": "old-023"},
+        "kit": {"ci-build.gn": "gn-sha", "build.sh": "old", "prepare.py": "old"},
     }
     ckpt = tmp_path / "ckpt"
     checkpoint.pack(source, ckpt, saved_ctx)
     new_ctx = json.loads(json.dumps(saved_ctx))
-    new_ctx["source"]["macos_antidetect_patch_sha256"] = "new-023"
+    new_ctx["source"]["webgl_readback_patch_sha256"] = "new-024"
     new_ctx["kit"]["build.sh"] = "new"
+    new_ctx["kit"]["prepare.py"] = "new"
     root = tmp_path / "root"
     root.mkdir()
     monkeypatch.setattr(checkpoint, "identity", lambda _: new_ctx)

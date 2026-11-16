@@ -501,6 +501,201 @@ COLLECT = """async () => {
     }
   }
   results.webglParityMismatch = webglParityMismatch;
+  let extParityMismatch = 0;
+  let digest5551 = '';
+  let digestFloat = '';
+  let digestHalfFloat = '';
+  if (gl2) {
+    const extCBF = gl2.getExtension('EXT_color_buffer_float');
+    // 1) Packed RGBA5551 FBO readback parity & solid fill preservation.
+    {
+      const f = gl2.createFramebuffer();
+      const r = gl2.createRenderbuffer();
+      gl2.bindFramebuffer(gl2.FRAMEBUFFER, f);
+      gl2.bindRenderbuffer(gl2.RENDERBUFFER, r);
+      gl2.renderbufferStorage(gl2.RENDERBUFFER, gl2.RGB5_A1, 32, 32);
+      gl2.framebufferRenderbuffer(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.RENDERBUFFER, r);
+      if (gl2.checkFramebufferStatus(gl2.FRAMEBUFFER) === gl2.FRAMEBUFFER_COMPLETE) {
+        gl2.viewport(0, 0, 32, 32);
+        gl2.disable(gl2.SCISSOR_TEST);
+        gl2.clearColor(0.25, 0.5, 0.75, 1.0);
+        gl2.clear(gl2.COLOR_BUFFER_BIT);
+        const solidA = new Uint16Array(32 * 32);
+        gl2.readPixels(0, 0, 32, 32, gl2.RGBA, gl2.UNSIGNED_SHORT_5_5_5_1, solidA);
+        const first5551 = solidA[0];
+        if (!solidA.every(v => v === first5551)) extParityMismatch++;
+        gl2.enable(gl2.SCISSOR_TEST);
+        gl2.scissor(4, 4, 20, 20);
+        gl2.clearColor(0.75, 0.25, 0.5, 1.0);
+        gl2.clear(gl2.COLOR_BUFFER_BIT);
+        gl2.disable(gl2.SCISSOR_TEST);
+        const full5551 = new Uint16Array(32 * 32);
+        const sub5551 = new Uint16Array(16 * 16);
+        gl2.readPixels(0, 0, 32, 32, gl2.RGBA, gl2.UNSIGNED_SHORT_5_5_5_1, full5551);
+        gl2.readPixels(6, 6, 16, 16, gl2.RGBA, gl2.UNSIGNED_SHORT_5_5_5_1, sub5551);
+        for (let row = 0; row < 16; row++) {
+          for (let col = 0; col < 16; col++) {
+            if (sub5551[row * 16 + col] !== full5551[(row + 6) * 32 + col + 6]) {
+              extParityMismatch++;
+            }
+          }
+        }
+        if (gl2.getError() !== gl2.NO_ERROR) extParityMismatch++;
+        digest5551 = await sha256Hex(full5551);
+      } else {
+        extParityMismatch++;
+      }
+      gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
+      gl2.deleteRenderbuffer(r);
+      gl2.deleteFramebuffer(f);
+    }
+    // 2) Float / HalfFloat FBO readback parity, RGBA8->RGBA32F blit, and HDR preservation.
+    if (extCBF) {
+      const mkFbo = (intFmt, w, h) => {
+        const f = gl2.createFramebuffer();
+        const r = gl2.createRenderbuffer();
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, f);
+        gl2.bindRenderbuffer(gl2.RENDERBUFFER, r);
+        gl2.renderbufferStorage(gl2.RENDERBUFFER, intFmt, w, h);
+        gl2.framebufferRenderbuffer(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.RENDERBUFFER, r);
+        return {f, r};
+      };
+      const src = mkFbo(gl2.RGBA8, 32, 32);
+      const dst32 = mkFbo(gl2.RGBA32F, 32, 32);
+      const dst16 = mkFbo(gl2.RGBA16F, 32, 32);
+      const prog = gl2.createProgram();
+      const vs = gl2.createShader(gl2.VERTEX_SHADER);
+      const fs = gl2.createShader(gl2.FRAGMENT_SHADER);
+      gl2.shaderSource(vs, 'attribute vec2 p; varying vec2 v; void main(){v=p*0.5+0.5;gl_Position=vec4(p,0.,1.);}');
+      gl2.shaderSource(fs, 'precision mediump float; varying vec2 v; void main(){gl_FragColor=vec4(0.2+0.6*v.x, 0.3+0.5*v.y, 0.7, 1.0);}');
+      gl2.compileShader(vs);
+      gl2.compileShader(fs);
+      gl2.attachShader(prog, vs);
+      gl2.attachShader(prog, fs);
+      gl2.linkProgram(prog);
+      const vb = gl2.createBuffer();
+      gl2.bindBuffer(gl2.ARRAY_BUFFER, vb);
+      gl2.bufferData(gl2.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl2.STATIC_DRAW);
+      gl2.useProgram(prog);
+      const loc = gl2.getAttribLocation(prog, 'p');
+      gl2.enableVertexAttribArray(loc);
+      gl2.vertexAttribPointer(loc, 2, gl2.FLOAT, false, 0, 0);
+      try {
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, src.f);
+        gl2.viewport(0, 0, 32, 32);
+        gl2.drawArrays(gl2.TRIANGLE_STRIP, 0, 4);
+        gl2.bindFramebuffer(gl2.READ_FRAMEBUFFER, src.f);
+        gl2.bindFramebuffer(gl2.DRAW_FRAMEBUFFER, dst32.f);
+        gl2.blitFramebuffer(0, 0, 32, 32, 0, 0, 32, 32, gl2.COLOR_BUFFER_BIT, gl2.NEAREST);
+        gl2.bindFramebuffer(gl2.DRAW_FRAMEBUFFER, dst16.f);
+        gl2.blitFramebuffer(0, 0, 32, 32, 0, 0, 32, 32, gl2.COLOR_BUFFER_BIT, gl2.NEAREST);
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, dst32.f);
+        const f32 = new Float32Array(32 * 32 * 4);
+        const f32Sub = new Float32Array(12 * 12 * 4);
+        gl2.readPixels(0, 0, 32, 32, gl2.RGBA, gl2.FLOAT, f32);
+        gl2.readPixels(8, 8, 12, 12, gl2.RGBA, gl2.FLOAT, f32Sub);
+        for (let r = 0; r < 12; r++) {
+          for (let c = 0; c < 12 * 4; c++) {
+            if (f32Sub[r * 12 * 4 + c] !== f32[(r + 8) * 32 * 4 + 8 * 4 + c]) extParityMismatch++;
+          }
+        }
+        digestFloat = await sha256Hex(f32);
+        // Ensure RGBA32F -> HALF_FLOAT remains rejected cleanly by driver validation.
+        gl2.readPixels(0, 0, 4, 4, gl2.RGBA, gl2.HALF_FLOAT, new Uint16Array(4 * 4 * 4));
+        if (gl2.getError() !== gl2.INVALID_OPERATION) extParityMismatch++;
+        // Out-of-gamut HDR solid/edge pixels (<0 / >1) must stay untouched.
+        gl2.clearColor(-0.5, 1.5, 2.25, 1.0);
+        gl2.clear(gl2.COLOR_BUFFER_BIT);
+        gl2.enable(gl2.SCISSOR_TEST);
+        gl2.scissor(2, 2, 16, 16);
+        gl2.clearColor(-0.25, 3.5, 1.75, 1.0);
+        gl2.clear(gl2.COLOR_BUFFER_BIT);
+        gl2.disable(gl2.SCISSOR_TEST);
+        const hdr = new Float32Array(32 * 32 * 4);
+        gl2.readPixels(0, 0, 32, 32, gl2.RGBA, gl2.FLOAT, hdr);
+        if (hdr[0] !== -0.5 || hdr[1] !== 1.5 || hdr[(2 * 32 + 2) * 4] !== -0.25 || hdr[(2 * 32 + 2) * 4 + 1] !== 3.5) {
+          extParityMismatch++;
+        }
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, dst16.f);
+        const h16 = new Uint16Array(32 * 32 * 4);
+        gl2.readPixels(0, 0, 32, 32, gl2.RGBA, gl2.HALF_FLOAT, h16);
+        if (gl2.getError() !== gl2.NO_ERROR) extParityMismatch++;
+        digestHalfFloat = await sha256Hex(h16);
+      } finally {
+        gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
+        for (const pair of [src, dst32, dst16]) {
+          gl2.deleteRenderbuffer(pair.r);
+          gl2.deleteFramebuffer(pair.f);
+        }
+        gl2.deleteBuffer(vb);
+        gl2.deleteProgram(prog);
+        gl2.deleteShader(vs);
+        gl2.deleteShader(fs);
+      }
+    } else {
+      extParityMismatch++;
+    }
+  }
+  results.webglExtendedParityMismatch = extParityMismatch;
+  results.webgl5551Digest = digest5551;
+  results.webglFloatDigest = digestFloat;
+  results.webglHalfFloatDigest = digestHalfFloat;
+  // 3) OfflineAudioContext exact sampleRate, deterministic seed digest, and silent preservation.
+  {
+    const ac = new OfflineAudioContext(1, 8192, 44100);
+    results.audioSampleRate = ac.sampleRate;
+    const osc = ac.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = 10000;
+    const comp = ac.createDynamicsCompressor();
+    osc.connect(comp);
+    comp.connect(ac.destination);
+    osc.start(0);
+    const rendered = await ac.startRendering();
+    results.audioDigest = await sha256Hex(rendered.getChannelData(0).subarray(4500, 5000));
+    const silentCtx = new OfflineAudioContext(1, 512, 44100);
+    const zeroBuf = silentCtx.createBuffer(1, 512, 44100);
+    const bs = silentCtx.createBufferSource();
+    bs.buffer = zeroBuf;
+    bs.connect(silentCtx.destination);
+    bs.start(0);
+    const silentRendered = await silentCtx.startRendering();
+    let maxSilent = 0;
+    const sc = silentRendered.getChannelData(0);
+    for (let i = 0; i < sc.length; i++) maxSilent = Math.max(maxSilent, Math.abs(sc[i]));
+    results.audioSilentMax = maxSilent;
+  }
+  // 4) ClientRects: 0x0 Element/Range stay un-shifted, and (0,0) elements never go negative.
+  if (typeof document !== 'undefined' && document.body) {
+    let rectMismatch = 0;
+    const prevMargin = document.body.style.margin;
+    const prevPadding = document.body.style.padding;
+    document.body.style.margin = '0';
+    document.body.style.padding = '0';
+    const wrap = document.createElement('div');
+    wrap.innerHTML = '<div id="rZeroBox" style="width:40px;height:20px">A</div><div id="rEmptyBox" style="width:0;height:0"></div>';
+    document.body.prepend(wrap);
+    try {
+      const zBox = document.getElementById('rZeroBox');
+      const eBox = document.getElementById('rEmptyBox');
+      const zr = zBox.getBoundingClientRect();
+      const zrs = zBox.getClientRects()[0];
+      const er = eBox.getBoundingClientRect();
+      if (!(zr.x >= 0 && zr.y >= 0 && zr.x < 0.002 && zr.y < 0.002)) rectMismatch++;
+      if (zr.x !== zrs.x || zr.y !== zrs.y) rectMismatch++;
+      if (er.x !== 0 || er.y !== 0 || er.width !== 0 || er.height !== 0) rectMismatch++;
+      const range = document.createRange();
+      range.setStart(zBox.firstChild, 0);
+      range.collapse(true);
+      const rr = range.getBoundingClientRect();
+      if (rr.x !== 0 || rr.y !== 0 || rr.width !== 0 || rr.height !== 0) rectMismatch++;
+    } finally {
+      wrap.remove();
+      document.body.style.margin = prevMargin;
+      document.body.style.padding = prevPadding;
+    }
+    results.clientRectMismatch = rectMismatch;
+  }
   sharedPorts.forEach(port=>port.close());
   return results;
 } """
@@ -595,6 +790,7 @@ async def verify(executable: Path, output: Path) -> None:
             for os_name, seed, vendor, arch in [
                 ("macos", 2, "apple", "metal-3"),
                 ("macos", 3, "apple", "metal-3"),
+                ("macos", 6, "apple", "metal-3"),
             ]:
                 browser = await pw.chromium.launch(
                     executable_path=str(executable),
@@ -672,6 +868,27 @@ async def verify(executable: Path, output: Path) -> None:
                     digest = result.get("webglDigest")
                     if not isinstance(digest, str) or len(digest) != 64:
                         raise ValueError("WebGL parity digest missing")
+                    if result.get("webglExtendedParityMismatch") != 0:
+                        raise ValueError("WebGL 5551/FLOAT/HALF_FLOAT parity or HDR check failed")
+                    for key in (
+                        "webgl5551Digest",
+                        "webglFloatDigest",
+                        "webglHalfFloatDigest",
+                        "audioDigest",
+                    ):
+                        val = result.get(key)
+                        if not isinstance(val, str) or len(val) != 64:
+                            raise ValueError(f"Missing digest {key}")
+                    if result.get("audioSampleRate") != 44100:
+                        raise ValueError(
+                            f"Unexpected OfflineAudioContext.sampleRate: {result.get('audioSampleRate')}"
+                        )
+                    if result.get("audioSilentMax") != 0:
+                        raise ValueError(
+                            f"Silent WebAudio buffer perturbed: {result.get('audioSilentMax')}"
+                        )
+                    if result.get("clientRectMismatch") != 0:
+                        raise ValueError("ClientRects 0x0 or (0,0) edge contract failed")
                     await page.goto(f"http://127.0.0.1:{server.server_port}/strict")
                     check_sample(await page.evaluate(STRICT), vendor, arch)
                 finally:
@@ -683,6 +900,12 @@ async def verify(executable: Path, output: Path) -> None:
             raise ValueError("measureText metrics did not vary across seeds")
         if report["cases"]["macos:2"]["webglDigest"] == report["cases"]["macos:3"]["webglDigest"]:
             raise ValueError("WebGL noise digest did not vary across seeds")
+        for key in ("webgl5551Digest", "webglFloatDigest", "webglHalfFloatDigest"):
+            if report["cases"]["macos:2"][key] == report["cases"]["macos:3"][key]:
+                raise ValueError(f"{key} did not vary across seeds")
+        audio_digests = {report["cases"][f"macos:{s}"]["audioDigest"] for s in (2, 3, 6)}
+        if len(audio_digests) != 3:
+            raise ValueError("Audio fingerprint digest did not vary cleanly across seeds 2, 3, 6")
         report["acceptance"] = "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
     finally:
         server.shutdown()

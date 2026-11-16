@@ -21,8 +21,11 @@ MACOS_ANTIDETECT_PATCH = Path(__file__).with_name("patches") / "023-macos-antide
 MACOS_ANTIDETECT_PATCH_SHA256 = "98e2131461e38c290d67f929e0729cc187c741b31838c3515da1194ddbd57e4d"
 MACOS_ANTIDETECT_SERIES_ENTRY = "extra/fingerprint/023-macos-antidetect-complete.patch"
 READBACK_PARITY_PATCH = Path(__file__).with_name("patches") / "024-webgl-readback-parity.patch"
-READBACK_PARITY_PATCH_SHA256 = "ab46942d5701d847e84845c37219909aafcf7c2b2ccdf8652c427eed7c6f94d6"
+READBACK_PARITY_PATCH_SHA256 = "78ff843b4586c5452b8987dc9ecea0b52b16e1ccbcdc5e472597dd77d36d21c3"
 READBACK_PARITY_SERIES_ENTRY = "extra/fingerprint/024-webgl-readback-parity.patch"
+AUDIO_CLIENTRECTS_PATCH = Path(__file__).with_name("patches") / "025-audio-clientrects-parity.patch"
+AUDIO_CLIENTRECTS_PATCH_SHA256 = "6853fb67a24f286aba189bce1e0fc35ef3d4af3dbc9ffbc126db9f7002a42abb"
+AUDIO_CLIENTRECTS_SERIES_ENTRY = "extra/fingerprint/025-audio-clientrects-parity.patch"
 
 
 def verify_checkout(path: Path, revision: str) -> None:
@@ -58,6 +61,11 @@ def prepare(root: Path) -> None:
         != READBACK_PARITY_PATCH_SHA256
     ):
         raise ValueError("WebGL readback parity patch checksum mismatch")
+    if (
+        hashlib.sha256(AUDIO_CLIENTRECTS_PATCH.read_bytes()).hexdigest()
+        != AUDIO_CLIENTRECTS_PATCH_SHA256
+    ):
+        raise ValueError("Audio/ClientRects parity patch checksum mismatch")
     # Check every input before modifying either checkout.
     rust_ini = root / "downloads-arm64.ini"
     before = rust_ini.read_text()
@@ -69,12 +77,15 @@ def prepare(root: Path) -> None:
     native_target = fork / "patches" / NATIVE_SERIES_ENTRY
     macos_target = fork / "patches" / MACOS_ANTIDETECT_SERIES_ENTRY
     readback_target = fork / "patches" / READBACK_PARITY_SERIES_ENTRY
+    audio_rects_target = fork / "patches" / AUDIO_CLIENTRECTS_SERIES_ENTRY
     if NATIVE_SERIES_ENTRY in series or native_target.exists():
         raise ValueError("Native patch already staged; use a fresh checkout")
     if MACOS_ANTIDETECT_SERIES_ENTRY in series or macos_target.exists():
         raise ValueError("macOS antidetect patch already staged; use a fresh checkout")
     if READBACK_PARITY_SERIES_ENTRY in series or readback_target.exists():
         raise ValueError("WebGL readback parity patch already staged; use a fresh checkout")
+    if AUDIO_CLIENTRECTS_SERIES_ENTRY in series or audio_rects_target.exists():
+        raise ValueError("Audio/ClientRects parity patch already staged; use a fresh checkout")
     if not series.rstrip().endswith("extra/fingerprint/021-device-memory-cap.patch"):
         raise ValueError("Unexpected native patch-series order")
     subprocess.run(["git", "-C", str(fork), "apply", "--check", str(PATCH.resolve())], check=True)
@@ -85,6 +96,7 @@ def prepare(root: Path) -> None:
     native_target.write_bytes(NATIVE_PATCH.read_bytes())
     macos_target.write_bytes(MACOS_ANTIDETECT_PATCH.read_bytes())
     readback_target.write_bytes(READBACK_PARITY_PATCH.read_bytes())
+    audio_rects_target.write_bytes(AUDIO_CLIENTRECTS_PATCH.read_bytes())
     series_path.write_text(
         series.rstrip()
         + "\n"
@@ -94,6 +106,8 @@ def prepare(root: Path) -> None:
         + "\n"
         + READBACK_PARITY_SERIES_ENTRY
         + "\n"
+        + AUDIO_CLIENTRECTS_SERIES_ENTRY
+        + "\n"
     )
     provenance = {
         "platform_revision": PLATFORM_REV,
@@ -102,6 +116,7 @@ def prepare(root: Path) -> None:
         "native_realm_patch_sha256": NATIVE_PATCH_SHA256,
         "macos_antidetect_patch_sha256": MACOS_ANTIDETECT_PATCH_SHA256,
         "webgl_readback_patch_sha256": READBACK_PARITY_PATCH_SHA256,
+        "audio_clientrects_patch_sha256": AUDIO_CLIENTRECTS_PATCH_SHA256,
         "rust_archive_sha256": RUST_SHA256,
         "acceptance": "EXPERIMENTAL_SOURCE_ONLY",
         "open_findings": ["native WebGPU realm coverage", "strict-CSP Blob worker compatibility"],
@@ -110,11 +125,12 @@ def prepare(root: Path) -> None:
 
 
 def apply_incremental_patches(src_dir: Path) -> bool:
-    """Apply pending incremental patches (023/024) onto an unpacked src tree."""
+    """Apply pending incremental patches (023/024/025) onto an unpacked src tree."""
     applied_any = False
     for patch_path, expected_sha, label in (
         (MACOS_ANTIDETECT_PATCH, MACOS_ANTIDETECT_PATCH_SHA256, "023"),
         (READBACK_PARITY_PATCH, READBACK_PARITY_PATCH_SHA256, "024"),
+        (AUDIO_CLIENTRECTS_PATCH, AUDIO_CLIENTRECTS_PATCH_SHA256, "025"),
     ):
         if hashlib.sha256(patch_path.read_bytes()).hexdigest() != expected_sha:
             raise ValueError(f"Incremental patch {label} checksum mismatch")
