@@ -205,10 +205,19 @@ def pack(source: Path, destination: Path, context: dict) -> None:
 def unpack(build: Path, checkpoint: Path, context: dict) -> None:
     manifest = json.loads((checkpoint / "manifest.json").read_text())
     archive = checkpoint / "source.tar.gz"
-    if not compatible_identity(manifest["identity"], context) or manifest["sha256"] != digest(
-        archive
-    ):
-        raise ValueError("Checkpoint identity or archive checksum mismatch")
+    if not compatible_identity(manifest["identity"], context):
+        diff = [
+            key
+            for key in set(manifest["identity"]) | set(context)
+            if manifest["identity"].get(key) != context.get(key)
+        ]
+        raise ValueError(f"Checkpoint identity or archive checksum mismatch (identity={diff})")
+    actual_sha = digest(archive)
+    if manifest["sha256"] != actual_sha:
+        raise ValueError(
+            "Checkpoint identity or archive checksum mismatch "
+            f"(archive={actual_sha}, expected={manifest['sha256']}, bytes={archive.stat().st_size})"
+        )
     mtime_path = checkpoint / "mtime-ns.tsv"
     if "mtime_sha256" in manifest:
         if not mtime_path.exists() or manifest["mtime_sha256"] != digest(mtime_path):
