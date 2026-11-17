@@ -697,30 +697,107 @@ def test_compiled_audio_and_client_rects_helpers(tmp_path):
         pytest.skip("C++ compiler required for native audio/rect regression")
     patch_text = AUDIO_RECTS_PATCH.read_text()
     perturb_fn = _extract_added_function(patch_text, "float PerturbAudioSample(")
-    rect_fn = _extract_added_function(patch_text, "void OffsetNonEmptyClientRect(")
+    element_diff = patch_text.split("diff --git a/third_party/blink/renderer/core/dom/range.cc")[0]
+    range_diff = (
+        "diff --git a/third_party/blink/renderer/core/dom/range.cc"
+        + patch_text.split("diff --git a/third_party/blink/renderer/core/dom/range.cc")[1]
+    )
+    if "bool ComputeClientRectOffset(" in element_diff:
+        rect_helpers = _extract_added_block(
+            element_diff, "bool ComputeClientRectOffset(", "}  // namespace"
+        )
+        apply_single = "OffsetNonEmptyClientRect(bbox, raw_dx, raw_dy);"
+        apply_list = "OffsetNonEmptyClientRects(frags, raw_dx, raw_dy);"
+        range_helpers = _extract_added_block(
+            range_diff, "bool ResolveRangeClientRectOffset(", "}  // namespace"
+        )
+        assert "OffsetRangeClientQuads" in range_helpers
+        assert "OffsetRangeBoundingRect" in range_helpers
+        apply_range = r"""
+      gfx::RectF qbbox = rbbox_initial;
+      OffsetRangeClientQuads(qfrags, raw_dx, raw_dy);
+      OffsetRangeBoundingRect(qbbox, raw_dx, raw_dy);
+      gfx::RectF qunion;
+      for (const auto& q : qfrags) qunion.Union(q.BoundingBox());
+      assert(std::fabs(qbbox.x() - qunion.x()) < 1e-5);
+      assert(std::fabs(qbbox.y() - qunion.y()) < 1e-5);
+      assert(std::fabs(qbbox.right() - qunion.right()) < 1e-5);
+      assert(std::fabs(qbbox.bottom() - qunion.bottom()) < 1e-5);
+      if (rbbox_initial.x() >= 0.0f && rbbox_initial.y() >= 0.0f) {
+        for (const auto& q : qfrags) {
+          const auto qr = q.BoundingBox();
+          if (!qr.IsEmpty()) assert(qr.x() >= 0.0f && qr.y() >= 0.0f);
+        }
+      }"""
+    else:
+        rect_helpers = (
+            _extract_added_function(element_diff, "void OffsetNonEmptyClientRect(")
+            + "\n}  // namespace"
+        )
+        apply_single = "OffsetNonEmptyClientRect(bbox, raw_dx, raw_dy);"
+        apply_list = """for (auto& r : frags) {
+      OffsetNonEmptyClientRect(r, raw_dx, raw_dy);
+    }"""
+        range_helpers = "}  // namespace"
+        apply_range = ""
     source = tmp_path / "audio_rects_parity.cc"
     source.write_text(
         r"""
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <vector>
+
+template <typename T>
+using Vector = std::vector<T>;
 
 namespace gfx {
 struct RectF {
-  float x_, y_, w_, h_;
+  float x_ = 0.0f, y_ = 0.0f, w_ = 0.0f, h_ = 0.0f;
   bool IsEmpty() const { return w_ <= 0.0f || h_ <= 0.0f; }
   float x() const { return x_; }
   float y() const { return y_; }
+  float width() const { return w_; }
+  float height() const { return h_; }
+  float right() const { return x_ + w_; }
+  float bottom() const { return y_ + h_; }
   void Offset(float dx, float dy) { x_ += dx; y_ += dy; }
+  void Union(const RectF& rect) {
+    if (rect.IsEmpty()) return;
+    if (IsEmpty()) {
+      *this = rect;
+      return;
+    }
+    const float rx = std::min(x_, rect.x_);
+    const float ry = std::min(y_, rect.y_);
+    const float rright = std::max(right(), rect.right());
+    const float rbottom = std::max(bottom(), rect.bottom());
+    x_ = rx;
+    y_ = ry;
+    w_ = rright - rx;
+    h_ = rbottom - ry;
+  }
+};
+struct QuadF {
+  RectF rect_;
+  static QuadF FromRect(const RectF& r) { return {r}; }
+  RectF BoundingBox() const { return rect_; }
+  void Offset(float dx, float dy) {
+    if (rect_.IsEmpty()) return;
+    rect_.Offset(dx, dy);
+  }
 };
 }  // namespace gfx
 
 """
         + perturb_fn
-        + "\n"
-        + rect_fn
+        + "\nnamespace {\n"
+        + rect_helpers
+        + "\nnamespace {\n"
+        + range_helpers
         + r"""
 static uint64_t SeedHash(const std::string& s) {
   uint64_t h = 14695981039346656037ULL;
@@ -729,6 +806,12 @@ static uint64_t SeedHash(const std::string& s) {
     h *= 1099511628211ULL;
   }
   return h ? h : 1u;
+}
+
+static double HashNoiseOffset(const std::string& seed_str, const char* axis) {
+  uint32_t h = static_cast<uint32_t>(std::hash<std::string>{}(seed_str + axis));
+  double norm = static_cast<double>(h & 0xFFFFFFFFu) / 4294967295.0 - 0.5;
+  return norm * 0.002;
 }
 
 int main() {
@@ -751,16 +834,88 @@ int main() {
   assert(PerturbAudioSample(0.35f, s2, 4500) == a2);
   assert(std::fabs(a2 - 0.35f) <= 4.0f * 9.5367431640625e-7f + 1e-12f);
 
-  // Empty 0x0 rects are never shifted; (0,0) rects never go negative.
-  gfx::RectF empty{0.0f, 0.0f, 0.0f, 0.0f};
-  OffsetNonEmptyClientRect(empty, -0.0007, -0.0008);
-  assert(empty.x_ == 0.0f && empty.y_ == 0.0f);
-  gfx::RectF zero_origin{0.0f, 0.0f, 40.0f, 20.0f};
-  OffsetNonEmptyClientRect(zero_origin, -0.0007, -0.0008);
-  assert(zero_origin.x_ > 0.0f && zero_origin.y_ > 0.0f);
-  gfx::RectF interior{10.0f, 20.0f, 40.0f, 20.0f};
-  OffsetNonEmptyClientRect(interior, -0.0007, -0.0008);
-  assert(interior.x_ < 10.0f && interior.y_ < 20.0f);
+  // Empty 0x0 and 0x20 rects are never shifted; (0,0) rects never go negative.
+  for (gfx::RectF empty : {gfx::RectF{0.0f, 0.0f, 0.0f, 0.0f}, gfx::RectF{0.0f, 0.0f, 0.0f, 20.0f}}) {
+    Vector<gfx::RectF> frags{empty};
+    gfx::RectF bbox = empty;
+    const double raw_dx = -0.00070248;
+    const double raw_dy = -0.00071473;
+    """
+        + apply_single
+        + "\n    "
+        + apply_list
+        + r"""
+    assert(bbox.x_ == 0.0f && bbox.y_ == 0.0f);
+    assert(frags[0].x_ == 0.0f && frags[0].y_ == 0.0f);
+  }
+  {
+    Vector<gfx::RectF> frags{{0.0f, 0.0f, 40.0f, 20.0f}};
+    gfx::RectF bbox{0.0f, 0.0f, 40.0f, 20.0f};
+    const double raw_dx = -0.00070248;
+    const double raw_dy = -0.00071473;
+    """
+        + apply_single
+        + "\n    "
+        + apply_list
+        + r"""
+    assert(bbox.x_ > 0.0f && bbox.y_ > 0.0f);
+    assert(frags[0].x_ == bbox.x_ && frags[0].y_ == bbox.y_);
+  }
+
+  // P2 #2 regression: multiline indented span at (0,0) must keep bounding box == fragment union (< 1e-5 px)
+  // across negative/positive deltas (mirrors seeds 2, 3, 6 + explicit (-dx,-dy), (-dx,+dy), (+dx,-dy), (+dx,+dy)).
+  const std::vector<std::pair<double, double>> cases = {
+      {HashNoiseOffset("2", "offset_x"), HashNoiseOffset("2", "offset_y")},
+      {HashNoiseOffset("3", "offset_x"), HashNoiseOffset("3", "offset_y")},
+      {HashNoiseOffset("6", "offset_x"), HashNoiseOffset("6", "offset_y")},
+      {-0.0007024820661172271, -0.0007147365249693394},
+      {0.0004746587364934385, -0.0002586102345958352},
+      {-0.00051, 0.00063},
+      {0.00081, 0.00042},
+  };
+  for (const auto& [raw_dx, raw_dy] : cases) {
+    Vector<Vector<gfx::RectF>> layouts = {
+        {
+            {20.0f, 0.0f, 77.0625f, 19.0f},
+            {0.0f, 20.0f, 77.0625f, 19.0f},
+            {0.0f, 40.0f, 77.0625f, 19.0f},
+            {0.0f, 60.0f, 77.0625f, 19.0f},
+        },
+        {
+            {20.0f, 0.0f, 0.0f, 19.0f},  // empty leading fragment skipped cleanly
+            {20.0f, 0.0f, 50.0f, 19.0f},
+            {0.0f, 20.0f, 40.0f, 19.0f},
+        },
+        {
+            {-10.0f, 0.0f, 30.0f, 19.0f},
+            {0.0f, 20.0f, 40.0f, 19.0f},
+        },
+    };
+    for (auto frags : layouts) {
+      Vector<gfx::QuadF> qfrags;
+      for (const auto& f : frags) qfrags.push_back(gfx::QuadF::FromRect(f));
+      gfx::RectF bbox;
+      for (const auto& f : frags) bbox.Union(f);
+      const gfx::RectF rbbox_initial = bbox;
+      """
+        + apply_single
+        + "\n      "
+        + apply_list
+        + apply_range
+        + r"""
+      gfx::RectF shifted_union;
+      for (const auto& f : frags) shifted_union.Union(f);
+      assert(std::fabs(bbox.x() - shifted_union.x()) < 1e-5);
+      assert(std::fabs(bbox.y() - shifted_union.y()) < 1e-5);
+      assert(std::fabs(bbox.right() - shifted_union.right()) < 1e-5);
+      assert(std::fabs(bbox.bottom() - shifted_union.bottom()) < 1e-5);
+      if (rbbox_initial.x() >= 0.0f && rbbox_initial.y() >= 0.0f) {
+        for (const auto& f : frags) {
+          if (!f.IsEmpty()) assert(f.x() >= 0.0f && f.y() >= 0.0f);
+        }
+      }
+    }
+  }
   return 0;
 }
 """

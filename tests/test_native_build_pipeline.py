@@ -348,9 +348,11 @@ def test_verify_matrix_targets_macos_only_and_covers_023_gates():
     )
     assert "ReadFingerprintPixels" in (KIT / "patches/024-webgl-readback-parity.patch").read_text()
     assert "PerturbAudioSample" in (KIT / "patches/025-audio-clientrects-parity.patch").read_text()
-    assert (
-        "OffsetNonEmptyClientRect"
-        in (KIT / "patches/025-audio-clientrects-parity.patch").read_text()
-    )
+    patch025 = (KIT / "patches/025-audio-clientrects-parity.patch").read_text()
+    assert "OffsetNonEmptyClientRect" in patch025
+    assert "OffsetNonEmptyClientRects" in patch025
+    assert "OffsetRangeClientQuads" in patch025
+    assert "OffsetRangeBoundingRect" in patch025
+    assert "rMultiSpan" in verify_src
     build_src = (KIT / "build.sh").read_text()
     assert "state=verify_failed" in build_src and "2>&1 | head -n 60" in build_src

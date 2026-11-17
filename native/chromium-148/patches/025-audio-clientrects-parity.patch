@@ -196,25 +196,58 @@ diff --git a/third_party/blink/renderer/modules/webaudio/audio_handler.cc b/thir
 diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
 --- a/third_party/blink/renderer/core/dom/element.cc
 +++ b/third_party/blink/renderer/core/dom/element.cc
-@@ -3475,6 +3475,25 @@
+@@ -3475,6 +3475,58 @@
    return (top_is_deterministic && left_is_deterministic);
  }
  
 +namespace {
 +
-+void OffsetNonEmptyClientRect(gfx::RectF& rect, double raw_dx, double raw_dy) {
-+  if (rect.IsEmpty()) {
-+    return;
++bool ComputeClientRectOffset(const gfx::RectF& bounds,
++                             double raw_dx,
++                             double raw_dy,
++                             float* out_dx,
++                             float* out_dy) {
++  if (bounds.IsEmpty()) {
++    return false;
 +  }
 +  float dx = static_cast<float>(raw_dx);
 +  float dy = static_cast<float>(raw_dy);
-+  if (rect.x() == 0.0f && dx < 0.0f) {
++  if (bounds.x() == 0.0f && dx < 0.0f) {
 +    dx = -dx;
 +  }
-+  if (rect.y() == 0.0f && dy < 0.0f) {
++  if (bounds.y() == 0.0f && dy < 0.0f) {
 +    dy = -dy;
 +  }
-+  rect.Offset(dx, dy);
++  *out_dx = dx;
++  *out_dy = dy;
++  return true;
++}
++
++void OffsetNonEmptyClientRect(gfx::RectF& rect, double raw_dx, double raw_dy) {
++  float dx = 0.0f;
++  float dy = 0.0f;
++  if (ComputeClientRectOffset(rect, raw_dx, raw_dy, &dx, &dy)) {
++    rect.Offset(dx, dy);
++  }
++}
++
++void OffsetNonEmptyClientRects(Vector<gfx::RectF>& rects,
++                               double raw_dx,
++                               double raw_dy) {
++  gfx::RectF union_bounds;
++  for (const auto& rect : rects) {
++    union_bounds.Union(rect);
++  }
++  float dx = 0.0f;
++  float dy = 0.0f;
++  if (!ComputeClientRectOffset(union_bounds, raw_dx, raw_dy, &dx, &dy)) {
++    return;
++  }
++  for (auto& rect : rects) {
++    if (!rect.IsEmpty()) {
++      rect.Offset(dx, dy);
++    }
++  }
 +}
 +
 +}  // namespace
@@ -222,19 +255,19 @@ diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/
  DOMRectList* Element::getClientRects() {
    Vector<gfx::RectF> rects = GetClientRectsNoAdjustment();
    if (rects.empty()) {
-@@ -3491,8 +3510,10 @@
+@@ -3491,9 +3543,8 @@
        (!command_line->HasSwitch(switches::kDisableSpoofing) ||
         command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("clientrects") == std::string::npos)) {
      if (!ShouldSkipClientRectsOffset()) {
-+      const double dx = GetDocument().GetNoiseFactorX();
-+      const double dy = GetDocument().GetNoiseFactorY();
-       for (auto& rect : rects) {
+-      for (auto& rect : rects) {
 -        rect.Offset(GetDocument().GetNoiseFactorX(), GetDocument().GetNoiseFactorY());
-+        OffsetNonEmptyClientRect(rect, dx, dy);
-       }
+-      }
++      OffsetNonEmptyClientRects(rects, GetDocument().GetNoiseFactorX(),
++                                GetDocument().GetNoiseFactorY());
      }
    }
-@@ -3550,7 +3571,8 @@
+   return MakeGarbageCollected<DOMRectList>(rects);
+@@ -3550,7 +3601,8 @@
        (!command_line->HasSwitch(switches::kDisableSpoofing) ||
         command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("clientrects") == std::string::npos)) {
      if (!ShouldSkipClientRectsOffset()) {
@@ -247,37 +280,82 @@ diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/
 diff --git a/third_party/blink/renderer/core/dom/range.cc b/third_party/blink/renderer/core/dom/range.cc
 --- a/third_party/blink/renderer/core/dom/range.cc
 +++ b/third_party/blink/renderer/core/dom/range.cc
-@@ -1668,8 +1668,13 @@
+@@ -1653,6 +1653,56 @@
+          end.DeepEquivalent().ComputeOffsetInContainerNode(), exception_state);
+ }
+ 
++namespace {
++
++bool ResolveRangeClientRectOffset(const gfx::RectF& bounds,
++                                  double raw_dx,
++                                  double raw_dy,
++                                  float* out_dx,
++                                  float* out_dy) {
++  if (bounds.IsEmpty()) {
++    return false;
++  }
++  float dx = static_cast<float>(raw_dx);
++  float dy = static_cast<float>(raw_dy);
++  if (bounds.x() == 0.0f && dx < 0.0f) {
++    dx = -dx;
++  }
++  if (bounds.y() == 0.0f && dy < 0.0f) {
++    dy = -dy;
++  }
++  *out_dx = dx;
++  *out_dy = dy;
++  return true;
++}
++
++void OffsetRangeClientQuads(Vector<gfx::QuadF>& quads,
++                            double raw_dx,
++                            double raw_dy) {
++  gfx::RectF union_bounds;
++  for (const gfx::QuadF& quad : quads) {
++    union_bounds.Union(quad.BoundingBox());
++  }
++  float dx = 0.0f;
++  float dy = 0.0f;
++  if (!ResolveRangeClientRectOffset(union_bounds, raw_dx, raw_dy, &dx, &dy)) {
++    return;
++  }
++  for (gfx::QuadF& quad : quads) {
++    quad.Offset(dx, dy);
++  }
++}
++
++void OffsetRangeBoundingRect(gfx::RectF& rect, double raw_dx, double raw_dy) {
++  float dx = 0.0f;
++  float dy = 0.0f;
++  if (ResolveRangeClientRectOffset(rect, raw_dx, raw_dy, &dx, &dy)) {
++    rect.Offset(dx, dy);
++  }
++}
++
++}  // namespace
++
+ DOMRectList* Range::getClientRects() const {
+   // TODO(crbug.com/1499981): This should be removed once synchronized scrolling
+   // impact is understood.
+@@ -1668,9 +1718,8 @@
    if (command_line->HasSwitch(switches::kFingerprint) &&
        (!command_line->HasSwitch(switches::kDisableSpoofing) ||
         command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("clientrects") == std::string::npos)) {
-+    const float raw_dx = static_cast<float>(owner_document_->GetNoiseFactorX());
-+    const float raw_dy = static_cast<float>(owner_document_->GetNoiseFactorY());
-     for (gfx::QuadF& quad : quads) {
+-    for (gfx::QuadF& quad : quads) {
 -      quad.Offset(owner_document_->GetNoiseFactorX(), owner_document_->GetNoiseFactorY());
-+      const gfx::PointF min_pt = quad.Extents().first;
-+      const float dx = (min_pt.x() == 0.0f && raw_dx < 0.0f) ? -raw_dx : raw_dx;
-+      const float dy = (min_pt.y() == 0.0f && raw_dy < 0.0f) ? -raw_dy : raw_dy;
-+      quad.Offset(dx, dy);
-     }
+-    }
++    OffsetRangeClientQuads(quads, owner_document_->GetNoiseFactorX(),
++                           owner_document_->GetNoiseFactorY());
    }
  
-@@ -1685,7 +1690,17 @@
+   return MakeGarbageCollected<DOMRectList>(quads);
+@@ -1685,7 +1734,8 @@
    if (command_line->HasSwitch(switches::kFingerprint) &&
        (!command_line->HasSwitch(switches::kDisableSpoofing) ||
         command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("clientrects") == std::string::npos)) {
 -    rect.Offset(owner_document_->GetNoiseFactorX(), owner_document_->GetNoiseFactorY());
-+    if (!rect.IsEmpty()) {
-+      float dx = static_cast<float>(owner_document_->GetNoiseFactorX());
-+      float dy = static_cast<float>(owner_document_->GetNoiseFactorY());
-+      if (rect.x() == 0.0f && dx < 0.0f) {
-+        dx = -dx;
-+      }
-+      if (rect.y() == 0.0f && dy < 0.0f) {
-+        dy = -dy;
-+      }
-+      rect.Offset(dx, dy);
-+    }
++    OffsetRangeBoundingRect(rect, owner_document_->GetNoiseFactorX(),
++                            owner_document_->GetNoiseFactorY());
    }
    return DOMRect::FromRectF(rect);
  }

@@ -24,7 +24,7 @@ READBACK_PARITY_PATCH = Path(__file__).with_name("patches") / "024-webgl-readbac
 READBACK_PARITY_PATCH_SHA256 = "78ff843b4586c5452b8987dc9ecea0b52b16e1ccbcdc5e472597dd77d36d21c3"
 READBACK_PARITY_SERIES_ENTRY = "extra/fingerprint/024-webgl-readback-parity.patch"
 AUDIO_CLIENTRECTS_PATCH = Path(__file__).with_name("patches") / "025-audio-clientrects-parity.patch"
-AUDIO_CLIENTRECTS_PATCH_SHA256 = "6853fb67a24f286aba189bce1e0fc35ef3d4af3dbc9ffbc126db9f7002a42abb"
+AUDIO_CLIENTRECTS_PATCH_SHA256 = "9a369414029f7b3b7811d01a31d8cbfb915b381ad08876e4b39e87cf7128f881"
 AUDIO_CLIENTRECTS_SERIES_ENTRY = "extra/fingerprint/025-audio-clientrects-parity.patch"
 
 

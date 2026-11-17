@@ -673,11 +673,12 @@ COLLECT = """async () => {
     document.body.style.margin = '0';
     document.body.style.padding = '0';
     const wrap = document.createElement('div');
-    wrap.innerHTML = '<div id="rEmptyBox" style="width:0;height:0"></div><div id="rZeroBox" style="width:40px;height:20px">A</div>';
+    wrap.innerHTML = '<div id="rEmptyBox" style="width:0;height:0"></div><div id="rZeroBox" style="width:40px;height:20px">A</div><div style="position:absolute;left:0;top:0;width:100px;font:16px monospace;line-height:20px;text-indent:20px"><span id="rMultiSpan">abcdefgh ijklmnop qrstuvwx yz abcde</span></div>';
     document.body.prepend(wrap);
     try {
       const zBox = document.getElementById('rZeroBox');
       const eBox = document.getElementById('rEmptyBox');
+      const mSpan = document.getElementById('rMultiSpan');
       const zr = zBox.getBoundingClientRect();
       const zrs = zBox.getClientRects()[0];
       const er = eBox.getBoundingClientRect();
@@ -694,6 +695,27 @@ COLLECT = """async () => {
       emptyRange.collapse(true);
       const rr0 = emptyRange.getBoundingClientRect();
       if (rr0.x !== 0 || rr0.y !== 0 || rr0.width !== 0 || rr0.height !== 0) rectMismatch++;
+      const checkUnionParity = (bbox, frags) => {
+        const nonEmpty = Array.from(frags).filter(f => f.width > 0 && f.height > 0);
+        if (nonEmpty.length < 2) { rectMismatch++; return; }
+        let ux = Infinity, uy = Infinity, ur = -Infinity, ub = -Infinity;
+        for (const f of nonEmpty) {
+          if (f.x < 0 || f.y < 0) rectMismatch++;
+          ux = Math.min(ux, f.x);
+          uy = Math.min(uy, f.y);
+          ur = Math.max(ur, f.right);
+          ub = Math.max(ub, f.bottom);
+        }
+        if (bbox.x < 0 || bbox.y < 0) rectMismatch++;
+        if (Math.abs(bbox.x - ux) > 1e-5 || Math.abs(bbox.y - uy) > 1e-5 ||
+            Math.abs(bbox.right - ur) > 1e-5 || Math.abs(bbox.bottom - ub) > 1e-5) {
+          rectMismatch++;
+        }
+      };
+      checkUnionParity(mSpan.getBoundingClientRect(), mSpan.getClientRects());
+      const mRange = document.createRange();
+      mRange.selectNodeContents(mSpan);
+      checkUnionParity(mRange.getBoundingClientRect(), mRange.getClientRects());
     } finally {
       wrap.remove();
       document.body.style.margin = prevMargin;
@@ -893,7 +915,9 @@ async def verify(executable: Path, output: Path) -> None:
                             f"Silent WebAudio buffer perturbed: {result.get('audioSilentMax')}"
                         )
                     if result.get("clientRectMismatch") != 0:
-                        raise ValueError("ClientRects 0x0 or (0,0) edge contract failed")
+                        raise ValueError(
+                            "ClientRects 0x0, (0,0), or multiline union contract failed"
+                        )
                     await page.goto(f"http://127.0.0.1:{server.server_port}/strict")
                     check_sample(await page.evaluate(STRICT), vendor, arch)
                 finally:
