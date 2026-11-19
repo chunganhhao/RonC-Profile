@@ -81,6 +81,7 @@ def compatible_identity(saved: dict, current: dict) -> bool:
         "macos_antidetect_patch_sha256",
         "webgl_readback_patch_sha256",
         "audio_clientrects_patch_sha256",
+        "apple_silicon_coherence_patch_sha256",
     ):
         if key not in saved_src and key in curr_src:
             curr_src.pop(key, None)
@@ -367,10 +368,14 @@ def main() -> int:
         context = identity(root)
         unpack(root / "build", args.checkpoint, context)
         saved_src = saved_identity.get("source", {})
-        if (
-            "macos_antidetect_patch_sha256" not in saved_src
-            or "webgl_readback_patch_sha256" not in saved_src
-            or "audio_clientrects_patch_sha256" not in saved_src
+        if any(
+            key not in saved_src
+            for key in (
+                "macos_antidetect_patch_sha256",
+                "webgl_readback_patch_sha256",
+                "audio_clientrects_patch_sha256",
+                "apple_silicon_coherence_patch_sha256",
+            )
         ):
             _apply_incremental_patches(root / "build/src")
         (root / "native-ready.json").write_text(json.dumps(context, indent=2) + "\n")

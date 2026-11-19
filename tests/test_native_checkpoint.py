@@ -248,6 +248,7 @@ def test_legacy_ninja_log_mtime_repair_and_migration_compatibility(tmp_path):
     new_ctx["source"]["macos_antidetect_patch_sha256"] = "new-023"
     new_ctx["source"]["webgl_readback_patch_sha256"] = "new-024"
     new_ctx["source"]["audio_clientrects_patch_sha256"] = "new-025"
+    new_ctx["source"]["apple_silicon_coherence_patch_sha256"] = "new-026"
     new_ctx["kit"]["build.sh"] = "updated"
     new_ctx["kit"]["checkpoint.py"] = "updated"
     new_ctx["kit"]["prepare.py"] = "updated"
@@ -316,6 +317,25 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     assert checkpoint.main() == 0
     patch_hook.assert_called_once_with(root / "build/src")
     assert json.loads((root / "native-ready.json").read_text()) == new_ctx
+
+    # Post-025 checkpoint (Run #17/#19: has 023/024/025, lacks 026) must also apply 026 on restore.
+    post025_saved = json.loads(json.dumps(saved_ctx))
+    post025_saved["source"]["webgl_readback_patch_sha256"] = "old-024"
+    post025_saved["source"]["audio_clientrects_patch_sha256"] = "old-025"
+    ckpt25 = tmp_path / "ckpt25"
+    checkpoint.pack(source, ckpt25, post025_saved)
+    post026_ctx = json.loads(json.dumps(post025_saved))
+    post026_ctx["source"]["apple_silicon_coherence_patch_sha256"] = "new-026"
+    post026_ctx["kit"]["prepare.py"] = "new-026"
+    root2 = tmp_path / "root2"
+    root2.mkdir()
+    monkeypatch.setattr(checkpoint, "identity", lambda _: post026_ctx)
+    patch_hook2 = Mock(return_value=True)
+    monkeypatch.setattr(checkpoint, "_apply_incremental_patches", patch_hook2)
+    monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root2), str(ckpt25)])
+    assert checkpoint.main() == 0
+    patch_hook2.assert_called_once_with(root2 / "build/src")
+    assert json.loads((root2 / "native-ready.json").read_text()) == post026_ctx
 
 
 def test_mtime_manifest_rejects_tampering(tmp_path):

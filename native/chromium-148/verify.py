@@ -922,19 +922,210 @@ async def verify(executable: Path, output: Path) -> None:
                     check_sample(await page.evaluate(STRICT), vendor, arch)
                 finally:
                     await browser.close()
-        if (
-            report["cases"]["macos:2"]["window"]["textMetrics"]
-            == report["cases"]["macos:3"]["window"]["textMetrics"]
-        ):
-            raise ValueError("measureText metrics did not vary across seeds")
-        if report["cases"]["macos:2"]["webglDigest"] == report["cases"]["macos:3"]["webglDigest"]:
-            raise ValueError("WebGL noise digest did not vary across seeds")
-        for key in ("webgl5551Digest", "webglFloatDigest", "webglHalfFloatDigest"):
-            if report["cases"]["macos:2"][key] == report["cases"]["macos:3"][key]:
-                raise ValueError(f"{key} did not vary across seeds")
-        audio_digests = {report["cases"][f"macos:{s}"]["audioDigest"] for s in (2, 3, 6)}
-        if len(audio_digests) != 3:
-            raise ValueError("Audio fingerprint digest did not vary cleanly across seeds 2, 3, 6")
+            if (
+                report["cases"]["macos:2"]["window"]["textMetrics"]
+                == report["cases"]["macos:3"]["window"]["textMetrics"]
+            ):
+                raise ValueError("measureText metrics did not vary across seeds")
+            if (
+                report["cases"]["macos:2"]["webglDigest"]
+                == report["cases"]["macos:3"]["webglDigest"]
+            ):
+                raise ValueError("WebGL noise digest did not vary across seeds")
+            for key in ("webgl5551Digest", "webglFloatDigest", "webglHalfFloatDigest"):
+                if report["cases"]["macos:2"][key] == report["cases"]["macos:3"][key]:
+                    raise ValueError(f"{key} did not vary across seeds")
+            audio_digests = {report["cases"][f"macos:{s}"]["audioDigest"] for s in (2, 3, 6)}
+            if len(audio_digests) != 3:
+                raise ValueError(
+                    "Audio fingerprint digest did not vary cleanly across seeds 2, 3, 6"
+                )
+
+            async def _verify_apple_silicon_profile(
+                seed: int,
+                expected_renderer: str,
+                expected_cpu: int,
+                width: int,
+                height: int,
+                avail_top: int,
+                avail_height: int,
+                dpr: float,
+                color_depth: int,
+                gamut: str,
+                internal: int,
+                scheme: str,
+            ) -> dict:
+                browser = await pw.chromium.launch(
+                    executable_path=str(executable),
+                    headless=True,
+                    ignore_default_args=["--enable-automation"],
+                    args=[
+                        f"--fingerprint={seed}",
+                        "--fingerprint-platform=macos",
+                        f"--fingerprint-screen-width={width}",
+                        f"--fingerprint-screen-height={height}",
+                        f"--fingerprint-device-scale-factor={dpr}",
+                        f"--fingerprint-display-profile=avail_top={avail_top},"
+                        f"avail_height={avail_height},color_depth={color_depth},"
+                        f"gamut={gamut},internal={internal},scheme={scheme}",
+                        f"--window-size={width - 4},{avail_height - 90}",
+                        "--disable-background-networking",
+                    ],
+                )
+                try:
+                    context = await browser.new_context()
+                    await context.route(
+                        "**/*",
+                        lambda route: (
+                            route.continue_()
+                            if route.request.url.startswith(
+                                f"http://127.0.0.1:{server.server_port}/"
+                            )
+                            else route.abort()
+                        ),
+                    )
+                    page = await context.new_page()
+                    await page.goto(f"http://127.0.0.1:{server.server_port}/")
+                    data = await page.evaluate(
+                        """async () => {
+                        const mk = (id) => {
+                          const c = document.createElement('canvas');
+                          c.width = 16; c.height = 16;
+                          return c.getContext(id);
+                        };
+                        const gl1 = mk('webgl');
+                        const gl2 = mk('webgl2');
+                        const pre = {
+                          gl1DrawBufVal: gl1.getParameter(0x8824),
+                          gl1DrawBufErr: gl1.getError(),
+                          gl1AnisoVal: gl1.getParameter(0x84FF),
+                          gl1AnisoErr: gl1.getError(),
+                          gl2AnisoVal: gl2.getParameter(0x84FF),
+                          gl2AnisoErr: gl2.getError(),
+                          gl2DrawBufVal: gl2.getParameter(0x8824),
+                        };
+                        const hasDraw = Boolean(gl1.getExtension('WEBGL_draw_buffers'));
+                        const hasAniso1 = Boolean(gl1.getExtension('EXT_texture_filter_anisotropic'));
+                        const hasAniso2 = Boolean(gl2.getExtension('EXT_texture_filter_anisotropic'));
+                        const dbg = gl2.getExtension('WEBGL_debug_renderer_info');
+                        const post = {
+                          hasDraw, hasAniso1, hasAniso2,
+                          gl1DrawBufVal: gl1.getParameter(0x8824),
+                          gl1AnisoVal: gl1.getParameter(0x84FF),
+                          gl2AnisoVal: gl2.getParameter(0x84FF),
+                          renderer: dbg ? gl2.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null,
+                          vendor: dbg ? gl2.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : null,
+                        };
+                        const devs = await navigator.mediaDevices.enumerateDevices();
+                        return {
+                          cpu: navigator.hardwareConcurrency,
+                          memory: navigator.deviceMemory,
+                          dpr: window.devicePixelRatio,
+                          outerHeight: window.outerHeight,
+                          innerHeight: window.innerHeight,
+                          screen: {
+                            w: screen.width, h: screen.height,
+                            availTop: screen.availTop, availHeight: screen.availHeight,
+                            colorDepth: screen.colorDepth, isExtended: screen.isExtended,
+                          },
+                          media: {
+                            p3: matchMedia('(color-gamut: p3)').matches,
+                            srgb: matchMedia('(color-gamut: srgb)').matches,
+                            color10: matchMedia('(color: 10)').matches,
+                            dark: matchMedia('(prefers-color-scheme: dark)').matches,
+                            light: matchMedia('(prefers-color-scheme: light)').matches,
+                            devW: matchMedia(`(device-width: ${screen.width}px)`).matches,
+                            devH: matchMedia(`(device-height: ${screen.height}px)`).matches,
+                          },
+                          deviceKinds: devs.map(d => d.kind),
+                          pre, post,
+                        };
+                    }"""
+                    )
+                finally:
+                    await browser.close()
+
+                if data["cpu"] != expected_cpu or data["memory"] != 8:
+                    raise ValueError(f"Apple Silicon seed {seed} cpu/memory mismatch: {data}")
+                if data["post"]["renderer"] != expected_renderer:
+                    raise ValueError(f"Apple Silicon seed {seed} GPU mismatch: {data['post']}")
+                pre = data["pre"]
+                if (
+                    pre["gl1DrawBufVal"] is not None
+                    or pre["gl1DrawBufErr"] != 1280
+                    or pre["gl1AnisoVal"] is not None
+                    or pre["gl1AnisoErr"] != 1280
+                    or pre["gl2AnisoVal"] is not None
+                    or pre["gl2AnisoErr"] != 1280
+                    or pre["gl2DrawBufVal"] != 8
+                ):
+                    raise ValueError(f"WebGL extension-gating leak on seed {seed}: {pre}")
+                post = data["post"]
+                if post["hasDraw"] and post["gl1DrawBufVal"] != 8:
+                    raise ValueError(f"Post-extension gl1 MAX_DRAW_BUFFERS mismatch: {post}")
+                if post["hasAniso1"] and post["gl1AnisoVal"] != 16:
+                    raise ValueError(f"Post-extension gl1 ANISOTROPY mismatch: {post}")
+                if post["hasAniso2"] and post["gl2AnisoVal"] != 16:
+                    raise ValueError(f"Post-extension gl2 ANISOTROPY mismatch: {post}")
+                if data["screen"] != {
+                    "w": width,
+                    "h": height,
+                    "availTop": avail_top,
+                    "availHeight": avail_height,
+                    "colorDepth": color_depth,
+                    "isExtended": False,
+                }:
+                    raise ValueError(f"Screen override mismatch on seed {seed}: {data['screen']}")
+                if data["dpr"] != dpr or data["outerHeight"] > avail_height:
+                    raise ValueError(f"DPR/outerHeight mismatch on seed {seed}: {data}")
+                if (
+                    not data["media"]["devW"]
+                    or not data["media"]["devH"]
+                    or data["media"]["p3"] != (gamut == "p3")
+                    or data["media"]["color10"] != (color_depth == 30)
+                    or data["media"]["dark"] != (scheme == "dark")
+                    or data["media"]["light"] != (scheme == "light")
+                ):
+                    raise ValueError(
+                        f"CSS media coherence mismatch on seed {seed}: {data['media']}"
+                    )
+                if not internal and "videoinput" in data["deviceKinds"]:
+                    raise ValueError(
+                        f"MediaDevices desktop camera suppression failed on seed {seed}: "
+                        f"{data['deviceKinds']}"
+                    )
+                return data
+
+            report["cases"]["apple_silicon_m3_laptop"] = await _verify_apple_silicon_profile(
+                seed=3,
+                expected_renderer="ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)",
+                expected_cpu=8,
+                width=1512,
+                height=982,
+                avail_top=38,
+                avail_height=874,
+                dpr=2,
+                color_depth=30,
+                gamut="p3",
+                internal=1,
+                scheme="dark",
+            )
+            report["cases"]["apple_silicon_m2_max_desktop"] = await _verify_apple_silicon_profile(
+                seed=9,
+                expected_renderer=(
+                    "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Max, Unspecified Version)"
+                ),
+                expected_cpu=12,
+                width=2560,
+                height=1440,
+                avail_top=25,
+                avail_height=1345,
+                dpr=2,
+                color_depth=30,
+                gamut="p3",
+                internal=0,
+                scheme="light",
+            )
         report["acceptance"] = "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
     finally:
         server.shutdown()
