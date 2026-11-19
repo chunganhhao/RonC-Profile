@@ -397,6 +397,7 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     out = tmp_path / "report.json"
 
     launches: list[tuple[bool, list[str]]] = []
+    context_kwargs: list[dict] = []
 
     class FakePage:
         async def goto(self, url: str) -> None:
@@ -533,7 +534,8 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     class FakeBrowser:
         version = "148.0.7778.215"
 
-        async def new_context(self):
+        async def new_context(self, **kwargs):
+            context_kwargs.append(dict(kwargs))
             return FakeContext()
 
         async def close(self):
@@ -574,6 +576,8 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     assert report["acceptance"] == "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
     assert len(launches) == 5
     assert all(is_open for is_open, _ in launches)
+    assert len(context_kwargs) == 5
+    assert all(kw == {"color_scheme": "null"} for kw in context_kwargs)
     assert "apple_silicon_m3_laptop" in report["cases"]
     assert "apple_silicon_m2_max_desktop" in report["cases"]
 

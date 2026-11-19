@@ -986,9 +986,6 @@ diff --git a/third_party/blink/renderer/core/css/media_values.cc b/third_party/b
        overrides ? overrides->GetColorGamut() : std::nullopt;
 -  return override_value.value_or(color_space_utilities::GetColorSpaceGamut(
 -      frame->GetPage()->GetChromeClient().GetScreenInfo(*frame)));
-+  if (override_value.has_value()) {
-+    return override_value.value();
-+  }
 +  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
 +  if (dp.gamut == 2) {
 +    return ColorSpaceGamut::P3;
@@ -996,20 +993,18 @@ diff --git a/third_party/blink/renderer/core/css/media_values.cc b/third_party/b
 +  if (dp.gamut == 1) {
 +    return ColorSpaceGamut::SRGB;
 +  }
++  if (override_value.has_value()) {
++    return override_value.value();
++  }
 +  return color_space_utilities::GetColorSpaceGamut(
 +      frame->GetPage()->GetChromeClient().GetScreenInfo(*frame));
  }
  
  mojom::blink::PreferredColorScheme MediaValues::CalculatePreferredColorScheme(
-@@ -412,8 +444,17 @@
-   std::optional<mojom::blink::PreferredColorScheme> preference_override_value =
-       preference_overrides ? preference_overrides->GetPreferredColorScheme()
-                            : std::nullopt;
--  return preference_override_value.value_or(
--      frame->GetDocument()->GetStyleEngine().GetPreferredColorScheme());
-+  if (preference_override_value.has_value()) {
-+    return preference_override_value.value();
-+  }
+@@ -399,6 +431,13 @@
+   DCHECK(frame->GetSettings());
+   DCHECK(frame->GetDocument());
+   DCHECK(frame->GetPage());
 +  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
 +  if (dp.color_scheme == 2) {
 +    return mojom::blink::PreferredColorScheme::kDark;
@@ -1017,10 +1012,9 @@ diff --git a/third_party/blink/renderer/core/css/media_values.cc b/third_party/b
 +  if (dp.color_scheme == 1) {
 +    return mojom::blink::PreferredColorScheme::kLight;
 +  }
-+  return frame->GetDocument()->GetStyleEngine().GetPreferredColorScheme();
- }
- 
- mojom::blink::PreferredContrast MediaValues::CalculatePreferredContrast(
+   const MediaFeatureOverrides* overrides =
+       frame->GetPage()->GetMediaFeatureOverrides();
+   std::optional<mojom::blink::PreferredColorScheme> override_value =
 diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
 --- a/third_party/blink/renderer/core/loader/frame_fetch_context.cc
 +++ b/third_party/blink/renderer/core/loader/frame_fetch_context.cc

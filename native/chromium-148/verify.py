@@ -833,7 +833,7 @@ async def verify(executable: Path, output: Path) -> None:
                 try:
                     if not browser.version.startswith("148."):
                         raise ValueError("Acceptance requires the pinned Chromium148 core")
-                    context = await browser.new_context()
+                    context = await browser.new_context(color_scheme="null")
                     await context.route(
                         "**/*",
                         lambda route: (
@@ -973,7 +973,7 @@ async def verify(executable: Path, output: Path) -> None:
                     ],
                 )
                 try:
-                    context = await browser.new_context()
+                    context = await browser.new_context(color_scheme="null")
                     await context.route(
                         "**/*",
                         lambda route: (

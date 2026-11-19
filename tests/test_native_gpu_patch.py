@@ -562,6 +562,65 @@ def test_026_media_and_two_screen_topology_under_strict_cpp20(tmp_path):
     ]
     assert mdm_lines
 
+    # Reconstruct full patched MediaValues::CalculateColorGamut & CalculatePreferredColorScheme
+    # by applying the 026 hunks verbatim to the upstream Chromium 148 source snippet.
+    mv_chunk = patch026.split("+++ b/third_party/blink/renderer/core/css/media_values.cc\n", 1)[
+        1
+    ].split("diff --git", 1)[0]
+    upstream_mv = """ColorSpaceGamut MediaValues::CalculateColorGamut(LocalFrame* frame) {
+  DCHECK(frame);
+  DCHECK(frame->GetSettings());
+  DCHECK(frame->GetPage());
+  const MediaFeatureOverrides* overrides =
+      frame->GetPage()->GetMediaFeatureOverrides();
+  std::optional<ColorSpaceGamut> override_value =
+      overrides ? overrides->GetColorGamut() : std::nullopt;
+  return override_value.value_or(color_space_utilities::GetColorSpaceGamut(
+      frame->GetPage()->GetChromeClient().GetScreenInfo(*frame)));
+}
+
+mojom::blink::PreferredColorScheme MediaValues::CalculatePreferredColorScheme(
+    LocalFrame* frame) {
+  DCHECK(frame);
+  DCHECK(frame->GetSettings());
+  DCHECK(frame->GetDocument());
+  DCHECK(frame->GetPage());
+  const MediaFeatureOverrides* overrides =
+      frame->GetPage()->GetMediaFeatureOverrides();
+  std::optional<mojom::blink::PreferredColorScheme> override_value =
+      overrides ? overrides->GetPreferredColorScheme() : std::nullopt;
+  if (override_value.has_value()) {
+    return override_value.value();
+  }
+
+  const PreferenceOverrides* preference_overrides =
+      frame->GetPage()->GetPreferenceOverrides();
+  std::optional<mojom::blink::PreferredColorScheme> preference_override_value =
+      preference_overrides ? preference_overrides->GetPreferredColorScheme()
+                           : std::nullopt;
+  return preference_override_value.value_or(
+      frame->GetDocument()->GetStyleEngine().GetPreferredColorScheme());
+}"""
+    patched_mv = upstream_mv
+    for hunk in mv_chunk.split("@@ -390,", 1)[1].split("\n@@ "):
+        body = hunk.splitlines()[1:]
+        old_blk = "\n".join(line[1:] for line in body if line.startswith((" ", "-")))
+        new_blk = "\n".join(line[1:] for line in body if line.startswith((" ", "+")))
+        assert patched_mv.count(old_blk) == 1, old_blk
+        patched_mv = patched_mv.replace(old_blk, new_blk, 1)
+
+    gamut_fn = patched_mv.split("MediaValues::CalculatePreferredColorScheme", 1)[0]
+    scheme_fn = patched_mv.split("MediaValues::CalculatePreferredColorScheme", 1)[1]
+    assert gamut_fn.index("if (dp.gamut == 2)") < gamut_fn.index("if (override_value.has_value())")
+    assert (
+        scheme_fn.index("if (dp.color_scheme == 2)")
+        < scheme_fn.index("GetMediaFeatureOverrides()")
+        < scheme_fn.index("if (override_value.has_value())")
+    )
+    assert scheme_fn.index("if (dp.color_scheme == 2)") < scheme_fn.index(
+        "GetPreferenceOverrides()"
+    )
+
     _write_026_cpp_mock_headers(tmp_path, patch026)
 
     test_cc = tmp_path / "test_p103_p204.cc"
@@ -569,11 +628,68 @@ def test_026_media_and_two_screen_topology_under_strict_cpp20(tmp_path):
         f"""#include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <vector>
 #include "components/ungoogled/fingerprint_display.h"
 
 namespace media {{ struct VideoCaptureControlSupport {{}}; }}
+enum class ColorSpaceGamut {{ SRGB, P3 }};
+namespace color_space_utilities {{
+inline ColorSpaceGamut GetColorSpaceGamut(int) {{ return ColorSpaceGamut::SRGB; }}
+}}
+namespace mojom::blink {{ enum class PreferredColorScheme {{ kLight, kDark }}; }}
+struct MediaFeatureOverrides {{
+  std::optional<ColorSpaceGamut> gamut;
+  std::optional<mojom::blink::PreferredColorScheme> scheme;
+  std::optional<ColorSpaceGamut> GetColorGamut() const {{ return gamut; }}
+  std::optional<mojom::blink::PreferredColorScheme> GetPreferredColorScheme() const {{
+    return scheme;
+  }}
+}};
+struct PreferenceOverrides {{
+  std::optional<mojom::blink::PreferredColorScheme> scheme;
+  std::optional<mojom::blink::PreferredColorScheme> GetPreferredColorScheme() const {{
+    return scheme;
+  }}
+}};
+struct MockSettings {{}};
+struct MockStyleEngine {{
+  mojom::blink::PreferredColorScheme scheme = mojom::blink::PreferredColorScheme::kLight;
+  mojom::blink::PreferredColorScheme GetPreferredColorScheme() const {{ return scheme; }}
+}};
+struct MockChromeClient {{
+  template <typename T>
+  int GetScreenInfo(const T&) const {{ return 0; }}
+}};
+struct MockPage {{
+  MockChromeClient c;
+  MediaFeatureOverrides media_overrides;
+  PreferenceOverrides pref_overrides;
+  MockChromeClient& GetChromeClient() {{ return c; }}
+  const MediaFeatureOverrides* GetMediaFeatureOverrides() const {{ return &media_overrides; }}
+  const PreferenceOverrides* GetPreferenceOverrides() const {{ return &pref_overrides; }}
+}};
+struct MockDocument {{
+  MockStyleEngine s;
+  MockStyleEngine& GetStyleEngine() {{ return s; }}
+}};
+struct LocalFrame {{
+  MockSettings settings;
+  MockPage p;
+  MockDocument d;
+  const MockSettings* GetSettings() const {{ return &settings; }}
+  MockPage* GetPage() {{ return &p; }}
+  MockDocument* GetDocument() {{ return &d; }}
+}};
+struct MediaValues {{
+  static ColorSpaceGamut CalculateColorGamut(LocalFrame* frame);
+  static mojom::blink::PreferredColorScheme CalculatePreferredColorScheme(LocalFrame* frame);
+}};
+#define DCHECK(x) assert(x)
+{patched_mv}
+#undef DCHECK
 namespace blink {{
 namespace mojom {{ enum class FacingMode {{ kNone, kUser }}; }}
 struct WebMediaDeviceInfo {{
@@ -612,7 +728,46 @@ static std::string MockHmac(const std::string& raw_id) {{
 }}
 
 int main() {{
+  const char* raw_case = std::getenv("FOXPROFILE_026_CASE");
+  const std::string test_case = raw_case ? raw_case : "dark";
   auto* cmd = base::CommandLine::ForCurrentProcess();
+  if (test_case == "light") {{
+    cmd->values = {{
+        {{"fingerprint-screen-width", "2560"}},
+        {{"fingerprint-screen-height", "1440"}},
+        {{"fingerprint-device-scale-factor", "2"}},
+        {{"fingerprint-display-profile",
+         "avail_top=25,avail_height=1345,color_depth=30,gamut=srgb,internal=0,scheme=light"}},
+    }};
+    LocalFrame frame;
+    frame.p.media_overrides.gamut = ColorSpaceGamut::P3;
+    frame.p.media_overrides.scheme = mojom::blink::PreferredColorScheme::kDark;
+    frame.p.pref_overrides.scheme = mojom::blink::PreferredColorScheme::kDark;
+    assert(MediaValues::CalculateColorGamut(&frame) == ColorSpaceGamut::SRGB);
+    assert(MediaValues::CalculatePreferredColorScheme(&frame) ==
+           mojom::blink::PreferredColorScheme::kLight);
+    return 0;
+  }}
+  if (test_case == "unset") {{
+    LocalFrame frame;
+    frame.p.media_overrides.gamut = ColorSpaceGamut::P3;
+    assert(MediaValues::CalculateColorGamut(&frame) == ColorSpaceGamut::P3);
+    frame.p.media_overrides.gamut = std::nullopt;
+    assert(MediaValues::CalculateColorGamut(&frame) == ColorSpaceGamut::SRGB);
+
+    frame.p.media_overrides.scheme = mojom::blink::PreferredColorScheme::kDark;
+    frame.p.pref_overrides.scheme = mojom::blink::PreferredColorScheme::kLight;
+    assert(MediaValues::CalculatePreferredColorScheme(&frame) ==
+           mojom::blink::PreferredColorScheme::kDark);
+    frame.p.media_overrides.scheme = std::nullopt;
+    frame.p.pref_overrides.scheme = mojom::blink::PreferredColorScheme::kDark;
+    assert(MediaValues::CalculatePreferredColorScheme(&frame) ==
+           mojom::blink::PreferredColorScheme::kDark);
+    frame.p.pref_overrides.scheme = std::nullopt;
+    assert(MediaValues::CalculatePreferredColorScheme(&frame) ==
+           mojom::blink::PreferredColorScheme::kLight);
+    return 0;
+  }}
   cmd->values = {{
       {{"fingerprint-screen-width", "1512"}},
       {{"fingerprint-screen-height", "982"}},
@@ -664,6 +819,15 @@ int main() {{
   assert(new_infos.screen_infos.size() == 1);
   assert(new_infos.current_display_id == 20);
   assert(new_infos.current().display_id == 20);
+
+  // Explicit display-profile gamut/scheme wins over both MediaFeatureOverrides and PreferenceOverrides.
+  LocalFrame frame;
+  frame.p.media_overrides.gamut = ColorSpaceGamut::SRGB;
+  frame.p.media_overrides.scheme = mojom::blink::PreferredColorScheme::kLight;
+  frame.p.pref_overrides.scheme = mojom::blink::PreferredColorScheme::kLight;
+  assert(MediaValues::CalculateColorGamut(&frame) == ColorSpaceGamut::P3);
+  assert(MediaValues::CalculatePreferredColorScheme(&frame) ==
+         mojom::blink::PreferredColorScheme::kDark);
   return 0;
 }}
 """
@@ -691,4 +855,8 @@ int main() {{
         text=True,
         timeout=60,
     )
-    subprocess.run([str(exe)], check=True, capture_output=True, timeout=10)
+    import os
+
+    for mode in ("dark", "light", "unset"):
+        env = dict(os.environ, FOXPROFILE_026_CASE=mode)
+        subprocess.run([str(exe)], env=env, check=True, capture_output=True, timeout=10)

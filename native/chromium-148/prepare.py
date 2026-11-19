@@ -29,7 +29,7 @@ AUDIO_CLIENTRECTS_SERIES_ENTRY = "extra/fingerprint/025-audio-clientrects-parity
 APPLE_SILICON_PATCH = (
     Path(__file__).with_name("patches") / "026-apple-silicon-device-coherence.patch"
 )
-APPLE_SILICON_PATCH_SHA256 = "f564b9f999acd620cb455df520a58a5b6c74dfc2310696d5a753ff4b4412d390"
+APPLE_SILICON_PATCH_SHA256 = "558b84bbec096583a5253889a06b4c31f5c5efa31a79fde5d42e29fce908d75f"
 APPLE_SILICON_SERIES_ENTRY = "extra/fingerprint/026-apple-silicon-device-coherence.patch"
 
 
