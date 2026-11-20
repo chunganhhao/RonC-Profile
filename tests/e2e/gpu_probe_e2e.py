@@ -1,4 +1,5 @@
 """Actual runner with temporary data: hidden probe followed by one headed profile."""
+
 import asyncio
 import json
 import os
@@ -13,7 +14,14 @@ OUT = ROOT / "artifacts/headless-probe-adapter-2026-11-09"
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="ronc-probe-adapter-") as directory:
-        for key in ("DATA_DIR", "PROFILES_FILE", "LOG_DIR", "CHROME_HOME", "CORE_HOME", "CORE_BACKUP_HOME"):
+        for key in (
+            "DATA_DIR",
+            "PROFILES_FILE",
+            "LOG_DIR",
+            "CHROME_HOME",
+            "CORE_HOME",
+            "CORE_BACKUP_HOME",
+        ):
             os.environ["FOXPROFILE_" + key] = str(Path(directory) / key.lower())
         os.environ["FOXPROFILE_HEADLESS"] = "false"
         os.environ["FOXPROFILE_RESTORE_TABS"] = "false"
@@ -32,7 +40,12 @@ def main():
             return original_probe(self, *args, **kwargs)
 
         async def launch_profile(self, *args, **kwargs):
-            profiles.append({"headless": kwargs.get("headless"), "user_data_dir": str(kwargs.get("user_data_dir", args[0] if args else ""))})
+            profiles.append(
+                {
+                    "headless": kwargs.get("headless"),
+                    "user_data_dir": str(kwargs.get("user_data_dir", args[0] if args else "")),
+                }
+            )
             return await original_profile(self, *args, **kwargs)
 
         SyncBrowserType.launch = launch_probe
@@ -42,11 +55,15 @@ def main():
         runner.exit_ip = lambda *_: False
         original_serve = runner.control.serve
         original_print = runner._safe_print
-        runner._safe_print = lambda value: original_print("CONTROL:[temporary]" if value.startswith("CONTROL:") else value)
+        runner._safe_print = lambda value: original_print(
+            "CONTROL:[temporary]" if value.startswith("CONTROL:") else value
+        )
 
         async def checked_serve(context):
             page = context.pages[0]
-            await page.set_content("<!doctype html><title>RonC temporary headed profile</title><h1>Probe hidden; profile headed</h1>")
+            await page.set_content(
+                "<!doctype html><title>RonC temporary headed profile</title><h1>Probe hidden; profile headed</h1>"
+            )
             assert await page.title() == "RonC temporary headed profile"
             assert probes == [{"headless": True, "persistent": False}], probes
             assert len(profiles) == 1 and profiles[0]["headless"] is False, profiles
@@ -61,13 +78,22 @@ def main():
         try:
             code = asyncio.run(runner._async_main())
             assert code == 0, code
-            (OUT / "e2e-result.json").write_text(json.dumps({
-                "passed": True, "probe_launches": probes,
-                "profile_headless": [p["headless"] for p in profiles],
-                "temporary_profile_only": True, "runner_exit": code,
-                "real_profile_untouched": True,
-            }, indent=2))
-            print("PASS: one headless GPU probe, one headed temporary profile; runner closed owned browsers")
+            (OUT / "e2e-result.json").write_text(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "probe_launches": probes,
+                        "profile_headless": [p["headless"] for p in profiles],
+                        "temporary_profile_only": True,
+                        "runner_exit": code,
+                        "real_profile_untouched": True,
+                    },
+                    indent=2,
+                )
+            )
+            print(
+                "PASS: one headless GPU probe, one headed temporary profile; runner closed owned browsers"
+            )
         finally:
             SyncBrowserType.launch = original_probe
             AsyncBrowserType.launch_persistent_context = original_profile

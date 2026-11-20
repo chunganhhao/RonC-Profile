@@ -18,14 +18,18 @@ class ProfileCreate(BaseModel):
     )
     group: str | None = None
     tags: list[str] | None = Field(None, max_length=20)
+    extension_ids: list[str] | None = None
     display_order: int | None = Field(None, ge=1, le=1_000_000, strict=True)
     account_uid: str | None = None
     account_password: str | None = None
     two_fa_secret: str | None = None
+    recovery_email: str | None = None
+    backup_codes: str | None = None
     notes: str | None = None
     start_url: str | None = None
     webrtc_mode: str = "proxy"
     canvas_mode: str = "auto"
+    initial_fingerprint: dict | None = None
 
 
 class ProfileUpdate(BaseModel):
@@ -39,14 +43,18 @@ class ProfileUpdate(BaseModel):
     engine: str | None = Field(None, description="Cannot be changed; only the current value")
     group: str | None = None
     tags: list[str] | None = Field(None, max_length=20)
+    extension_ids: list[str] | None = None
     display_order: int | None = Field(None, ge=1, le=1_000_000, strict=True)
     account_uid: str | None = None
     account_password: str | None = None
     two_fa_secret: str | None = None
+    recovery_email: str | None = None
+    backup_codes: str | None = None
     notes: str | None = None
     start_url: str | None = None
     webrtc_mode: str | None = None
     canvas_mode: str | None = None
+    initial_fingerprint: dict | None = None
 
 
 class ProfileResponse(BaseModel):
@@ -59,16 +67,25 @@ class ProfileResponse(BaseModel):
     core_version: str | None = None
     group: str | None = None
     tags: list[str] | None = Field(None, max_length=20)
+    extension_ids: list[str] | None = None
     display_order: int | None = Field(None, ge=1, le=1_000_000, strict=True)
     account_uid: str | None = None
+    recovery_email: str | None = None
     notes: str | None = None
     start_url: str | None = None
     webrtc_mode: str = "proxy"
     canvas_mode: str = "auto"
     has_password: bool = False
     has_2fa: bool = False
+    has_backup_codes: bool = False
     data_dir: str
     is_running: bool
+
+
+class BackupCodesResponse(BaseModel):
+    name: str
+    has_backup_codes: bool = False
+    backup_codes: str | None = None
 
 
 class ProfileListResponse(BaseModel):
@@ -123,3 +140,4 @@ class FingerprintResponse(BaseModel):
     platform: str | None = None
     screen: str | None = None
     hardware_concurrency: int | None = None
+    seed: int | None = None

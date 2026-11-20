@@ -123,9 +123,13 @@ def normalize_start_url(value: object) -> str:
         return ""
     colon = raw.find(":")
     slash = raw.find("/")
-    if colon != -1 and "%" in raw[:colon] and (slash == -1 or colon < slash):
-        if unquote(raw[:colon]).lower() not in ("http", "https"):
-            return ""
+    if (
+        colon != -1
+        and "%" in raw[:colon]
+        and (slash == -1 or colon < slash)
+        and unquote(raw[:colon]).lower() not in ("http", "https")
+    ):
+        return ""
     match = _URL_SCHEME.match(raw)
     if not match or re.match(r"\d+(/|$)", match.group(2)):
         raw = "https://" + raw

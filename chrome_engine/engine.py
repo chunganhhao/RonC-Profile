@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import hashlib
 import json
 import os
 import re
@@ -32,6 +33,7 @@ from src.services.browser.timing import launch_stage
 from . import fetch
 from . import persona as personas
 from .geo import ExitGeo, lookup, remembered_locale
+from .native_bundle import bundle_sha256
 from .proxy_bridge import ProxyBridge, Upstream
 from .release import host_os
 from .stealth import build_anti_cdp_init_script
@@ -41,6 +43,7 @@ from .stealth import build_anti_cdp_init_script
 # its --disable-features list (see playwright_disabled_features_arg).
 IGNORED_DEFAULT_ARGS = (
     "--enable-automation",
+    "--disable-blink-features=AutomationControlled",
     "--disable-popup-blocking",
     "--disable-extensions",
     "--disable-component-extensions-with-background-pages",
@@ -54,8 +57,28 @@ IGNORED_DEFAULT_ARGS = (
     "--hide-scrollbars",
     "--disable-sync",
     "--no-sandbox",
+    "--enable-unsafe-swiftshader",
 )
 HEADLESS_SCREEN = (1920, 1080)
+
+# Native realm capability only, not release/anonymity approval. Pin the complete
+# Run #12, Run #14, Run #15, Run #17, Run #19, and Run #21 payloads so existing profiles keep manifest parity.
+NATIVE_REALM_BUNDLES = frozenset(
+    {
+        "800c76d9926cf68e1f6ad5c4e9f226a3f5cdba1a096c66fba38f5ec0761069b7",
+        "8c77f73214266f9774b0e1c51a1c763b3714539d6e9e8c69b4140580304725e0",
+        "0d7f8e262baa074bf7ded9cd8409995281ff29c5a2ae50804258e75a8d064f8b",
+        "539e83e54a45d6607ca048f4d1b64591ead7af60a8be991542dc9eff4d276f6d",
+        "2d74250932a67ea51341005ef78db8434e16376c2bd4e267eb2d29e11ddae8a7",
+        "f3b0f3218788c444c0ce9665cbc438cce904a763211542b6eac3f534bac34862",
+    }
+)
+# Verified Chromium bundles containing 026 Apple Silicon coherence + WebGL extension gating.
+APPLE_SILICON_COHERENCE_BUNDLES: frozenset[str] = frozenset(
+    {
+        "f3b0f3218788c444c0ce9665cbc438cce904a763211542b6eac3f534bac34862",
+    }
+)
 
 _FEATURES_BLOCK = re.compile(r"disabledFeatures = \[(.*?)\]\.filter\(Boolean\)", re.S)
 
@@ -121,6 +144,42 @@ def set_webrtc_policy(profile_dir: Path, policy: str) -> None:
     tmp.replace(path)
 
 
+def set_extension_pins(
+    profile_dir: Path,
+    pinned_ids: tuple[str, ...] | list[str] = (),
+    unpinned_ids: tuple[str, ...] | list[str] = (),
+) -> None:
+    """Apply toolbar pin/unpin rules in Default/Preferences without clobbering custom pins."""
+    if not pinned_ids and not unpinned_ids:
+        return
+    path = profile_dir / "Default" / "Preferences"
+    try:
+        prefs = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(prefs, dict):
+            prefs = {}
+    except (OSError, ValueError):
+        prefs = {}
+    ext_cfg = prefs.get("extensions")
+    if not isinstance(ext_cfg, dict):
+        ext_cfg = prefs["extensions"] = {}
+    current_raw = ext_cfg.get("pinned_extensions")
+    current: list[str] = (
+        [str(x) for x in current_raw if isinstance(x, str)] if isinstance(current_raw, list) else []
+    )
+    unpin_set = {str(x) for x in unpinned_ids if x}
+    updated = [ext_id for ext_id in current if ext_id not in unpin_set]
+    for ext_id in pinned_ids:
+        if ext_id and ext_id not in unpin_set and ext_id not in updated:
+            updated.append(str(ext_id))
+    if current_raw == updated:
+        return
+    ext_cfg["pinned_extensions"] = updated
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name("Preferences.foxprofile-tmp")
+    tmp.write_text(json.dumps(prefs), encoding="utf-8")
+    tmp.replace(path)
+
+
 class EngineError(RuntimeError):
     pass
 
@@ -136,30 +195,144 @@ def default_sandbox() -> bool:
     return True
 
 
+def _read_verified_bundle_manifest(
+    executable: Path,
+    target_platform: str | None,
+    *,
+    require_bundle_field: bool = False,
+    cache: dict[tuple[Path, str | None], tuple[dict[str, Any], str] | None] | None = None,
+) -> tuple[dict[str, Any], str] | None:
+    """Return `(manifest, actual_bundle_sha256)` when `executable` matches its bundle manifest."""
+    if target_platform != "macos":
+        return None
+    cache_key = (executable, target_platform)
+    if cache is not None and cache_key in cache:
+        cached = cache[cache_key]
+    else:
+        cached = None
+        try:
+            resolved = executable.resolve()
+            if len(resolved.parents) > 3 and resolved.parts[-4:-1] == (
+                "Chromium.app",
+                "Contents",
+                "MacOS",
+            ):
+                manifest_path = resolved.parents[3] / "native-acceptance.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if (
+                    isinstance(manifest, dict)
+                    and manifest.get("acceptance") == "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
+                    and isinstance(manifest.get("cases"), dict)
+                    and all(
+                        isinstance(manifest["cases"].get(k), dict) for k in ("macos:2", "macos:3")
+                    )
+                ):
+                    expected_sha = manifest.get("binary_sha256")
+                    if isinstance(expected_sha, str) and len(expected_sha) == 64:
+                        actual_sha = hashlib.sha256(resolved.read_bytes()).hexdigest()
+                        if actual_sha == expected_sha.lower():
+                            actual_bundle = bundle_sha256(resolved.parents[2])
+                            declared_bundle = manifest.get("bundle_sha256", actual_bundle)
+                            if (
+                                isinstance(declared_bundle, str)
+                                and declared_bundle == actual_bundle
+                            ):
+                                cached = (manifest, actual_bundle)
+        except (OSError, ValueError, TypeError, RuntimeError):
+            cached = None
+        if cache is not None:
+            cache[cache_key] = cached
+    if cached is None:
+        return None
+    if require_bundle_field and not isinstance(cached[0].get("bundle_sha256"), str):
+        return None
+    return cached
+
+
+def _has_verified_native_realms(
+    executable: Path,
+    persona: personas.Persona,
+    *,
+    cache: dict[tuple[Path, str | None], tuple[dict[str, Any], str] | None] | None = None,
+) -> bool:
+    """True when `executable` sits inside a verified native-realms Chromium.app bundle."""
+    verified = _read_verified_bundle_manifest(
+        executable, getattr(persona, "platform", None), cache=cache
+    )
+    return verified is not None and verified[1] in NATIVE_REALM_BUNDLES
+
+
+def _has_verified_apple_silicon_026(
+    executable: Path,
+    target: personas.Persona | str,
+    *,
+    cache: dict[tuple[Path, str | None], tuple[dict[str, Any], str] | None] | None = None,
+) -> bool:
+    """True when `executable` sits inside a pinned Chromium.app bundle verified for 026."""
+    platform_name = target if isinstance(target, str) else getattr(target, "platform", None)
+    verified = _read_verified_bundle_manifest(
+        executable, platform_name, require_bundle_field=True, cache=cache
+    )
+    if verified is None:
+        return False
+    manifest, actual_bundle = verified
+    cases = manifest["cases"]
+    return actual_bundle in APPLE_SILICON_COHERENCE_BUNDLES and all(
+        isinstance(cases.get(k), dict)
+        for k in ("apple_silicon_m3_laptop", "apple_silicon_m2_max_desktop")
+    )
+
+
 def build_args(
     persona: personas.Persona,
     proxy_url: str | None = None,
     headless: bool | str = False,
     extra_args: tuple[str, ...] | list[str] = (),
+    extensions: tuple[str | Path, ...] | list[str | Path] = (),
+    *,
+    include_display_profile: bool = True,
 ) -> list[str]:
-    """Command-line switches for a launch (Playwright adds its own before these)."""
-    args = persona.to_args()
+    """Command-line switches for a launch (Playwright adds its own before these).
+
+    Note: `--enable-automation` is already stripped in `IGNORED_DEFAULT_ARGS`, so
+    Blink's `AutomationControlled` feature is never activated (`navigator.webdriver`
+    remains `false`). Do NOT pass `--disable-blink-features=AutomationControlled`,
+    as Chromium's `bad_flags_prompt.cc` shows an unsupported-flag infobar that
+    shrinks `window.innerHeight` and exposes the flag in `chrome://version`.
+    """
+    args = persona.to_args(include_display_profile=include_display_profile)
     if proxy_url:
         args.append(f"--proxy-server={proxy_url}")
     args += [
         "--no-first-run",
         "--no-default-browser-check",
         "--hide-crash-restore-bubble",
-        "--disable-blink-features=AutomationControlled",
     ]
+    use_preset_screen = bool(
+        include_display_profile and persona.screen_width and persona.screen_height
+    )
+    screen_w = (persona.screen_width if use_preset_screen else None) or HEADLESS_SCREEN[0]
+    screen_h = (persona.screen_height if use_preset_screen else None) or HEADLESS_SCREEN[1]
+    avail_h = (persona.avail_height if use_preset_screen else None) or screen_h
+    win_w = max(800, min(screen_w, screen_w - 4)) if use_preset_screen else screen_w
+    win_h = max(600, min(avail_h - 90, screen_h - 90)) if use_preset_screen else screen_h
     if headless is True:
         # Headless otherwise reports an 800x600 screen.
-        w, h = HEADLESS_SCREEN
-        args += [f"--window-size={w},{h}", f"--screen-info={{0,0 {w}x{h}}}"]
+        args += [f"--window-size={win_w},{win_h}", f"--screen-info={{0,0 {screen_w}x{screen_h}}}"]
     elif headless == "offscreen":
-        args += ["--window-position=-32000,-32000", "--window-size=1600,900"]
+        ow, oh = (win_w, win_h) if use_preset_screen else (1600, 900)
+        args += ["--window-position=-32000,-32000", f"--window-size={ow},{oh}"]
+    elif use_preset_screen:
+        args.append(f"--window-size={win_w},{win_h}")
     else:
         args.append("--start-maximized")
+    ext_paths = [str(Path(p).resolve()) for p in extensions if p]
+    if ext_paths:
+        joined = ",".join(ext_paths)
+        args += [
+            f"--disable-extensions-except={joined}",
+            f"--load-extension={joined}",
+        ]
     args += list(extra_args)
     return args
 
@@ -185,6 +358,9 @@ class ChromeEngine:
         sandbox: bool | None = None,
         block_webrtc: bool = False,
         stealth_js: bool = True,
+        extensions: tuple[str | Path, ...] | list[str | Path] = (),
+        pinned_extension_ids: tuple[str, ...] | list[str] = (),
+        unpinned_extension_ids: tuple[str, ...] | list[str] = (),
     ) -> None:
         if headless not in (True, False, "offscreen"):
             raise ValueError("headless must be True, False or 'offscreen'")
@@ -203,6 +379,9 @@ class ChromeEngine:
         self.sandbox = default_sandbox() if sandbox is None else sandbox
         self.block_webrtc = bool(block_webrtc)
         self.stealth_js = bool(stealth_js)
+        self._extensions = tuple(extensions)
+        self._pinned_extension_ids = tuple(pinned_extension_ids)
+        self._unpinned_extension_ids = tuple(unpinned_extension_ids)
 
         self.persona: personas.Persona | None = None
         self.geo: ExitGeo | None = None
@@ -212,6 +391,10 @@ class ChromeEngine:
         self.crashes: list[str] = []
         self.context: Any = None
         self._playwright: Any = None
+        self._selected_executable: Path | None = None
+        self._verified_bundle_cache: dict[
+            tuple[Path, str | None], tuple[dict[str, Any], str] | None
+        ] = {}
 
     # --- lifecycle --------------------------------------------------------
 
@@ -231,10 +414,35 @@ class ChromeEngine:
             raise
 
     async def _start(self) -> Any:
+        self._verified_bundle_cache.clear()
+        search_pending = self.profile_dir / ".search-bootstrap-pending"
+        initialize_profile_search = (
+            search_pending.exists() or not (self.profile_dir / "Default" / "Web Data").exists()
+        )
         with launch_stage("chrome_core_resolve"):
             executable = self._resolve_executable()
+            self._selected_executable = executable
         with launch_stage("chrome_persona"):
             persona = self._resolve_persona()
+        with launch_stage("chrome_native_integrity"):
+            native_realms = _has_verified_native_realms(
+                executable, persona, cache=self._verified_bundle_cache
+            )
+            native_026 = (
+                _has_verified_apple_silicon_026(
+                    executable, persona, cache=self._verified_bundle_cache
+                )
+                if getattr(persona, "platform", None) == "macos"
+                else True
+            )
+            if getattr(persona, "requires_apple_silicon_026", False) and not native_026:
+                msg = (
+                    "macOS Apple Silicon device/display persona requires a verified 026+ "
+                    "Chromium bundle (active binary lacks 026 capability)"
+                )
+                if not self._allow_unsupported:
+                    raise EngineError(msg)
+                self.warnings.append(msg)
 
         with launch_stage("chrome_proxy_bridge"):
             upstream = Upstream.parse(self._proxy) if self._proxy else None
@@ -255,6 +463,8 @@ class ChromeEngine:
             proxy_url=self.bridge.url if self.bridge else None,
             headless=self.headless,
             extra_args=self._extra_args,
+            extensions=self._extensions,
+            include_display_profile=native_026,
         )
 
         from playwright.async_api import async_playwright
@@ -263,9 +473,17 @@ class ChromeEngine:
             self._playwright = await async_playwright().start()
         with launch_stage("chrome_preferences"):
             self.profile_dir.mkdir(parents=True, exist_ok=True)
+            if initialize_profile_search:
+                # Browser startup creates Web Data even if the native editor later fails.
+                search_pending.touch(exist_ok=True)
             set_webrtc_policy(
                 self.profile_dir,
                 WEBRTC_POLICY_PROXY if (self.bridge or self.block_webrtc) else WEBRTC_POLICY_DIRECT,
+            )
+            set_extension_pins(
+                self.profile_dir,
+                pinned_ids=self._pinned_extension_ids,
+                unpinned_ids=self._unpinned_extension_ids,
             )
         with launch_stage("chrome_context_start"):
             self.context = await self._playwright.chromium.launch_persistent_context(
@@ -275,11 +493,19 @@ class ChromeEngine:
                 args=self.args,
                 ignore_default_args=self._ignored_default_args(),
                 no_viewport=True,
+                color_scheme="null",
                 chromium_sandbox=self.sandbox,
                 accept_downloads=True,
             )
-        if self.stealth_js and hasattr(self.context, "add_init_script"):
+        # Neither a version/asset flag nor a sibling manifest can grant native capability.
+        if self.stealth_js and not native_realms and hasattr(self.context, "add_init_script"):
             await self.context.add_init_script(build_anti_cdp_init_script(persona))
+        if initialize_profile_search:
+            from .search import initialize_search
+
+            with launch_stage("chrome_search"):
+                await initialize_search(self.context)
+                search_pending.unlink()
         if self.geo and self.geo.latitude is not None and self.geo.longitude is not None:
             # Only the position is emulated; sites still have to ask for permission.
             await self.context.set_geolocation(
@@ -319,6 +545,16 @@ class ChromeEngine:
         return installed
 
     def _resolve_persona(self) -> personas.Persona:
+        target_platform = (
+            self._persona.platform if self._persona is not None else self._platform or host_os()
+        )
+        # shortcut: fail closed until native WebGPU covers service/cross-realm workers.
+        if target_platform != host_os() and not self._allow_unsupported:
+            raise EngineError(
+                f"A {target_platform} persona cannot be presented consistently on a "
+                f"{host_os()} host: native worker WebGPU can reveal the host GPU; "
+                "use a same-OS profile until a verified native core is available"
+            )
         if self._persona is not None:
             pinned = {
                 k: v or None
@@ -327,9 +563,32 @@ class ChromeEngine:
             }
             persona = replace(self._persona, **pinned)
         else:
+            has_026 = (
+                _has_verified_apple_silicon_026(
+                    self._selected_executable,
+                    target_platform,
+                    cache=self._verified_bundle_cache,
+                )
+                if (target_platform == "macos" and self._selected_executable is not None)
+                else True
+            )
+            if self._selected_executable is not None and target_platform == "macos":
+                existing = personas.load(self.profile_dir)
+                if (
+                    existing is not None
+                    and existing.platform == target_platform
+                    and existing.requires_apple_silicon_026
+                    and not has_026
+                    and not self._allow_unsupported
+                ):
+                    raise EngineError(
+                        "macOS Apple Silicon device/display persona requires a verified 026+ "
+                        "Chromium bundle (active binary lacks 026 capability)"
+                    )
             persona = personas.load_or_create(
                 self.profile_dir,
                 self._platform or host_os(),
+                coherence_026=has_026,
                 timezone=self._timezone,
                 locale=self._locale,
             )

@@ -198,9 +198,11 @@ def build_sidebar(
     language: str = "en",
     on_language: Callable[[str], None] | None = None,
     on_open_proxy_pool: Callable | None = None,
+    on_open_extensions: Callable | None = None,
     on_open_warming: Callable | None = None,
     on_toggle_theme: Callable[[str], None] | None = None,
     proxy_pool_count: int = 0,
+    extension_count: int = 0,
     warming_task_count: int = 0,
     on_open_cores: Callable | None = None,
 ) -> ft.Container:
@@ -211,7 +213,7 @@ def build_sidebar(
         shape=ft.RoundedRectangleBorder(radius=8),
         bgcolor={
             ft.ControlState.DEFAULT: COLORS["primary_cta_bg"],
-            ft.ControlState.HOVERED: "#E5E7EB" if is_dark else COLORS["accent_hover"],
+            ft.ControlState.HOVERED: COLORS.get("primary_cta_hover", COLORS["accent_hover"]),
         },
         color=COLORS["primary_cta_fg"],
         text_style=ft.TextStyle(font_family=FONT_SEMIBOLD, size=13.5),
@@ -245,6 +247,18 @@ def build_sidebar(
                     )
                 ]
                 if on_open_proxy_pool
+                else []
+            ),
+            *(
+                [
+                    _nav_action_row(
+                        ft.Icons.EXTENSION_OUTLINED,
+                        get_string("nav_extensions"),
+                        str(extension_count),
+                        on_open_extensions,
+                    )
+                ]
+                if on_open_extensions
                 else []
             ),
             _section_header(get_string("nav_automation_section")),
@@ -353,86 +367,6 @@ def build_sidebar(
                     ],
                 ),
                 log_column,
-                ft.Container(height=6),
-                _theme_switch(current_theme_mode(), on_toggle_theme),
-                ft.Container(height=6),
-                _language_switch(language, on_language),
             ],
         ),
-    )
-
-
-def _theme_switch(active_mode: str, on_theme: Callable[[str], None] | None) -> ft.Container:
-    """Segmented Dark / Light switch."""
-
-    def seg(mode: str, icon: str, label: str) -> ft.Container:
-        on = mode == active_mode
-        return ft.Container(
-            expand=True,
-            height=28,
-            border_radius=6,
-            alignment=ft.Alignment(0, 0),
-            bgcolor=COLORS["sidebar"] if on else None,
-            ink=not on,
-            on_click=None if on or on_theme is None else (lambda _, m=mode: on_theme(m)),
-            content=ft.Row(
-                spacing=5,
-                alignment=ft.MainAxisAlignment.CENTER,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                controls=[
-                    ft.Icon(
-                        icon,
-                        size=13,
-                        color=COLORS["cover_ink"] if on else COLORS["cover_muted"],
-                    ),
-                    ft.Text(
-                        label,
-                        size=12,
-                        font_family=FONT_SEMIBOLD if on else FONT_MEDIUM,
-                        color=COLORS["cover_ink"] if on else COLORS["cover_muted"],
-                    ),
-                ],
-            ),
-        )
-
-    return ft.Container(
-        padding=3,
-        border_radius=8,
-        bgcolor=COLORS["cover_deep"],
-        content=ft.Row(
-            spacing=0,
-            controls=[
-                seg("dark", ft.Icons.DARK_MODE_OUTLINED, get_string("theme_dark")),
-                seg("light", ft.Icons.LIGHT_MODE_OUTLINED, get_string("theme_light")),
-            ],
-        ),
-    )
-
-
-def _language_switch(active: str, on_language: Callable[[str], None] | None) -> ft.Container:
-    """Segmented Tiếng Việt / English switch."""
-
-    def seg(code: str, label: str) -> ft.Container:
-        on = code == active
-        return ft.Container(
-            expand=True,
-            height=28,
-            border_radius=6,
-            alignment=ft.Alignment(0, 0),
-            bgcolor=COLORS["sidebar"] if on else None,
-            ink=not on,
-            on_click=None if on or on_language is None else (lambda _, c=code: on_language(c)),
-            content=ft.Text(
-                label,
-                size=12.5,
-                font_family=FONT_SEMIBOLD if on else FONT_MEDIUM,
-                color=COLORS["cover_ink"] if on else COLORS["cover_muted"],
-            ),
-        )
-
-    return ft.Container(
-        padding=3,
-        border_radius=8,
-        bgcolor=COLORS["cover_deep"],
-        content=ft.Row(spacing=0, controls=[seg("vi", "Tiếng Việt"), seg("en", "English")]),
     )

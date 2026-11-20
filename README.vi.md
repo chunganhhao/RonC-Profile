@@ -5,12 +5,11 @@
   <p>Mỗi profile có fingerprint thiết bị, cookie và proxy riêng · Hai engine: Camoufox (Firefox) và Chrome · Giao diện tiếng Anh và tiếng Việt · REST API và MCP cho tự động hóa</p>
 
   <p>
-    <a href="https://github.com/chienbm98/foxprofile/actions/workflows/ci.yml"><img src="https://github.com/chienbm98/foxprofile/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-    <a href="https://github.com/chienbm98/foxprofile/releases/latest"><img src="https://img.shields.io/github/v/release/chienbm98/foxprofile" alt="Release" /></a>
+    <a href="https://github.com/chunganhhao/RonC-Profile/actions/workflows/ci.yml"><img src="https://github.com/chunganhhao/RonC-Profile/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+    <a href="https://github.com/chunganhhao/RonC-Profile/releases/latest"><img src="https://img.shields.io/github/v/release/chunganhhao/RonC-Profile" alt="Release" /></a>
     <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+" />
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Windows | macOS | Linux" />
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/chienbm98/foxprofile" alt="MIT License" /></a>
-    <a href="https://buymeacoffee.com/chienbm98"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/chunganhhao/RonC-Profile" alt="MIT License" /></a>
   </p>
 
   <p><a href="README.md">English</a> · Tiếng Việt</p>
@@ -23,21 +22,14 @@
   </p>
 </div>
 
-RonC Profile is a local rebrand of [FoxProfile by chienbm98](https://github.com/chienbm98/foxprofile). Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
+RonC Profile is a local rebrand of FoxProfile by chienbm98. Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
 
 ![RonC Profile](docs/images/main.png)
 
 RonC Profile quản lý các profile trình duyệt chống phát hiện: mỗi profile là một danh tính riêng với fingerprint thiết bị, cookie, proxy, timezone và locale của nó. Trình duyệt mặc định là [Camoufox](https://github.com/daijro/camoufox), một bản Firefox được chỉnh sửa ở tầng mã nguồn để giả lập fingerprint; ngoài ra có engine Chrome dựa trên [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium). RonC Profile là lựa chọn tự host, chạy trên máy bạn hoặc VPS, thay cho các antidetect browser trả phí như GoLogin, GPM hay MoreLogin.
 
-## Ủng hộ
-
-RonC Profile miễn phí, mã nguồn mở, được làm vào thời gian rảnh và sẽ luôn như vậy. Nếu nó tiết kiệm cho bạn thời gian hay chi phí, bạn có thể mời mình một ly cà phê; cà phê sẽ thành bug fix, cập nhật theo bản mới của Camoufox và Chrome, và trả lời issue nhanh hơn.
-
-<a href="https://buymeacoffee.com/chienbm98"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" /></a>
-
 ## Mục lục
 
-- [Ủng hộ](#ủng-hộ)
 - [Tính năng](#tính-năng)
 - [Yêu cầu](#yêu-cầu)
 - [Bắt đầu nhanh](#bắt-đầu-nhanh)
@@ -80,8 +72,8 @@ RonC Profile miễn phí, mã nguồn mở, được làm vào thời gian rản
 ## Bắt đầu nhanh
 
 ```bash
-git clone https://github.com/chienbm98/foxprofile.git
-cd foxprofile
+git clone https://github.com/chunganhhao/RonC-Profile.git
+cd RonC-Profile
 
 python -m venv .venv
 .venv\Scripts\activate          # Windows
@@ -299,7 +291,7 @@ Cấu trúc thư mục, quy ước code và quy trình gửi PR nằm trong [CON
 
 Mọi đóng góp đều được chào đón: báo lỗi, đề xuất tính năng, sửa tài liệu, dịch thuật hay viết code.
 
-- Báo lỗi hoặc đề xuất: mở [issue](https://github.com/chienbm98/foxprofile/issues/new/choose) theo mẫu.
+- Báo lỗi hoặc đề xuất: mở [issue](https://github.com/chunganhhao/RonC-Profile/issues/new/choose) theo mẫu.
 - Gửi code: đọc [CONTRIBUTING.md](CONTRIBUTING.md) trước khi mở Pull Request.
 - Lỗ hổng bảo mật: **không** mở issue công khai, xem [SECURITY.md](SECURITY.md).
 - Mọi người tham gia cần tuân theo [Quy tắc ứng xử](CODE_OF_CONDUCT.md).

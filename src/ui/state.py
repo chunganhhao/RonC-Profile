@@ -3,12 +3,14 @@ import time
 
 from ..core.strings import get_string
 
-ITEMS_PER_PAGE = 12
+PAGE_SIZE_OPTIONS: tuple[int, ...] = (5, 10, 20, 50, 100, 200)
+ITEMS_PER_PAGE = 20
 
 
 class AppState:
     def __init__(self) -> None:
         self.current_page: int = 1
+        self.items_per_page: int = ITEMS_PER_PAGE
         self.search_query: str = ""
         self.log_collapsed: bool = False
 

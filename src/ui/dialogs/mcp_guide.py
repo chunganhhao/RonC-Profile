@@ -9,6 +9,7 @@ from ...core.strings import get_string
 from ...services import mcp_setup
 from ..theme.colors import COLORS
 from ..theme.styles import ACCENT_STYLE, OUTLINE_STYLE
+from .responsive import bind_responsive_dialog
 
 _API_URL = f"http://127.0.0.1:{API_PORT}"
 _MCP_URL = f"{_API_URL}/mcp"
@@ -21,7 +22,6 @@ def _code_box(text: ft.Text) -> ft.Container:
         border=ft.Border.all(1, COLORS["card_border"]),
         border_radius=10,
         padding=14,
-        width=620,
     )
 
 
@@ -105,9 +105,75 @@ def open_mcp_guide(page: ft.Page, clipboard: ft.Clipboard) -> None:
         on_change=toggle_token,
     )
 
+    body_container = ft.Container(
+        width=680,
+        content=ft.Column(
+            tight=True,
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            controls=[
+                ft.Text(get_string("mcp_intro"), size=13, color=COLORS["text_sub"]),
+                ft.Row(spacing=16, wrap=True, controls=[status, health]),
+                ft.Divider(height=10, color=COLORS["border"]),
+                ft.Text(
+                    get_string("mcp_pick_client"),
+                    size=13,
+                    weight=ft.FontWeight.BOLD,
+                    color=COLORS["text_main"],
+                ),
+                client_row,
+                ft.Container(height=4),
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    wrap=True,
+                    spacing=8,
+                    run_spacing=6,
+                    controls=[
+                        ft.Container(content=where, expand=True),
+                        ft.Button(
+                            get_string("mcp_copy"),
+                            icon=ft.Icons.CONTENT_COPY,
+                            style=ACCENT_STYLE,
+                            height=34,
+                            on_click=copy_code,
+                        ),
+                    ],
+                ),
+                _code_box(code),
+                note,
+                token_box,
+                ft.Container(height=4),
+                ft.Text(
+                    get_string("mcp_restart"),
+                    size=13,
+                    weight=ft.FontWeight.BOLD,
+                    color=COLORS["text_main"],
+                ),
+                ft.Row(
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.Container(content=example, expand=True),
+                        ft.IconButton(
+                            icon=ft.Icons.CONTENT_COPY,
+                            icon_size=16,
+                            icon_color=COLORS["text_sub"],
+                            tooltip=get_string("mcp_copy"),
+                            on_click=copy_example,
+                        ),
+                    ],
+                ),
+                ft.Text(get_string("mcp_security_note"), size=11, color=COLORS["text_dim"]),
+                copied,
+            ],
+        ),
+    )
+
     dlg = ft.AlertDialog(
         modal=True,
         bgcolor=COLORS["card_bg"],
+        shape=ft.RoundedRectangleBorder(radius=12),
         title=ft.Row(
             spacing=10,
             controls=[
@@ -120,66 +186,7 @@ def open_mcp_guide(page: ft.Page, clipboard: ft.Clipboard) -> None:
                 ),
             ],
         ),
-        content=ft.Container(
-            width=640,
-            content=ft.Column(
-                tight=True,
-                spacing=10,
-                scroll=ft.ScrollMode.AUTO,
-                controls=[
-                    ft.Text(get_string("mcp_intro"), size=13, color=COLORS["text_sub"]),
-                    ft.Row(spacing=16, wrap=True, controls=[status, health]),
-                    ft.Divider(height=10, color=COLORS["border"]),
-                    ft.Text(
-                        get_string("mcp_pick_client"),
-                        size=13,
-                        weight=ft.FontWeight.BOLD,
-                        color=COLORS["text_main"],
-                    ),
-                    client_row,
-                    ft.Container(height=4),
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        width=620,
-                        controls=[
-                            where,
-                            ft.Button(
-                                get_string("mcp_copy"),
-                                icon=ft.Icons.CONTENT_COPY,
-                                style=ACCENT_STYLE,
-                                height=34,
-                                on_click=copy_code,
-                            ),
-                        ],
-                    ),
-                    _code_box(code),
-                    note,
-                    token_box,
-                    ft.Container(height=4),
-                    ft.Text(
-                        get_string("mcp_restart"),
-                        size=13,
-                        weight=ft.FontWeight.BOLD,
-                        color=COLORS["text_main"],
-                    ),
-                    ft.Row(
-                        width=620,
-                        controls=[
-                            ft.Container(content=example, expand=True),
-                            ft.IconButton(
-                                icon=ft.Icons.CONTENT_COPY,
-                                icon_size=16,
-                                icon_color=COLORS["text_sub"],
-                                tooltip=get_string("mcp_copy"),
-                                on_click=copy_example,
-                            ),
-                        ],
-                    ),
-                    ft.Text(get_string("mcp_security_note"), size=11, color=COLORS["text_dim"]),
-                    copied,
-                ],
-            ),
-        ),
+        content=body_container,
         actions=[
             ft.TextButton(
                 get_string("close_btn"),
@@ -187,6 +194,15 @@ def open_mcp_guide(page: ft.Page, clipboard: ft.Clipboard) -> None:
                 on_click=lambda _: page.pop_dialog(),
             ),
         ],
+    )
+    bind_responsive_dialog(
+        page,
+        dlg,
+        body_container,
+        base_width=680,
+        width_ratio=0.80,
+        min_width=420,
+        max_width=880,
     )
     page.show_dialog(dlg)
     render()

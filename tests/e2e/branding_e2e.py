@@ -72,11 +72,26 @@ def main():
                         page.locator("#login-form button").click()
                         expect(page.locator("#app")).to_be_visible()
                         expect(page.locator("#app .brand b")).to_have_text("RonC Profile")
+                        expect(page.locator(".rail-foot .seg")).to_have_count(0)
+                        page.locator("#prefs-btn").click()
+                        expect(page.locator("#prefs-popover")).to_be_visible()
+                        page.locator("#lang-select-btn").click()
                         page.locator("[data-lang='vi']").click()
                         expect(page.locator("#app .brand b")).to_have_text("RonC Profile")
                         page.wait_for_function(
                             "document.querySelector('#app .brand img').naturalWidth > 0"
                         )
+                        for preset in ("slate", "blue", "green", "orange"):
+                            page.locator(f"[data-accent-btn='{preset}']").click()
+                            assert (
+                                page.evaluate("document.documentElement.dataset.accent") == preset
+                            )
+                        page.screenshot(
+                            path=str(OUT / "appearance-popover.png"),
+                            full_page=True,
+                            animations="disabled",
+                        )
+                        page.locator("#prefs-btn").click()
                         page.locator("#new-btn").click()
                         page.locator("#f-name").fill("ronc-branding-fixture")
                         page.locator("#modal-root .modal-foot .btn-act").click()
@@ -86,6 +101,7 @@ def main():
                         page.screenshot(
                             path=str(OUT / "panel.png"), full_page=True, animations="disabled"
                         )
+                        page.locator("#prefs-btn").click()
                         page.locator("[data-theme-btn='dark']").click()
                         page.wait_for_function(
                             "document.querySelector('#app .brand img').naturalWidth > 0"
@@ -94,6 +110,7 @@ def main():
                             path=str(OUT / "panel-dark.png"), full_page=True, animations="disabled"
                         )
                         page.locator("[data-theme-btn='light']").click()
+                        page.locator("#prefs-btn").click()
                         assert (
                             page.request.delete(
                                 origin + "/api/v1/profiles/ronc-branding-fixture",

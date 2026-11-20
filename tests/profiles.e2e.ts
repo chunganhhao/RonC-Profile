@@ -18,10 +18,40 @@ test('profile field editors persist only their fields', async ({ app, browser })
   await browser.locator('[aria-label="Edit Tags: Studio renamed"]').click();
   await browser.locator('#tag-input').fill('QA');
   await browser.locator('#tag-input').press('Enter');
+  await browser.locator('#tag-input').fill('Antigravity');
+  await browser.locator('#tag-input').press('Enter');
   await browser.locator('#modal-root .btn-act').click();
+  // All 4 tags must be visible directly on the row without "+1 / +2" hiding
+  await expect(renamed()).toContainText('Gmail');
+  await expect(renamed()).toContainText('Gemini Pixel');
+  await expect(renamed()).toContainText('QA');
+  await expect(renamed()).toContainText('Antigravity');
   await browser.locator('[aria-label="Edit Tags: Studio renamed"]').click();
   await expect(browser.locator('[aria-label="Remove QA"]')).toBeVisible();
   await browser.locator('#modal-root .btn-line').last().click();
+  // Backup Codes editor (synthetic fixture sheet + on-demand read + generic toast without leaking code)
+  await browser.locator('[aria-label="Backup Codes: Studio renamed"]').click();
+  await expect(browser.locator('#field-value')).toBeEnabled();
+  await browser.locator('#field-value').fill('FIXTURE BACKUP CODES\n1. 1111 0001   6. 1111 0006\n2. 1111 0002   7. 1111 0007');
+  await expect(browser.locator('[data-backup-code="1111 0001"]')).toBeVisible();
+  await expect(browser.locator('[data-backup-code="1111 0006"]')).toBeVisible();
+  await browser.locator('[data-backup-code="1111 0001"]').click();
+  await expect(browser.locator('#toast')).toContainText('Backup codes copied');
+  await expect(browser.locator('#toast')).not.toContainText('1111 0001');
+  await browser.locator('#modal-root .btn-act').click();
+  await expect(browser.locator('[role=dialog]')).toHaveCount(0);
+  // Notes-only edit via full dialog must preserve saved backup codes when not revealed/changed
+  await browser.locator('[aria-label="Edit: Studio renamed"]').click();
+  await browser.locator('#f-notes').fill('Preserve backup check');
+  await browser.locator('#modal-root .btn-act').click();
+  await expect(browser.locator('[role=dialog]')).toHaveCount(0);
+  await browser.locator('[aria-label="Backup Codes: Studio renamed"]').click();
+  await expect(browser.locator('#field-value')).toHaveValue(/1111 0001/);
+  await browser.locator('#modal-root .btn-line').last().click();
+  // Rows-per-page selector (5, 10, 20, 50, 100, 200) & horizontal scroll container
+  await expect(browser.locator('#sheet-scroll')).toBeVisible();
+  await expect(browser.locator('#page-size-select')).toHaveValue('20');
+  await expect(browser.locator('#total-count')).toContainText('Total: 2');
   await browser.locator('[aria-label="Edit Proxy: Studio renamed"]').click();
   await browser.locator('#field-value').fill('not valid');
   await browser.locator('#modal-root .btn-act').click();

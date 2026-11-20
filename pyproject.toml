@@ -11,9 +11,9 @@ keywords = ["anti-detect", "browser-profiles", "camoufox", "fingerprint", "proxy
 # Runtime dependencies live in requirements.txt (this is an application, not a library).
 
 [project.urls]
-Homepage = "https://github.com/chienbm98/foxprofile"
-Issues = "https://github.com/chienbm98/foxprofile/issues"
-Changelog = "https://github.com/chienbm98/foxprofile/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/chunganhhao/RonC-Profile"
+Issues = "https://github.com/chunganhhao/RonC-Profile/issues"
+Changelog = "https://github.com/chunganhhao/RonC-Profile/blob/main/CHANGELOG.md"
 
 [tool.ruff]
 line-length = 100

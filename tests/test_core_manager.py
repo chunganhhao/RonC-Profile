@@ -667,7 +667,9 @@ def test_external_storage_root_selected_when_mounted_and_writable(tmp_path, monk
     assert cores.backup_home() == fetch.engine_home().parent / "core-backups"
 
 
-def test_prune_unused_removes_superseded_backups_and_unbound_cores(apply_fixture, tmp_path, monkeypatch):
+def test_prune_unused_removes_superseded_backups_and_unbound_cores(
+    apply_fixture, tmp_path, monkeypatch
+):
     pm, bl, source, release1 = apply_fixture
 
     def make_release(ver: str) -> Release:
@@ -686,9 +688,7 @@ def test_prune_unused_removes_superseded_backups_and_unbound_cores(apply_fixture
     release2 = make_release("999.0.0.2")
     release3 = make_release("999.0.0.3")
     release_unused = make_release("999.0.0.4")
-    all_releases = {
-        r.version: r for r in (release1, release2, release3, release_unused)
-    }
+    all_releases = {r.version: r for r in (release1, release2, release3, release_unused)}
     monkeypatch.setattr(cores, "RELEASES", all_releases)
     monkeypatch.setattr(cores, "_host_asset", lambda _eng, rel: next(iter(rel.assets.values())))
 
@@ -767,8 +767,12 @@ def test_prune_rejects_corrupt_payload_and_preserves_all_recovery(apply_fixture)
     unused = cores.staging_home() / "chrome" / "unused-rollback"
     unused.mkdir()
     (unused / "chrome").write_bytes(b"synthetic rollback core")
-    before = {p: p.read_bytes() for root in (cores.backup_home(), cores.staging_home())
-              for p in root.rglob("*") if p.is_file()}
+    before = {
+        p: p.read_bytes()
+        for root in (cores.backup_home(), cores.staging_home())
+        for p in root.rglob("*")
+        if p.is_file()
+    }
     with pytest.raises(cores.CoreError, match="unreadable snapshot"):
         cores.prune_unused(pm, bl, confirm_prune=True)
     assert all(p.is_file() and p.read_bytes() == data for p, data in before.items())
@@ -784,14 +788,23 @@ def test_storage_operations_refuse_other_process_lease(apply_fixture, operation,
     pm, bl, _, release = apply_fixture
     env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]))
     child = subprocess.Popen(
-        [sys.executable, "-c", """
+        [
+            sys.executable,
+            "-c",
+            """
 import sys
 from src.services.browser.lease import profile_lease
 with profile_lease(sys.argv[1]):
     print('locked', flush=True)
     sys.stdin.read()
-""", str(cores.staging_home())],
-        cwd=tmp_path, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+""",
+            str(cores.staging_home()),
+        ],
+        cwd=tmp_path,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
     )
     try:
         assert child.stdout.readline().strip() == "locked"

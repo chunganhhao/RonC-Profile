@@ -577,9 +577,7 @@ def check(persona: Persona, fp: dict[str, Any]) -> list[Issue]:
         ("moduleWorkerWebgpu", "module_worker_webgpu", "ModuleWorker"),
     ):
         realm_gpu = fp.get(field)
-        if isinstance(realm_gpu, dict) and (
-            "vendor" in realm_gpu or "architecture" in realm_gpu
-        ):
+        if isinstance(realm_gpu, dict) and ("vendor" in realm_gpu or "architecture" in realm_gpu):
             expect(
                 _webgpu_matches(persona.platform, realm_gpu),
                 f"{prefix}_adapter",

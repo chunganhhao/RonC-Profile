@@ -22,7 +22,7 @@ from src.services.browser.fingerprint import available_gpus, load_or_create
 from src.services.browser.search import ensure_google_search
 from src.services.browser.timing import launch_stage, report_timing
 from src.services.proxy.geo_check import requests_proxy_url
-from src.utils.proxy_parser import parse_proxy
+from src.utils.proxy_parser import parse_proxy, require_proxy
 from src.utils.validation import normalize_start_url
 
 _shutdown = asyncio.Event()
@@ -197,6 +197,11 @@ async def run_browser(
     core_version: str = "",
 ) -> int:
     launch_started = perf_counter()
+    try:
+        proxy_config = require_proxy(proxy_str)
+    except ValueError as exc:
+        _safe_print(f"LAUNCH_FAILED: {exc}")
+        return 1
     with launch_stage("profile_metadata"):
         extra = _read_profile_extra(profile_name)
     # A long-lived manager may hold an older Profile object after another
@@ -289,7 +294,6 @@ async def run_browser(
         launch_config["canvas_noise"] = False
         launch_config["i_know_what_im_doing"] = True
 
-    proxy_config = parse_proxy(proxy_str)
     if proxy_config:
         launch_config["proxy"] = proxy_config
 
@@ -414,7 +418,9 @@ async def _async_main() -> int:
         args += [""] * (5 - len(args))
         try:
             with launch_stage("launch_binding"):
-                version = launch_binding(args[0], "camoufox", sys.argv[6] if len(sys.argv) > 6 else "")
+                version = launch_binding(
+                    args[0], "camoufox", sys.argv[6] if len(sys.argv) > 6 else ""
+                )
         except (ValueError, OSError, RuntimeError) as exc:
             _safe_print(f"LAUNCH_FAILED: {_compact_error(exc, 220)}")
             return 1

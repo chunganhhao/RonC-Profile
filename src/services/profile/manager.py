@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import shutil
+import tempfile
 import threading
 import time
 from dataclasses import replace
@@ -16,7 +17,9 @@ from ...models.profile import (
     ENGINES,
     WEBRTC_MODES,
     Profile,
+    normalize_backup_codes,
     normalize_tags,
+    split_recovery_and_notes,
     valid_display_order,
 )
 from ...utils.totp import clean_totp_secret
@@ -28,7 +31,7 @@ from ...utils.validation import (
     validate_timezone,
 )
 from ..browser import fingerprint as fp_service
-from ..browser.lease import profile_lease, store_lease
+from ..browser.lease import native_profile_guard, profile_lease, store_lease
 from .transfer import export_to_zip, import_from_zip, read_profile_meta
 
 logger = get_logger("profile.manager")
@@ -61,6 +64,22 @@ def _replace(src: pathlib.Path, dst: pathlib.Path, attempts: int = 10) -> None:
             if i == attempts - 1:
                 raise
             time.sleep(0.02 * (i + 1))
+
+
+def _restore_chrome_persona_file(
+    profile_dir: pathlib.Path, prev_bytes: bytes | None, dir_existed: bool
+) -> None:
+    persona_path = profile_dir / fp_service.CHROME_PERSONA_FILE
+    if prev_bytes is None:
+        with contextlib.suppress(OSError):
+            persona_path.unlink(missing_ok=True)
+    else:
+        with contextlib.suppress(OSError):
+            persona_path.write_bytes(prev_bytes)
+    fp_service._summary_cache.pop(str(persona_path), None)
+    if not dir_existed:
+        with contextlib.suppress(OSError):
+            profile_dir.rmdir()
 
 
 class ProfileManager:
@@ -99,6 +118,18 @@ class ProfileManager:
                             tags = normalize_tags(p_data.get("tags", []))
                         except ValueError:
                             tags = []  # A malformed optional field must not hide legacy profiles.
+                        ext_ids = p_data.get("extension_ids")
+                        clean_ext_ids = (
+                            [str(x).strip() for x in ext_ids if isinstance(x, str) and x.strip()]
+                            if isinstance(ext_ids, list)
+                            else []
+                        )
+                        try:
+                            backup_codes = (
+                                normalize_backup_codes(p_data.get("backup_codes")) or None
+                            )
+                        except ValueError:
+                            backup_codes = None
                         clean_data = {
                             "name": p_data.get("name"),
                             "proxy": p_data.get("proxy"),
@@ -116,13 +147,22 @@ class ProfileManager:
                             if tags
                             else (p_data.get("group") or "").strip() or None,
                             "tags": tags,
+                            "extension_ids": clean_ext_ids,
                             "display_order": p_data.get("display_order")
                             if valid_display_order(p_data.get("display_order"))
                             else None,
                             "account_uid": (p_data.get("account_uid") or "").strip() or None,
                             "account_password": p_data.get("account_password") or None,
                             "two_fa_secret": clean_totp_secret(p_data.get("two_fa_secret")) or None,
-                            "notes": (p_data.get("notes") or "").strip() or None,
+                            "recovery_email": split_recovery_and_notes(
+                                p_data.get("recovery_email"), p_data.get("notes")
+                            )[0]
+                            or None,
+                            "backup_codes": backup_codes,
+                            "notes": split_recovery_and_notes(
+                                p_data.get("recovery_email"), p_data.get("notes")
+                            )[1]
+                            or None,
                             "start_url": normalize_start_url(p_data.get("start_url")) or None,
                             "webrtc_mode": _webrtc_or_default(p_data.get("webrtc_mode")),
                             "canvas_mode": _canvas_or_default(p_data.get("canvas_mode")),
@@ -183,10 +223,13 @@ class ProfileManager:
         *,
         group: str | None = None,
         tags: list[str] | None = None,
+        extension_ids: list[str] | None = None,
         display_order: int | None = None,
         account_uid: str | None = None,
         account_password: str | None = None,
         two_fa_secret: str | None = None,
+        recovery_email: str | None = None,
+        backup_codes: str | None = None,
         notes: str | None = None,
         start_url: str | None = None,
         webrtc_mode: str = "proxy",
@@ -199,6 +242,9 @@ class ProfileManager:
                 return False
             try:
                 clean_tags = normalize_tags(tags) if tags is not None else None
+                clean_backup_codes = (
+                    normalize_backup_codes(backup_codes) if backup_codes is not None else None
+                )
             except ValueError:
                 return False
             if not valid_display_order(display_order):
@@ -210,36 +256,72 @@ class ProfileManager:
             # Create directory before touching profiles.json so a mkdir failure
             # does not leave an entry with no data dir on disk.
             data_dir = self._data_path(name)
+            data_path = pathlib.Path(data_dir)
+            dir_existed = data_path.exists()
+            built_chrome: tuple[Any, dict[str, Any] | None] | None = None
+            prev_persona_bytes: bytes | None = None
+            if isinstance(initial_fingerprint, dict) and engine == "chrome":
+                built_chrome = fp_service._build_chrome_persona(
+                    data_dir, initial_fingerprint, os_type=os_type
+                )
+                persona_file = data_path / fp_service.CHROME_PERSONA_FILE
+                if persona_file.is_file():
+                    prev_persona_bytes = persona_file.read_bytes()
             try:
-                pathlib.Path(data_dir).mkdir(exist_ok=True, parents=True)
+                data_path.mkdir(exist_ok=True, parents=True)
             except OSError as e:
                 logger.warning("Could not create data dir for %s: %s", name, e)
                 return False
+            clean_ext_ids = (
+                [str(x).strip() for x in extension_ids if isinstance(x, str) and x.strip()]
+                if isinstance(extension_ids, list)
+                else []
+            )
+            originals = dict(self.profiles)
+            previous = {k: replace(p) for k, p in originals.items()}
+            try:
+                if built_chrome is not None:
+                    fp_service._write_chrome_persona(data_dir, *built_chrome)
+                self.profiles[name] = Profile(
+                    name=name,
+                    proxy=proxy or None,
+                    os_type=os_type,
+                    timezone=timezone or None,
+                    locale=locale or None,
+                    engine=_engine_or_default(engine),
+                    group=(clean_tags[0] if clean_tags else None)
+                    if clean_tags is not None
+                    else (group or "").strip() or None,
+                    tags=clean_tags or [],
+                    extension_ids=clean_ext_ids,
+                    account_uid=(account_uid or "").strip() or None,
+                    account_password=account_password or None,
+                    two_fa_secret=clean_totp_secret(two_fa_secret) or None,
+                    recovery_email=(recovery_email or "").strip() or None,
+                    backup_codes=clean_backup_codes or None,
+                    notes=(notes or "").strip() or None,
+                    start_url=normalize_start_url(start_url) or None,
+                    webrtc_mode=_webrtc_or_default(webrtc_mode),
+                    canvas_mode=_canvas_or_default(canvas_mode),
+                )
+                if display_order is not None:
+                    self._move_profile(name, display_order)
+                self.save_profiles(strict=True)
+            except Exception as exc:
+                if not isinstance(exc, ProfileStoreChangedError):
+                    for prof_name, original in originals.items():
+                        original.__dict__.update(vars(previous[prof_name]))
+                    self.profiles.clear()
+                    self.profiles.update(originals)
+                if built_chrome is not None:
+                    _restore_chrome_persona_file(data_path, prev_persona_bytes, dir_existed)
+                elif not dir_existed:
+                    with contextlib.suppress(OSError):
+                        data_path.rmdir()
+                raise
             if isinstance(initial_fingerprint, dict) and engine == "camoufox":
                 with contextlib.suppress(Exception):
                     fp_service.save_fingerprint(data_dir, os_type, initial_fingerprint)
-            self.profiles[name] = Profile(
-                name=name,
-                proxy=proxy or None,
-                os_type=os_type,
-                timezone=timezone or None,
-                locale=locale or None,
-                engine=_engine_or_default(engine),
-                group=(clean_tags[0] if clean_tags else None)
-                if clean_tags is not None
-                else (group or "").strip() or None,
-                tags=clean_tags or [],
-                account_uid=(account_uid or "").strip() or None,
-                account_password=account_password or None,
-                two_fa_secret=clean_totp_secret(two_fa_secret) or None,
-                notes=(notes or "").strip() or None,
-                start_url=normalize_start_url(start_url) or None,
-                webrtc_mode=_webrtc_or_default(webrtc_mode),
-                canvas_mode=_canvas_or_default(canvas_mode),
-            )
-            if display_order is not None:
-                self._move_profile(name, display_order)
-            self.save_profiles()
             logger.info("Created profile: %s", name)
             return True
 
@@ -254,10 +336,13 @@ class ProfileManager:
         *,
         group: str | None = None,
         tags: list[str] | None = None,
+        extension_ids: list[str] | None = None,
         display_order: int | None = None,
         account_uid: str | None = None,
         account_password: str | None = None,
         two_fa_secret: str | None = None,
+        recovery_email: str | None = None,
+        backup_codes: str | None = None,
         notes: str | None = None,
         start_url: str | None = None,
         webrtc_mode: str | None = None,
@@ -284,6 +369,9 @@ class ProfileManager:
                 return False
             try:
                 clean_tags = normalize_tags(tags) if tags is not None else None
+                clean_backup_codes = (
+                    normalize_backup_codes(backup_codes) if backup_codes is not None else None
+                )
                 current = self.profiles[original_name]
                 if tags is None and group is not None and group.strip() != (current.group or ""):
                     clean_tags = normalize_tags(
@@ -304,6 +392,21 @@ class ProfileManager:
                 conflicting = self._find_by_casefold(new_name)
                 if conflicting is not None and conflicting != original_name:
                     return False
+
+            orig_dir = pathlib.Path(self._data_path(original_name))
+            orig_dir_existed = orig_dir.exists()
+            built_chrome: tuple[Any, dict[str, Any] | None] | None = None
+            prev_persona_bytes: bytes | None = None
+            if isinstance(initial_fingerprint, dict) and current.engine == "chrome":
+                built_chrome = fp_service._build_chrome_persona(
+                    str(orig_dir),
+                    initial_fingerprint,
+                    os_type=new_os,
+                    core_version=getattr(current, "core_version", None),
+                )
+                orig_persona_file = orig_dir / fp_service.CHROME_PERSONA_FILE
+                if orig_persona_file.is_file():
+                    prev_persona_bytes = orig_persona_file.read_bytes()
 
             originals = dict(self.profiles)
             previous = {name: replace(p) for name, p in originals.items()}
@@ -347,12 +450,25 @@ class ProfileManager:
             if clean_tags is not None:
                 profile.tags = clean_tags
                 profile.group = clean_tags[0] if clean_tags else None
+            if extension_ids is not None:
+                profile.extension_ids = [
+                    str(x).strip() for x in extension_ids if isinstance(x, str) and x.strip()
+                ]
             if account_uid is not None:
                 profile.account_uid = account_uid.strip() or None
             if account_password is not None:
                 profile.account_password = account_password or None
             if two_fa_secret is not None:
                 profile.two_fa_secret = clean_totp_secret(two_fa_secret) or None
+            if recovery_email is not None or notes is not None:
+                # Materialize any legacy recovery mail still embedded in notes first.
+                eff_rec, eff_notes = split_recovery_and_notes(profile.recovery_email, profile.notes)
+                profile.recovery_email = eff_rec or None
+                profile.notes = eff_notes or None
+            if recovery_email is not None:
+                profile.recovery_email = recovery_email.strip() or None
+            if backup_codes is not None:
+                profile.backup_codes = clean_backup_codes or None
             if notes is not None:
                 profile.notes = notes.strip() or None
             if start_url is not None:
@@ -373,7 +489,13 @@ class ProfileManager:
 
             if display_order is not None:
                 self._move_profile(new_name, display_order)
+            target_dir = self._data_path(new_name)
+            target_existed_before = (
+                orig_dir_existed if renamed_dir else pathlib.Path(target_dir).exists()
+            )
             try:
+                if built_chrome is not None:
+                    fp_service._write_chrome_persona(target_dir, *built_chrome)
                 self.save_profiles(strict=True)
             except Exception as exc:
                 if not isinstance(exc, ProfileStoreChangedError):
@@ -388,14 +510,19 @@ class ProfileManager:
                         raise OSError(
                             f"Profile save failed; could not restore data directory {new_dir} to {old_dir}"
                         ) from rollback
+                if built_chrome is not None:
+                    _restore_chrome_persona_file(
+                        old_dir if renamed_dir else pathlib.Path(target_dir),
+                        prev_persona_bytes,
+                        target_existed_before,
+                    )
                 raise
 
             # A failed metadata commit must not reset or replace browser identity.
-            target_dir = self._data_path(new_name)
             if isinstance(initial_fingerprint, dict) and profile.engine == "camoufox":
                 with contextlib.suppress(Exception):
                     fp_service.save_fingerprint(target_dir, new_os, initial_fingerprint)
-            elif new_os != old_os:
+            elif built_chrome is None and new_os != old_os:
                 with contextlib.suppress(Exception):
                     fp_service.reset(target_dir)
             logger.info("Updated profile: %s -> %s", original_name, new_name)
@@ -460,22 +587,24 @@ class ProfileManager:
         # Decide before extracting: an archive must not write into an existing
         # profile's data unless overwriting, and an overwrite that changes the
         # engine starts from an empty directory (the engines' data do not mix).
-        meta = read_profile_meta(zip_path) or {}
+        meta = read_profile_meta(zip_path)
+        if not isinstance(meta, dict):
+            return False, "Invalid profile metadata"
         try:
             normalize_tags(meta.get("tags", []))
+            if meta.get("backup_codes") is not None:
+                normalize_backup_codes(meta.get("backup_codes"))
         except ValueError as exc:
             return False, str(exc)
         if not valid_display_order(meta.get("display_order")):
             return False, "Invalid display order in archive"
         name = meta.get("name")
+        if not isinstance(name, str) or not validate_profile_name(name)[0]:
+            return False, "Invalid profile name in archive"
         with (
             self._lock,
             store_lease(PROFILES_FILE),
-            (
-                profile_lease(self._data_path(name))
-                if isinstance(name, str) and validate_profile_name(name)[0]
-                else contextlib.nullcontext()
-            ),
+            profile_lease(self._data_path(self._find_by_casefold(name) or name)),
         ):
             self._check_store_current()
             # Case-insensitive collision check: find any existing profile whose
@@ -490,24 +619,94 @@ class ProfileManager:
                         False,
                         "Cannot change an existing core binding through import; use backed-up core management",
                     )
-                if (meta.get("engine") or "camoufox") != self.profiles[existing_key].engine:
-                    shutil.rmtree(self._data_path(existing_key), ignore_errors=True)
-
-            success, result = import_from_zip(zip_path, DATA_DIR)
-            if not success:
-                return False, result
-
-            profile = result
-
-            # An overwrite under a different case replaces the old entry rather
-            # than leaving two names for one data directory.
-            if existing_key is not None and existing_key != profile.name:
-                old_dir = pathlib.Path(self._data_path(existing_key))
-                new_dir = pathlib.Path(self._data_path(profile.name))
-                if old_dir.exists() and not (new_dir.exists() and old_dir.samefile(new_dir)):
-                    shutil.rmtree(old_dir, ignore_errors=True)
-                del self.profiles[existing_key]
-            self.profiles[profile.name] = profile
-            self.save_profiles()
-            logger.info("Registered imported profile: %s", profile.name)
-            return True, profile.name
+            # Extraction and metadata commit must both succeed before discarding sessions.
+            base = pathlib.Path(DATA_DIR)
+            base.mkdir(parents=True, exist_ok=True)
+            with contextlib.ExitStack() as guards, contextlib.ExitStack() as cleanup:
+                temporary = tempfile.mkdtemp(dir=base, prefix=".import_")
+                cleanup.callback(shutil.rmtree, temporary, ignore_errors=True)
+                stage = pathlib.Path(temporary) / "incoming"
+                stage.mkdir()
+                old_dir = pathlib.Path(self._data_path(existing_key)) if existing_key else None
+                staged_dir = stage / name
+                if old_dir is not None and old_dir.exists():
+                    guards.enter_context(
+                        native_profile_guard(old_dir, self.profiles[existing_key].engine)
+                    )
+                if (
+                    old_dir is not None
+                    and old_dir.exists()
+                    and (meta.get("engine") or "camoufox") == self.profiles[existing_key].engine
+                ):
+                    # Firefox record locks are released if this PID reads/closes their inode.
+                    lock_files = {
+                        ".parentlock",
+                        "parent.lock",
+                        "lock",
+                        "SingletonLock",
+                        "SingletonCookie",
+                        "SingletonSocket",
+                    }
+                    shutil.copytree(
+                        old_dir,
+                        staged_dir,
+                        ignore=lambda source, names: (
+                            lock_files.intersection(names)
+                            if pathlib.Path(source) == old_dir
+                            else set()
+                        ),
+                    )
+                success, result = import_from_zip(zip_path, str(stage))
+                if not success:
+                    return False, result
+                profile = result
+                expected_engine = (
+                    meta.get("engine") if meta.get("engine") in ENGINES else "camoufox"
+                )
+                if profile.name != name or profile.engine != expected_engine:
+                    return False, "Profile archive changed during import"
+                if (
+                    existing_key is not None
+                    and profile.core_version != self.profiles[existing_key].core_version
+                ):
+                    return False, "Profile core binding changed during import"
+                target = pathlib.Path(self._data_path(profile.name))
+                staged_dir = stage / profile.name
+                staged_dir.mkdir(exist_ok=True)
+                if target.exists() and not (
+                    old_dir is not None and old_dir.exists() and target.samefile(old_dir)
+                ):
+                    return False, "Target profile data directory already exists"
+                previous = dict(self.profiles)
+                backup = pathlib.Path(temporary) / "previous"
+                published = False
+                moved_old = False
+                try:
+                    if old_dir is not None and old_dir.exists():
+                        old_dir.rename(backup)
+                        moved_old = True
+                    staged_dir.rename(target)
+                    published = True
+                    if existing_key is not None:
+                        del self.profiles[existing_key]
+                    self.profiles[profile.name] = profile
+                    self.save_profiles(strict=True)
+                except Exception as exc:
+                    if not isinstance(exc, ProfileStoreChangedError):
+                        self.profiles.clear()
+                        self.profiles.update(previous)
+                    # If recovery itself fails, retain the old session in this directory.
+                    rollback_cleanup = cleanup.pop_all()
+                    try:
+                        if published:
+                            shutil.rmtree(target)
+                        if moved_old:
+                            backup.rename(old_dir)
+                    except OSError as rollback:
+                        raise OSError(
+                            f"Import recovery failed; old session retained at {backup}"
+                        ) from rollback
+                    rollback_cleanup.close()
+                    raise
+                logger.info("Registered imported profile: %s", profile.name)
+                return True, profile.name

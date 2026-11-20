@@ -9,7 +9,14 @@ import flet as ft
 
 from ...core.strings import get_string
 from ..theme.colors import COLORS, FONT_BOLD, FONT_DATA, FONT_SEMIBOLD
-from ..theme.styles import ACCENT_STYLE, DLG_FIELD_KWARGS, DANGER_ICON_STYLE, ICON_STYLE, OUTLINE_STYLE
+from ..theme.styles import (
+    ACCENT_STYLE,
+    DANGER_ICON_STYLE,
+    DLG_FIELD_KWARGS,
+    ICON_STYLE,
+    OUTLINE_STYLE,
+)
+from .responsive import bind_responsive_dialog
 
 if TYPE_CHECKING:
     from ...interfaces.protocols import IProfileManager, IProxyService
@@ -67,7 +74,16 @@ def open_proxy_pool_dialog(
             border_radius=6,
             bgcolor=COLORS["bg"],
             border=ft.Border.all(1, COLORS["card_border"]),
-            content=ft.Text(text, size=11.5, font_family=FONT_DATA, color=fg),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            content=ft.Text(
+                text,
+                size=11.5,
+                font_family=FONT_DATA,
+                color=fg,
+                no_wrap=True,
+                overflow=ft.TextOverflow.ELLIPSIS,
+                tooltip=text,
+            ),
         )
 
     def _check_single(pid: str) -> None:
@@ -274,6 +290,68 @@ def open_proxy_pool_dialog(
 
     _rebuild_rows(notify=False)
 
+    body_container = ft.Container(
+        width=860,
+        height=540,
+        content=ft.Column(
+            spacing=10,
+            expand=True,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            controls=[
+                ft.Text(
+                    get_string("proxy_pool_bulk_label"),
+                    size=12,
+                    font_family=FONT_SEMIBOLD,
+                    color=COLORS["text_sub"],
+                ),
+                bulk_input,
+                ft.Row(
+                    spacing=8,
+                    run_spacing=8,
+                    wrap=True,
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.Row(
+                            spacing=8,
+                            run_spacing=8,
+                            wrap=True,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            controls=[
+                                tag_input,
+                                ft.Button(
+                                    get_string("proxy_pool_import_btn"),
+                                    icon=ft.Icons.ADD,
+                                    height=38,
+                                    style=ACCENT_STYLE,
+                                    on_click=_on_import,
+                                ),
+                                check_all_btn,
+                                ft.OutlinedButton(
+                                    get_string("proxy_pool_clear_dead_btn"),
+                                    icon=ft.Icons.CLEANING_SERVICES_OUTLINED,
+                                    height=36,
+                                    style=OUTLINE_STYLE,
+                                    on_click=_on_clear_dead,
+                                ),
+                            ],
+                        ),
+                        ft.OutlinedButton(
+                            get_string("proxy_pool_assign_btn", count=len(targets)),
+                            icon=ft.Icons.AUTO_AWESOME_OUTLINED,
+                            height=36,
+                            style=OUTLINE_STYLE,
+                            on_click=_on_auto_assign,
+                        ),
+                    ],
+                ),
+                feedback_text,
+                ft.Divider(height=8, color=COLORS["card_border"]),
+                list_col,
+            ],
+        ),
+    )
+
     dlg = ft.AlertDialog(
         modal=True,
         bgcolor=COLORS["card_bg"],
@@ -294,56 +372,7 @@ def open_proxy_pool_dialog(
                 subtitle_text,
             ],
         ),
-        content=ft.Container(
-            width=820,
-            height=520,
-            content=ft.Column(
-                spacing=10,
-                expand=True,
-                controls=[
-                    ft.Text(
-                        get_string("proxy_pool_bulk_label"),
-                        size=12,
-                        font_family=FONT_SEMIBOLD,
-                        color=COLORS["text_sub"],
-                    ),
-                    bulk_input,
-                    ft.Row(
-                        spacing=8,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        controls=[
-                            tag_input,
-                            ft.Button(
-                                get_string("proxy_pool_import_btn"),
-                                icon=ft.Icons.ADD,
-                                height=38,
-                                style=ACCENT_STYLE,
-                                on_click=_on_import,
-                            ),
-                            check_all_btn,
-                            ft.OutlinedButton(
-                                get_string("proxy_pool_clear_dead_btn"),
-                                icon=ft.Icons.CLEANING_SERVICES_OUTLINED,
-                                height=36,
-                                style=OUTLINE_STYLE,
-                                on_click=_on_clear_dead,
-                            ),
-                            ft.Container(expand=True),
-                            ft.OutlinedButton(
-                                get_string("proxy_pool_assign_btn", count=len(targets)),
-                                icon=ft.Icons.AUTO_AWESOME_OUTLINED,
-                                height=36,
-                                style=OUTLINE_STYLE,
-                                on_click=_on_auto_assign,
-                            ),
-                        ],
-                    ),
-                    feedback_text,
-                    ft.Divider(height=8, color=COLORS["card_border"]),
-                    list_col,
-                ],
-            ),
-        ),
+        content=body_container,
         actions=[
             ft.TextButton(
                 get_string("close_btn"),
@@ -351,5 +380,18 @@ def open_proxy_pool_dialog(
                 on_click=lambda _: page.pop_dialog(),
             ),
         ],
+    )
+    bind_responsive_dialog(
+        page,
+        dlg,
+        body_container,
+        base_width=860,
+        base_height=540,
+        width_ratio=0.86,
+        height_ratio=0.80,
+        min_width=480,
+        max_width=1060,
+        min_height=360,
+        max_height=780,
     )
     page.show_dialog(dlg)

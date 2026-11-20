@@ -6,6 +6,7 @@ from ...core.strings import get_string
 from ...models.profile import Profile
 from ..theme.colors import COLORS
 from ..theme.styles import ACCENT_STYLE
+from .responsive import bind_responsive_dialog
 
 
 def open_export_dialog(
@@ -64,31 +65,58 @@ def open_export_dialog(
         on_change=toggle_all,
     )
 
+    body_container = ft.Container(
+        width=420,
+        content=ft.Column(
+            tight=True,
+            spacing=8,
+            scroll=ft.ScrollMode.AUTO,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            controls=[
+                ft.Text(
+                    get_string("choose_profiles_to_export"),
+                    size=12,
+                    color=COLORS["text_dim"],
+                ),
+                ft.Container(height=4),
+                select_all_cb,
+                ft.Divider(height=1),
+                *checkboxes,
+                ft.Container(height=8),
+                include_data_cb,
+                ft.Container(
+                    key="export_credentials_warning",
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+                    border_radius=8,
+                    bgcolor=COLORS["warn_tint"],
+                    content=ft.Row(
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.START,
+                        controls=[
+                            ft.Icon(
+                                ft.Icons.WARNING_AMBER_ROUNDED,
+                                size=15,
+                                color=COLORS["warning"],
+                            ),
+                            ft.Text(
+                                get_string("export_credentials_warning"),
+                                size=11.5,
+                                color=COLORS["warn_text"],
+                                expand=True,
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        ),
+    )
+
     dlg = ft.AlertDialog(
         modal=True,
         bgcolor=COLORS["card_bg"],
+        shape=ft.RoundedRectangleBorder(radius=12),
         title=ft.Text(get_string("export_profiles"), size=20, weight=ft.FontWeight.BOLD),
-        content=ft.Container(
-            width=350,
-            content=ft.Column(
-                tight=True,
-                spacing=8,
-                scroll=ft.ScrollMode.AUTO,
-                controls=[
-                    ft.Text(
-                        get_string("choose_profiles_to_export"),
-                        size=12,
-                        color=COLORS["text_dim"],
-                    ),
-                    ft.Container(height=4),
-                    select_all_cb,
-                    ft.Divider(height=1),
-                    *checkboxes,
-                    ft.Container(height=8),
-                    include_data_cb,
-                ],
-            ),
-        ),
+        content=body_container,
         actions=[
             ft.TextButton(get_string("cancel"), on_click=lambda _: page.pop_dialog()),
             ft.Button(
@@ -98,5 +126,14 @@ def open_export_dialog(
                 on_click=on_export,
             ),
         ],
+    )
+    bind_responsive_dialog(
+        page,
+        dlg,
+        body_container,
+        base_width=420,
+        width_ratio=0.52,
+        min_width=340,
+        max_width=560,
     )
     page.show_dialog(dlg)

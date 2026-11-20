@@ -1,0 +1,361 @@
+diff --git a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
+--- a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
++++ b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
+@@ -25,11 +25,9 @@
+ 
+ #include "third_party/blink/renderer/modules/webaudio/offline_audio_context.h"
+ 
+-#include "base/command_line.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "media/base/audio_glitch_info.h"
+-#include "components/ungoogled/ungoogled_switches.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_offline_audio_context_options.h"
+@@ -169,45 +167,6 @@
+                 options->sampleRate(), render_quantum_frames, exception_state);
+ }
+ 
+-// 生成基于指纹的帧数调整值（1到noise_limit之间）
+-uint32_t getNoiseData(uint32_t number_of_frames) {
+-    // 获取命令行参数
+-    const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-    if (command_line->HasSwitch(switches::kFingerprint)) {
+-        std::string fingerprint_str = command_line->GetSwitchValueASCII(switches::kFingerprint);
+-        if (!fingerprint_str.empty()) {
+-            // 组合指纹字符串、帧数和常量"audio"
+-            std::string combined = fingerprint_str + std::to_string(number_of_frames) + "audio";
+-            uint32_t hash = std::hash<std::string>{}(combined);
+-
+-            // 计算1%的number_of_frames
+-            uint32_t one_percent = number_of_frames / 100;
+-            if (one_percent < 1) one_percent = 1;  // 确保至少为1
+-
+-            constexpr uint32_t MAX_NOISE = 1000;
+-            uint32_t noise_limit = std::min(one_percent, MAX_NOISE);
+-            return (hash % noise_limit) + 1;
+-        }
+-    }
+-    return 0;
+-}
+-
+-// 生成基于指纹的采样率噪声（范围 ±0.01）
+-float getSampleRateNoise(float sample_rate) {
+-    const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-    if (command_line->HasSwitch(switches::kFingerprint)) {
+-        std::string fingerprint_str = command_line->GetSwitchValueASCII(switches::kFingerprint);
+-        if (!fingerprint_str.empty()) {
+-            std::string combined = fingerprint_str + std::to_string(static_cast<int>(sample_rate)) + "samplerate";
+-            uint32_t hash = std::hash<std::string>{}(combined);
+-            // 生成 ±0.01 范围的噪声
+-            float noise = ((static_cast<float>(hash % 10000) / 10000.0f) - 0.5f) * 0.02f;
+-            return noise;
+-        }
+-    }
+-    return 0.0f;
+-}
+-
+ OfflineAudioContext::OfflineAudioContext(LocalDOMWindow* window,
+                                          unsigned number_of_channels,
+                                          uint32_t number_of_frames,
+@@ -218,15 +177,8 @@
+                        ContextType::kOfflineContext,
+                        render_quantum_frames),
+       total_render_frames_(number_of_frames) {
+-  float adjusted_sample_rate = sample_rate;
+-  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-  if (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+-      command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("audio") == std::string::npos) {
+-    adjusted_sample_rate += getSampleRateNoise(sample_rate);
+-  }
+-
+   destination_node_ = OfflineAudioDestinationNode::Create(
+-      this, number_of_channels, total_render_frames_, adjusted_sample_rate);
++      this, number_of_channels, number_of_frames, sample_rate);
+   Initialize();
+ }
+ 
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_handler.cc b/third_party/blink/renderer/modules/webaudio/audio_handler.cc
+--- a/third_party/blink/renderer/modules/webaudio/audio_handler.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_handler.cc
+@@ -6,11 +6,20 @@
+ 
+ #include <inttypes.h>
+ 
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <string>
++
++#include "base/command_line.h"
+ #include "base/trace_event/trace_event.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_node_input.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_node_output.h"
+ #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
++#include "third_party/blink/renderer/platform/audio/audio_bus.h"
++#include "third_party/blink/renderer/platform/audio/audio_channel.h"
+ #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
+ #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+ #include "third_party/blink/renderer/platform/instrumentation/instance_counters.h"
+@@ -20,6 +29,52 @@
+ #endif
+ 
+ namespace blink {
++
++namespace {
++
++uint64_t AudioFingerprintSeedHash() {
++  static const uint64_t kSeedHash = []() -> uint64_t {
++    const base::CommandLine* command_line =
++        base::CommandLine::ForCurrentProcess();
++    if (!command_line->HasSwitch(switches::kFingerprint)) {
++      return 0u;
++    }
++    const std::string disabled =
++        command_line->GetSwitchValueASCII(switches::kDisableSpoofing);
++    if (disabled.find("audio") != std::string::npos) {
++      return 0u;
++    }
++    const std::string fp =
++        command_line->GetSwitchValueASCII(switches::kFingerprint);
++    if (fp.empty()) {
++      return 0u;
++    }
++    uint64_t h = 14695981039346656037ULL;
++    for (unsigned char c : fp) {
++      h ^= c;
++      h *= 1099511628211ULL;
++    }
++    return h ? h : 1u;
++  }();
++  return kSeedHash;
++}
++
++float PerturbAudioSample(float sample, uint64_t salt, uint64_t frame_index) {
++  if (sample == 0.0f || !std::isfinite(sample) || std::fabs(sample) >= 16.0f) {
++    return sample;
++  }
++  uint64_t x = salt ^ frame_index;
++  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
++  x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
++  x ^= (x >> 31);
++  // 2^-20 (~-120 dBFS): above float32 ULP rounding up to |sample| < 16.
++  constexpr float kStep = 9.5367431640625e-7f;
++  const float sign = (x & 1u) ? 1.0f : -1.0f;
++  const float magnitude = static_cast<float>((x >> 1) & 3u) + 1.0f;
++  return sample + sign * magnitude * kStep;
++}
++
++}  // namespace
+ 
+ AudioHandler::AudioHandler(NodeType node_type,
+                            AudioNode& node,
+@@ -329,6 +384,39 @@
+       UnsilenceOutputs();
+       base::TimeTicks process_start_time = base::TimeTicks::Now();
+       Process(frames_to_process);
++      if (const uint64_t seed = AudioFingerprintSeedHash()) {
++        const uint64_t base_frame =
++            static_cast<uint64_t>(Context()->CurrentSampleFrame());
++        const uint64_t handler_salt =
++            seed ^ (static_cast<uint64_t>(GetNodeType()) *
++                    0x9E3779B97F4A7C15ULL);
++        for (wtf_size_t out_idx = 0; out_idx < outputs_.size(); ++out_idx) {
++          AudioBus* bus = outputs_[out_idx]->Bus();
++          if (!bus || bus->IsSilent()) {
++            continue;
++          }
++          for (unsigned ch = 0; ch < bus->NumberOfChannels(); ++ch) {
++            AudioChannel* channel = bus->Channel(ch);
++            if (!channel || channel->IsSilent()) {
++              continue;
++            }
++            const uint32_t count =
++                std::min(frames_to_process, channel->length());
++            if (count == 0) {
++              continue;
++            }
++            const uint64_t channel_salt =
++                handler_salt ^
++                (static_cast<uint64_t>(out_idx) * 0xBF58476D1CE4E5B9ULL) ^
++                (static_cast<uint64_t>(ch) * 0x94D049BB133111EBULL);
++            base::span<float> samples = channel->MutableSpan().first(count);
++            for (uint32_t i = 0; i < count; ++i) {
++              samples[i] =
++                  PerturbAudioSample(samples[i], channel_salt, base_frame + i);
++            }
++          }
++        }
++      }
+       base::TimeDelta process_duration =
+           base::TimeTicks::Now() - process_start_time;
+       uma_reporter_->AddProcessDuration(process_duration, frames_to_process);
+diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
+--- a/third_party/blink/renderer/core/dom/element.cc
++++ b/third_party/blink/renderer/core/dom/element.cc
+@@ -3475,6 +3475,58 @@
+   return (top_is_deterministic && left_is_deterministic);
+ }
+ 
++namespace {
++
++bool ComputeClientRectOffset(const gfx::RectF& bounds,
++                             double raw_dx,
++                             double raw_dy,
++                             float* out_dx,
++                             float* out_dy) {
++  if (bounds.IsEmpty()) {
++    return false;
++  }
++  float dx = static_cast<float>(raw_dx);
++  float dy = static_cast<float>(raw_dy);
++  if (bounds.x() == 0.0f && dx < 0.0f) {
++    dx = -dx;
++  }
++  if (bounds.y() == 0.0f && dy < 0.0f) {
++    dy = -dy;
++  }
++  *out_dx = dx;
++  *out_dy = dy;
++  return true;
++}
++
++void OffsetNonEmptyClientRect(gfx::RectF& rect, double raw_dx, double raw_dy) {
++  float dx = 0.0f;
++  float dy = 0.0f;
++  if (ComputeClientRectOffset(rect, raw_dx, raw_dy, &dx, &dy)) {
++    rect.Offset(dx, dy);
++  }
++}
++
++void OffsetNonEmptyClientRects(Vector<gfx::RectF>& rects,
++                               double raw_dx,
++                               double raw_dy) {
++  gfx::RectF union_bounds;
++  for (const auto& rect : rects) {
++    union_bounds.Union(rect);
++  }
++  float dx = 0.0f;
++  float dy = 0.0f;
++  if (!ComputeClientRectOffset(union_bounds, raw_dx, raw_dy, &dx, &dy)) {
++    return;
++  }
++  for (auto& rect : rects) {
++    if (!rect.IsEmpty()) {
++      rect.Offset(dx, dy);
++    }
++  }
++}
++
++}  // namespace
++
+ DOMRectList* Element::getClientRects() {
+   Vector<gfx::RectF> rects = GetClientRectsNoAdjustment();
+   if (rects.empty()) {
+@@ -3491,9 +3543,8 @@
+       (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+        command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("clientrects") == std::string::npos)) {
+     if (!ShouldSkipClientRectsOffset()) {
+-      for (auto& rect : rects) {
+-        rect.Offset(GetDocument().GetNoiseFactorX(), GetDocument().GetNoiseFactorY());
+-      }
++      OffsetNonEmptyClientRects(rects, GetDocument().GetNoiseFactorX(),
++                                GetDocument().GetNoiseFactorY());
+     }
+   }
+   return MakeGarbageCollected<DOMRectList>(rects);
+@@ -3550,7 +3601,8 @@
+       (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+        command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("clientrects") == std::string::npos)) {
+     if (!ShouldSkipClientRectsOffset()) {
+-      result.Offset(GetDocument().GetNoiseFactorX(), GetDocument().GetNoiseFactorY());
++      OffsetNonEmptyClientRect(result, GetDocument().GetNoiseFactorX(),
++                               GetDocument().GetNoiseFactorY());
+     }
+   }
+   return result;
+diff --git a/third_party/blink/renderer/core/dom/range.cc b/third_party/blink/renderer/core/dom/range.cc
+--- a/third_party/blink/renderer/core/dom/range.cc
++++ b/third_party/blink/renderer/core/dom/range.cc
+@@ -1653,6 +1653,56 @@
+          end.DeepEquivalent().ComputeOffsetInContainerNode(), exception_state);
+ }
+ 
++namespace {
++
++bool ResolveRangeClientRectOffset(const gfx::RectF& bounds,
++                                  double raw_dx,
++                                  double raw_dy,
++                                  float* out_dx,
++                                  float* out_dy) {
++  if (bounds.IsEmpty()) {
++    return false;
++  }
++  float dx = static_cast<float>(raw_dx);
++  float dy = static_cast<float>(raw_dy);
++  if (bounds.x() == 0.0f && dx < 0.0f) {
++    dx = -dx;
++  }
++  if (bounds.y() == 0.0f && dy < 0.0f) {
++    dy = -dy;
++  }
++  *out_dx = dx;
++  *out_dy = dy;
++  return true;
++}
++
++void OffsetRangeClientQuads(Vector<gfx::QuadF>& quads,
++                            double raw_dx,
++                            double raw_dy) {
++  gfx::RectF union_bounds;
++  for (const gfx::QuadF& quad : quads) {
++    union_bounds.Union(quad.BoundingBox());
++  }
++  float dx = 0.0f;
++  float dy = 0.0f;
++  if (!ResolveRangeClientRectOffset(union_bounds, raw_dx, raw_dy, &dx, &dy)) {
++    return;
++  }
++  for (gfx::QuadF& quad : quads) {
++    quad.Offset(dx, dy);
++  }
++}
++
++void OffsetRangeBoundingRect(gfx::RectF& rect, double raw_dx, double raw_dy) {
++  float dx = 0.0f;
++  float dy = 0.0f;
++  if (ResolveRangeClientRectOffset(rect, raw_dx, raw_dy, &dx, &dy)) {
++    rect.Offset(dx, dy);
++  }
++}
++
++}  // namespace
++
+ DOMRectList* Range::getClientRects() const {
+   // TODO(crbug.com/1499981): This should be removed once synchronized scrolling
+   // impact is understood.
+@@ -1668,9 +1718,8 @@
+   if (command_line->HasSwitch(switches::kFingerprint) &&
+       (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+        command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("clientrects") == std::string::npos)) {
+-    for (gfx::QuadF& quad : quads) {
+-      quad.Offset(owner_document_->GetNoiseFactorX(), owner_document_->GetNoiseFactorY());
+-    }
++    OffsetRangeClientQuads(quads, owner_document_->GetNoiseFactorX(),
++                           owner_document_->GetNoiseFactorY());
+   }
+ 
+   return MakeGarbageCollected<DOMRectList>(quads);
+@@ -1685,7 +1734,8 @@
+   if (command_line->HasSwitch(switches::kFingerprint) &&
+       (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+        command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("clientrects") == std::string::npos)) {
+-    rect.Offset(owner_document_->GetNoiseFactorX(), owner_document_->GetNoiseFactorY());
++    OffsetRangeBoundingRect(rect, owner_document_->GetNoiseFactorX(),
++                            owner_document_->GetNoiseFactorY());
+   }
+   return DOMRect::FromRectF(rect);
+ }

@@ -76,7 +76,7 @@ def test_brands(chrome_exe, tmp_path, brand):
 @pytest.mark.skipif(HOST != "windows", reason="cross-OS persona measured on Windows")
 def test_macos_persona_on_windows_host(chrome_exe, tmp_path):
     p = persona(platform="macos")
-    eng, fp = run(_probe(chrome_exe, tmp_path, persona=p, headless=True))
+    eng, fp = run(_probe(chrome_exe, tmp_path, persona=p, headless=True, allow_unsupported=True))
     assert probe.check(eng.persona, fp) == []
     assert "Apple" in fp["webgl"]["renderer"]
     assert eng.warnings  # fonts are still the host's
@@ -306,9 +306,47 @@ def test_automation_switches_are_gone(chrome_exe, tmp_path):
     cmdline = run(go())
     for switch in engine_mod.IGNORED_DEFAULT_ARGS:
         assert f"{switch} " not in cmdline + " ", switch
+    assert "swiftshader" not in cmdline.lower()
     # Playwright's feature list (storage partitioning off, HTTPS upgrades off...) is gone.
     assert "--disable-features=" not in cmdline
     assert "ThirdPartyStoragePartitioning" not in cmdline
+
+
+def test_native_sharedworker_preserves_blob_url(chrome_exe, tmp_path):
+    if not engine_mod._has_verified_native_realms(chrome_exe, persona()):
+        pytest.skip("requires verified native-realms Chromium bundle")
+
+    async def go():
+        origin = await Origin("localhost").start()
+        try:
+            eng = ChromeEngine(tmp_path, executable=chrome_exe, persona=persona(), headless=True)
+            context = await eng.start()
+            try:
+                page = context.pages[0]
+                await page.goto(origin.url + "/")
+                return await page.evaluate(
+                    """async () => {
+                      const u = URL.createObjectURL(new Blob(
+                        ['onconnect = (e) => { e.ports[0].postMessage(self.location.href); };'],
+                        {type: 'text/javascript'}
+                      ));
+                      const sw = new SharedWorker(u);
+                      const href = await new Promise((r) => {
+                        sw.port.onmessage = (e) => r(e.data);
+                        sw.port.start();
+                        setTimeout(() => r('timeout'), 3000);
+                      });
+                      URL.revokeObjectURL(u);
+                      return {u, href, matches: href === u};
+                    }"""
+                )
+            finally:
+                await eng.stop()
+        finally:
+            await origin.stop()
+
+    res = run(go())
+    assert res["matches"] is True, res
 
 
 def test_popups_are_blocked_like_a_normal_browser(chrome_exe, tmp_path):

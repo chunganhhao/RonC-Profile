@@ -259,7 +259,13 @@ def test_pionlogin_ui_components_and_dialogs(tmp_path, monkeypatch):
     monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
 
     pm = pm_mod.ProfileManager()
-    pm.add_profile("pion-1", "socks5://u:p@198.51.100.1:1080", "macos", group="Google / Gmail", notes="Fam AGY Pixel")
+    pm.add_profile(
+        "pion-1",
+        "socks5://u:p@198.51.100.1:1080",
+        "macos",
+        group="Google / Gmail",
+        notes="Fam AGY Pixel",
+    )
     prof = pm.profiles["pion-1"]
 
     header = build_header_row(False, False, lambda _: None)
@@ -347,6 +353,7 @@ def test_pionlogin_ui_components_and_dialogs(tmp_path, monkeypatch):
 
 def test_full_app_e2e_lifecycle_theme_and_dialogs(tmp_path, monkeypatch):
     from src.core import config as app_config
+    from src.core.strings import get_string
     from src.ui.app import App
 
     monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
@@ -424,6 +431,31 @@ def test_full_app_e2e_lifecycle_theme_and_dialogs(tmp_path, monkeypatch):
         assert "Tổng cộng: 1" in app._total_count_text.value
         app._set_language("en")
         assert "Total: 1" in app._total_count_text.value
+
+        # Switch Hallmark accent presets & open Appearance dialog
+        app._set_accent("green")
+        app._set_accent("orange")
+        app._set_accent("blue")
+        app._open_appearance()
+        assert page.dialog is not None
+        page.pop_dialog()
+
+        # Verify Copy Email / Password / 2FA visual feedback & toast banner
+        prof = app.pm.profiles["demo1@example.test"]
+        prof.account_uid = "demo1@example.test"
+        prof.account_password = "secret"
+        prof.two_fa_secret = "JBSWY3DPEHPK3PXP"
+        app._on_copy_user("demo1@example.test")
+        assert ("demo1@example.test", "copy_user") in app._feedback_until
+        assert app._toast_banner.visible is True
+        assert "{name}" not in app._toast_text.value
+        assert prof.account_uid in app._toast_text.value
+        app._on_copy_pass("demo1@example.test")
+        assert ("demo1@example.test", "copy_pass") in app._feedback_until
+        app._on_copy_2fa("demo1@example.test")
+        assert ("demo1@example.test", "copy_2fa") in app._feedback_until
+        app._log(get_string("updated_profile", old="demo1@example.test", new="demo1@example.test"))
+        assert ("demo1@example.test", "edit_profile") in app._feedback_until
 
         # Open Proxy Pool & Warming Dialogs from App
         app._open_proxy_pool()
@@ -511,8 +543,12 @@ def test_b2_f1_to_f4_warming_concurrency_duration_and_api_lifespan(tmp_path, mon
             self.running.discard(name)
             return True
 
-    t_a = ws.add_task("TaskA", ["shared-prof"], preset="custom", custom_urls=["https://example.test/a"])
-    t_b = ws.add_task("TaskB", ["shared-prof"], preset="custom", custom_urls=["https://example.test/b"])
+    t_a = ws.add_task(
+        "TaskA", ["shared-prof"], preset="custom", custom_urls=["https://example.test/a"]
+    )
+    t_b = ws.add_task(
+        "TaskB", ["shared-prof"], preset="custom", custom_urls=["https://example.test/b"]
+    )
     bl = GateLauncher()
     th_a = threading.Thread(
         target=ws.execute_task_sync,
@@ -666,11 +702,15 @@ def test_b2_f1_to_f4_warming_concurrency_duration_and_api_lifespan(tmp_path, mon
     try:
         ctrls_pick = list(_walk_controls(page_pick.dialog))
         btn_pick = next(
-            c for c in ctrls_pick if isinstance(c, ft.OutlinedButton) and c.icon == ft.Icons.STORAGE_OUTLINED
+            c
+            for c in ctrls_pick
+            if isinstance(c, ft.OutlinedButton) and c.icon == ft.Icons.STORAGE_OUTLINED
         )
         btn_pick.on_click(None)
         p_field = next(
-            c for c in ctrls_pick if isinstance(c, ft.TextField) and c.hint_text == "socks5://user:pass@host:port"
+            c
+            for c in ctrls_pick
+            if isinstance(c, ft.TextField) and c.hint_text == "socks5://user:pass@host:port"
         )
         assert p_field.value == e_free.proxy
     finally:
@@ -702,7 +742,9 @@ def test_b2_f1_to_f4_warming_concurrency_duration_and_api_lifespan(tmp_path, mon
             release_launch.wait(2)
             return False
 
-    slow_task = ws.add_task("Slow Launch", ["shared-prof"], preset="custom", custom_urls=["https://example.org"])
+    slow_task = ws.add_task(
+        "Slow Launch", ["shared-prof"], preset="custom", custom_urls=["https://example.org"]
+    )
     t_slow = threading.Thread(
         target=ws.execute_task_sync,
         args=(slow_task.id, pm, SlowStartLauncher()),
@@ -728,7 +770,3 @@ def test_b2_f1_to_f4_warming_concurrency_duration_and_api_lifespan(tmp_path, mon
     monkeypatch.setattr(pm, "save_profiles", counted_save)
     assert pool.assign_round_robin(["shared-prof", "uses-10"], pm) == 2
     assert save_calls == 1
-
-
-
-

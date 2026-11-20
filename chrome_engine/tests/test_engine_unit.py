@@ -22,9 +22,37 @@ def test_build_args_headed():
     args = build_args(P)
     assert args[:5] == P.to_args()
     assert "--start-maximized" in args
-    assert "--disable-blink-features=AutomationControlled" in args
+    assert "--disable-blink-features=AutomationControlled" not in args
+    assert not any(a.startswith("--disable-blink-features") for a in args)
     assert not any(a.startswith("--disable-features") for a in args)
     assert not any(a.startswith("--proxy-server") for a in args)
+
+
+def test_build_args_with_extensions_and_pins(tmp_path):
+    ext = tmp_path / "ext1"
+    ext.mkdir()
+    args = build_args(P, extensions=[ext])
+    resolved = str(ext.resolve())
+    assert f"--disable-extensions-except={resolved}" in args
+    assert f"--load-extension={resolved}" in args
+
+    engine_mod.set_extension_pins(
+        tmp_path,
+        pinned_ids=["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        unpinned_ids=["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+    )
+    prefs = json.loads((tmp_path / "Default" / "Preferences").read_text("utf-8"))
+    assert prefs["extensions"]["pinned_extensions"] == ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    # Custom pinned extension cccc stays intact while aaaa is unpinned
+    prefs["extensions"]["pinned_extensions"].append("cccccccccccccccccccccccccccccccc")
+    (tmp_path / "Default" / "Preferences").write_text(json.dumps(prefs), encoding="utf-8")
+    engine_mod.set_extension_pins(
+        tmp_path,
+        pinned_ids=[],
+        unpinned_ids=["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    )
+    prefs2 = json.loads((tmp_path / "Default" / "Preferences").read_text("utf-8"))
+    assert prefs2["extensions"]["pinned_extensions"] == ["cccccccccccccccccccccccccccccccc"]
 
 
 def test_build_args_headless_sets_a_real_screen():
@@ -43,6 +71,21 @@ def test_build_args_proxy_and_extra_come_last():
     args = build_args(P, proxy_url="http://127.0.0.1:5555", extra_args=["--foo"])
     assert "--proxy-server=http://127.0.0.1:5555" in args
     assert args[-1] == "--foo"
+
+
+def test_build_args_respects_macos_display_preset_bounds():
+    from chrome_engine import persona as personas
+
+    mac = personas.generate("macos", seed=3)
+    headed_args = build_args(mac, headless=False)
+    assert "--start-maximized" not in headed_args
+    ws_arg = next(a for a in headed_args if a.startswith("--window-size="))
+    ww, wh = (int(x) for x in ws_arg.split("=", 1)[1].split(","))
+    assert 800 <= ww <= mac.screen_width
+    assert 600 <= wh <= mac.avail_height
+
+    headless_args = build_args(mac, headless=True)
+    assert f"--screen-info={{0,0 {mac.screen_width}x{mac.screen_height}}}" in headless_args
 
 
 def test_playwright_feature_switch_is_found():
@@ -73,6 +116,7 @@ def test_ignored_defaults_cover_page_visible_switches():
         "--force-color-profile=srgb",
         "--disable-back-forward-cache",
         "--no-sandbox",
+        "--enable-unsafe-swiftshader",
     ):
         assert switch in IGNORED_DEFAULT_ARGS
 
@@ -113,10 +157,17 @@ def test_unsupported_persona_can_be_forced(tmp_path, monkeypatch):
     assert eng.warnings
 
 
-def test_cross_os_persona_warns(tmp_path, monkeypatch):
-    eng, persona = _resolve(tmp_path, monkeypatch, "windows", platform="macos")
-    assert persona.platform == "macos"
-    assert "fonts" in eng.warnings[0]
+def test_cross_os_persona_refused_before_identity_write(tmp_path, monkeypatch):
+    path = tmp_path / "chrome_persona.json"
+    path.write_text("do not rewrite an existing identity")
+    with pytest.raises(EngineError, match="native worker WebGPU"):
+        _resolve(tmp_path, monkeypatch, "windows", platform="macos")
+    assert path.read_text() == "do not rewrite an existing identity"
+
+
+def test_explicit_cross_os_persona_is_also_refused(tmp_path, monkeypatch):
+    with pytest.raises(EngineError, match="native worker WebGPU"):
+        _resolve(tmp_path, monkeypatch, "macos", persona=P)
 
 
 def test_platform_defaults_to_host(tmp_path, monkeypatch):
@@ -282,3 +333,115 @@ def test_geo_locale_is_kept_across_launches(tmp_path, monkeypatch):
         locales.append(eng.persona.locale)
     assert locales == ["es-US", "es-US"]
     assert "--lang=es-US" in eng.args
+
+
+def test_macos_026_capability_gate_respects_binary_and_preserves_identity(tmp_path, monkeypatch):
+    import hashlib
+
+    from chrome_engine import persona as personas
+    from chrome_engine.native_bundle import bundle_sha256
+
+    monkeypatch.setattr(engine_mod, "host_os", lambda: "macos")
+    app = tmp_path / "Chromium.app"
+    exe = app / "Contents/MacOS/Chromium"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"run19-binary")
+    bin_sha = hashlib.sha256(b"run19-binary").hexdigest()
+    b_sha = bundle_sha256(app)
+
+    # Pin ONLY as legacy native-realms (Run #19), NOT in APPLE_SILICON_COHERENCE_BUNDLES.
+    monkeypatch.setattr(engine_mod, "NATIVE_REALM_BUNDLES", {b_sha})
+    manifest = {
+        "binary_sha256": bin_sha,
+        "bundle_sha256": b_sha,
+        "acceptance": "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL",
+        "cases": {
+            "macos:2": {},
+            "macos:3": {},
+            "apple_silicon_m3_laptop": {},
+            "apple_silicon_m2_max_desktop": {},
+        },
+    }
+    (tmp_path / "native-acceptance.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    # Even if sibling manifest claims 026 cases, Run #19 pin MUST fail closed for 026.
+    p026 = personas.generate("macos", seed=3)
+    assert engine_mod._has_verified_native_realms(exe, p026) is True
+    assert engine_mod._has_verified_apple_silicon_026(exe, p026) is False
+
+    prof = tmp_path / "prof026"
+    personas.save(prof, p026)
+    saved_bytes_before = personas.persona_path(prof).read_bytes()
+
+    eng_refuse = ChromeEngine(prof, platform="macos", executable=exe)
+    with pytest.raises(EngineError, match="requires a verified 026\\+"):
+        asyncio.run(eng_refuse.start())
+    # Persisted chrome_persona.json must NOT be silently overwritten on refusal.
+    assert personas.persona_path(prof).read_bytes() == saved_bytes_before
+
+    # Baseline profile on Run #19 stays on compatible pre-026 baseline without 026 display flags.
+    prof_base = tmp_path / "prof_base"
+    eng_base = ChromeEngine(prof_base, platform="macos", executable=exe)
+    _start_until_browser(eng_base, monkeypatch)
+    assert eng_base.persona.device_model is None
+    assert not eng_base.persona.requires_apple_silicon_026
+    assert not any(a.startswith("--fingerprint-display-profile") for a in eng_base.args)
+
+    # Verified 026 bundle pinned + manifest cases -> accepted with 026 args.
+    monkeypatch.setattr(engine_mod, "APPLE_SILICON_COHERENCE_BUNDLES", {b_sha})
+    assert engine_mod._has_verified_apple_silicon_026(exe, p026) is True
+    eng_ok = ChromeEngine(prof, platform="macos", executable=exe)
+    _start_until_browser(eng_ok, monkeypatch)
+    assert eng_ok.persona == p026
+    assert any(a.startswith("--fingerprint-display-profile=") for a in eng_ok.args)
+
+
+def test_chrome_engine_hashes_verified_bundle_once_per_launch(tmp_path, monkeypatch):
+    import hashlib
+
+    from chrome_engine import persona as personas
+    from chrome_engine.native_bundle import bundle_sha256
+
+    monkeypatch.setattr(engine_mod, "host_os", lambda: "macos")
+    app = tmp_path / "Chromium.app"
+    exe = app / "Contents/MacOS/Chromium"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"026-binary")
+    bin_sha = hashlib.sha256(b"026-binary").hexdigest()
+    b_sha = bundle_sha256(app)
+
+    monkeypatch.setattr(engine_mod, "NATIVE_REALM_BUNDLES", {b_sha})
+    monkeypatch.setattr(engine_mod, "APPLE_SILICON_COHERENCE_BUNDLES", {b_sha})
+    manifest = {
+        "binary_sha256": bin_sha,
+        "bundle_sha256": b_sha,
+        "acceptance": "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL",
+        "cases": {
+            "macos:2": {},
+            "macos:3": {},
+            "apple_silicon_m3_laptop": {},
+            "apple_silicon_m2_max_desktop": {},
+        },
+    }
+    (tmp_path / "native-acceptance.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    hash_calls = 0
+    orig_bundle_sha256 = engine_mod.bundle_sha256
+
+    def counting_bundle_sha256(bundle_path):
+        nonlocal hash_calls
+        hash_calls += 1
+        return orig_bundle_sha256(bundle_path)
+
+    monkeypatch.setattr(engine_mod, "bundle_sha256", counting_bundle_sha256)
+
+    prof = tmp_path / "prof_cached"
+    personas.save(prof, personas.generate("macos", seed=3))
+
+    eng1 = ChromeEngine(prof, platform="macos", executable=exe)
+    _start_until_browser(eng1, monkeypatch)
+    assert hash_calls == 1
+
+    eng2 = ChromeEngine(prof, platform="macos", executable=exe)
+    _start_until_browser(eng2, monkeypatch)
+    assert hash_calls == 2

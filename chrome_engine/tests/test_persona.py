@@ -186,3 +186,126 @@ def test_invalid_saved_values_are_regenerated(tmp_path):
 )
 def test_compatibility(host, platform, level):
     assert personas.compatibility(host, platform)[0] == level
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"screen_width": 1440}, "screen_width"),
+        ({"screen_width": 200, "screen_height": 900}, "screen_width"),
+        (
+            {"screen_width": 1440, "screen_height": 900, "avail_top": 38, "avail_height": 880},
+            "exceed",
+        ),
+        ({"color_depth": 16}, "color_depth"),
+        ({"color_gamut": "rec2020"}, "color_gamut"),
+        ({"color_scheme": "auto"}, "color_scheme"),
+        ({"device_scale_factor": 8.0}, "device_scale_factor"),
+        ({"device_model": "   "}, "device_model"),
+    ],
+)
+def test_display_validation(changes, message):
+    base = {"seed": 3, "platform": "macos", "platform_version": "15.6.1"}
+    with pytest.raises(PersonaError, match=message):
+        Persona(**{**base, **changes})
+
+
+def test_macos_personas_cover_all_apple_silicon_chips_and_enforce_coherence():
+    chips = set()
+    models = set()
+    schemes = set()
+    for i in range(13 * 4):
+        seed = 3 * i + 3
+        p = personas.generate("macos", seed=seed)
+        slot = personas.apple_silicon_slot_for_seed(seed)
+        chips.add(slot.chip)
+        models.add(p.device_model)
+        schemes.add(p.color_scheme)
+        assert p.hardware_concurrency in {c for c, _ in slot.cores}
+        assert p.platform_version in {v for v, _ in slot.os_versions}
+        if slot.chip in ("Apple M4", "Apple M4 Pro", "Apple M4 Max"):
+            assert int(p.platform_version.split(".")[0]) >= 15
+        assert p.screen_width is not None and p.screen_height is not None
+        assert p.avail_top is not None and p.avail_height is not None
+        assert p.avail_top + p.avail_height <= p.screen_height
+        args = p.to_args()
+        assert f"--fingerprint-screen-width={p.screen_width}" in args
+        assert f"--fingerprint-screen-height={p.screen_height}" in args
+        assert f"--fingerprint-device-scale-factor={p.device_scale_factor:g}" in args
+        assert any(a.startswith("--fingerprint-display-profile=") for a in args)
+        assert personas.Persona.from_json(p.to_json()) == p
+
+    assert len(chips) == 12
+    assert len(models) > 10
+    assert schemes == {"light", "dark"}
+
+
+def test_macos_generated_model_cpu_constraints_and_defaults():
+    p45 = personas.generate("macos", seed=45)
+    assert p45.device_model == "MacBook Pro 16 (M3 Pro)"
+    assert p45.hardware_concurrency == 12
+
+    p537 = personas.generate("macos", seed=537)
+    assert p537.device_model == "MacBook Pro 16 (M1 Pro)"
+    assert p537.hardware_concurrency == 10
+
+    model_allowed: dict[str, set[int]] = {}
+    for slot in personas._APPLE_SILICON_SLOTS:
+        for disp in slot.displays:
+            allowed = {c for c, _ in personas.allowed_macos_cores_for_model(slot, disp.model)}
+            model_allowed[disp.model] = allowed
+
+    assert model_allowed["MacBook Pro 16 (M3 Pro)"] == {12}
+    assert model_allowed["MacBook Pro 16 (M1 Pro)"] == {10}
+    assert model_allowed["MacBook Pro 16 (M2 Pro)"] == {12}
+    assert model_allowed["MacBook Pro 16 (M4 Pro)"] == {14}
+    assert model_allowed["MacBook Pro 14 (M4)"] == {10}
+    assert model_allowed["Mac mini (M4) 1080p"] == {10}
+
+    seen_models = set()
+    for i in range(600):
+        seed = 3 * i + 3
+        p = personas.generate("macos", seed=seed)
+        seen_models.add(p.device_model)
+        assert p.hardware_concurrency in model_allowed[p.device_model]
+        assert (
+            personas.default_cpu_for_persona("macos", seed, p.device_model)
+            == p.hardware_concurrency
+        )
+    assert seen_models == set(model_allowed)
+
+    baseline = personas.generate("macos", seed=3, coherence_026=False)
+    assert baseline.device_model is None
+    assert baseline.screen_width is None
+    assert not baseline.requires_apple_silicon_026
+    assert not any(a.startswith("--fingerprint-display-profile") for a in baseline.to_args())
+
+
+def test_save_cleans_up_temp_file_on_replace_failure(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    existing = personas.generate("macos", seed=3, coherence_026=True)
+    personas.save(tmp_path, existing)
+    orig_bytes = personas.persona_path(tmp_path).read_bytes()
+    unrelated = tmp_path / "unrelated.tmp"
+    unrelated.write_text("keep-me", encoding="utf-8")
+
+    orig_replace = Path.replace
+    saw_tmp_bytes = False
+
+    def fail_replace(self, target):
+        nonlocal saw_tmp_bytes
+        if self.suffix == ".tmp" and Path(target).name == personas.PERSONA_FILE:
+            saw_tmp_bytes = len(self.read_bytes()) > 0
+            raise OSError("injected-replace-failure")
+        return orig_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    updated = personas.generate("macos", seed=45, coherence_026=True)
+    with pytest.raises(OSError, match="injected-replace-failure"):
+        personas.save(tmp_path, updated)
+
+    assert saw_tmp_bytes is True
+    assert personas.persona_path(tmp_path).read_bytes() == orig_bytes
+    assert unrelated.read_text(encoding="utf-8") == "keep-me"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["chrome_persona.json", "unrelated.tmp"]

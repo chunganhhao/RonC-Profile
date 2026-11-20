@@ -4,7 +4,8 @@ import flet as ft
 
 from ...core.strings import get_string
 from ...services.browser import cores
-from ..theme.colors import COLORS
+from ..theme.colors import COLORS, FONT_BOLD
+from .responsive import bind_responsive_dialog
 
 
 def _fmt_bytes(num: int | None) -> str:
@@ -22,8 +23,8 @@ def open_core_manager(page: ft.Page, pm=None, bl=None) -> None:
     status = ft.Text(selectable=True, color=COLORS["text_main"])
     storage_line = ft.Text(selectable=True, size=12, color=COLORS["text_sub"])
     result = ft.Text("", selectable=True, color=COLORS["text_sub"])
-    choices = ft.Dropdown(label=get_string("core_candidate"), width=580)
-    profiles = ft.Dropdown(label=get_string("core_profile"), width=580)
+    choices = ft.Dropdown(label=get_string("core_candidate"), expand=True)
+    profiles = ft.Dropdown(label=get_string("core_profile"), expand=True)
     confirm = ft.Checkbox(label=get_string("core_confirm"), value=False)
     backup = ft.Checkbox(label=get_string("core_backup_confirm"), value=False)
     apply_ack = ft.Checkbox(label=get_string("core_apply_confirm"), value=False)
@@ -50,9 +51,7 @@ def open_core_manager(page: ft.Page, pm=None, bl=None) -> None:
             and backup.value
             and apply_ack.value
         )
-        prune_btn.disabled = working or not (
-            activation_allowed and pm and bl and prune_ack.value
-        )
+        prune_btn.disabled = working or not (activation_allowed and pm and bl and prune_ack.value)
         page.update()
 
     def selection(_):
@@ -181,33 +180,49 @@ def open_core_manager(page: ft.Page, pm=None, bl=None) -> None:
     apply.on_click = activate
     prune_btn.on_click = prune_action
     refresh.on_click = reload
+    body_container = ft.Container(
+        width=660,
+        content=ft.Column(
+            tight=True,
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            controls=[
+                ft.Text(get_string("core_safety")),
+                status,
+                storage_line,
+                choices,
+                confirm,
+                ft.Row([refresh, download], spacing=8, run_spacing=8, wrap=True),
+                profiles,
+                backup,
+                apply_ack,
+                apply,
+                prune_ack,
+                prune_btn,
+                ft.Text(get_string("core_apply_blocked")),
+                result,
+            ],
+        ),
+    )
     dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text(get_string("core_manager")),
-        content=ft.Container(
-            width=640,
-            content=ft.Column(
-                tight=True,
-                scroll=ft.ScrollMode.AUTO,
-                controls=[
-                    ft.Text(get_string("core_safety")),
-                    status,
-                    storage_line,
-                    choices,
-                    confirm,
-                    ft.Row([refresh, download], wrap=True),
-                    profiles,
-                    backup,
-                    apply_ack,
-                    apply,
-                    prune_ack,
-                    prune_btn,
-                    ft.Text(get_string("core_apply_blocked")),
-                    result,
-                ],
-            ),
+        bgcolor=COLORS["card_bg"],
+        shape=ft.RoundedRectangleBorder(radius=12),
+        title=ft.Text(
+            get_string("core_manager"), size=19, font_family=FONT_BOLD, color=COLORS["text_main"]
         ),
+        content=body_container,
         actions=[ft.TextButton(get_string("close_btn"), on_click=lambda _: page.pop_dialog())],
+    )
+    bind_responsive_dialog(
+        page,
+        dialog,
+        body_container,
+        base_width=660,
+        width_ratio=0.78,
+        min_width=420,
+        max_width=860,
     )
     render()
     page.show_dialog(dialog)

@@ -18,3 +18,7 @@ class UIRefs:
     bulk_bar: ft.Row
     file_picker: ft.FilePicker
     search_field: ft.TextField
+    first_btn: ft.IconButton | None = None
+    last_btn: ft.IconButton | None = None
+    page_size_dropdown: ft.Dropdown | None = None
+    running_filter_btn: ft.OutlinedButton | None = None

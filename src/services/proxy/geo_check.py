@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ...core.strings import get_string
-from ...utils.proxy_parser import parse_proxy
+from ...utils.proxy_parser import require_proxy
 
 # (connect, read) per request, and the overall budget for one check: the exit
 # IP lookup walks up to six services and must not hold a UI or API call for a minute.
@@ -74,7 +74,7 @@ _REMOTE_DNS_SCHEMES = {"socks5": "socks5h", "socks4": "socks4a"}
 
 def requests_proxy_url(proxy: str | None) -> str | None:
     """The profile's proxy as a requests URL whose DNS lookups go through the proxy."""
-    cfg = parse_proxy(proxy or "")
+    cfg = require_proxy(proxy)
     if not cfg:
         return None
     from camoufox.ip import Proxy

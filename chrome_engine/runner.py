@@ -100,6 +100,21 @@ async def run_browser(
             return 1
     if extra.get("webrtc_mode") == "disable":
         engine_kwargs["block_webrtc"] = True
+    try:
+        from src.services.browser.extensions import ExtensionService
+
+        raw_ext_ids = extra.get("extension_ids")
+        ext_paths, pinned_ids, unpinned_ids = ExtensionService().resolve_for_profile(
+            [str(x) for x in raw_ext_ids if x] if isinstance(raw_ext_ids, list) else None
+        )
+        if ext_paths:
+            engine_kwargs["extensions"] = ext_paths
+        if pinned_ids:
+            engine_kwargs["pinned_extension_ids"] = pinned_ids
+        if unpinned_ids:
+            engine_kwargs["unpinned_extension_ids"] = unpinned_ids
+    except Exception:
+        pass
     engine = ChromeEngine(
         profile_dir,
         platform=os_type,

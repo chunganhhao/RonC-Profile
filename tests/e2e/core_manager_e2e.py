@@ -188,7 +188,10 @@ def main(hold=False):
                         dialog.locator(".modal-foot").get_by_role(
                             "button", name="Close", exact=True
                         ).click()
+                        page.locator("#prefs-btn").click()
+                        page.locator("#lang-select-btn").click()
                         page.locator('[data-lang="vi"]').click()
+                        page.locator("#prefs-btn").click()
                         page.locator("#cores-btn").click()
                         expect(page.get_by_role("dialog").get_by_role("heading")).to_have_text(
                             "Quản lý core"

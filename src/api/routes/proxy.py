@@ -59,9 +59,7 @@ def list_proxy_pool(
     pm: IProfileManager = Depends(get_profile_manager),
 ) -> dict:
     usage = pool.usage_counts(pm)
-    items = [
-        {**e.to_dict(), "assigned_profiles": usage.get(e.id, 0)} for e in pool.list_entries()
-    ]
+    items = [{**e.to_dict(), "assigned_profiles": usage.get(e.id, 0)} for e in pool.list_entries()]
     return {"proxies": items, "total": len(items)}
 
 

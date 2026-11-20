@@ -1,0 +1,79 @@
+name: Experimental Chromium 148 core (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: "Inspect runner only (no Chromium download), or request checkpointed experimental build"
+        type: choice
+        default: inspect
+        options: [inspect, build]
+      resume_run_id:
+        description: "Optional previous run ID; requires resume_artifact on this branch"
+        type: string
+        default: ""
+      resume_artifact:
+        description: "Optional full native-checkpoint artifact name from that run"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-chromium-148
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: ${{ !github.event.repository.private }}
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Measure default GitHub-hosted runner (no installs or core downloads)
+        run: python3 native/chromium-148/prepare.py --inspect "$GITHUB_WORKSPACE" | tee runner-capacity.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-runner-capacity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: runner-capacity.json
+          retention-days: 7
+  build:
+    if: ${{ inputs.phase == 'build' }}
+    needs: inspect
+    uses: ./.github/workflows/native-chromium-chunk.yml
+    with:
+      chunk: 1
+      source_run: ${{ inputs.resume_run_id }}
+      checkpoint_name: ${{ inputs.resume_artifact }}
+  resume_2:
+    needs: build
+    if: ${{ needs.build.result == 'success' && needs.build.outputs.state == 'partial' }}
+    uses: ./.github/workflows/native-chromium-chunk.yml
+    with:
+      chunk: 2
+      source_run: ${{ github.run_id }}
+      checkpoint_name: native-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}-1
+  resume_3:
+    needs: resume_2
+    if: ${{ needs.resume_2.result == 'success' && needs.resume_2.outputs.state == 'partial' }}
+    uses: ./.github/workflows/native-chromium-chunk.yml
+    with:
+      chunk: 3
+      source_run: ${{ github.run_id }}
+      checkpoint_name: native-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}-2
+  resume_4:
+    needs: resume_3
+    if: ${{ needs.resume_3.result == 'success' && needs.resume_3.outputs.state == 'partial' }}
+    uses: ./.github/workflows/native-chromium-chunk.yml
+    with:
+      chunk: 4
+      source_run: ${{ github.run_id }}
+      checkpoint_name: native-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}-3
+      last_chunk: true

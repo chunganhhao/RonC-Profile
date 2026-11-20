@@ -9,7 +9,14 @@ import flet as ft
 
 from ...core.strings import get_string
 from ..theme.colors import COLORS, FONT_BOLD, FONT_DATA, FONT_SEMIBOLD
-from ..theme.styles import ACCENT_STYLE, DLG_FIELD_KWARGS, DANGER_ICON_STYLE, ICON_STYLE, OUTLINE_STYLE
+from ..theme.styles import (
+    ACCENT_STYLE,
+    DANGER_ICON_STYLE,
+    DLG_FIELD_KWARGS,
+    ICON_STYLE,
+    OUTLINE_STYLE,
+)
+from .responsive import bind_responsive_dialog
 
 if TYPE_CHECKING:
     from ...interfaces.protocols import IBrowserLauncher, IProfileManager
@@ -273,6 +280,138 @@ def open_warming_dialog(
 
     _rebuild_tasks(notify=False)
 
+    body_container = ft.Container(
+        width=860,
+        height=550,
+        content=ft.Column(
+            spacing=8,
+            expand=True,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            controls=[
+                ft.Row(
+                    spacing=10,
+                    controls=[
+                        ft.Container(
+                            expand=2,
+                            content=ft.Column(
+                                spacing=4,
+                                tight=True,
+                                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                                controls=[
+                                    ft.Text(
+                                        get_string("warming_task_name_label"),
+                                        size=12,
+                                        font_family=FONT_SEMIBOLD,
+                                        color=COLORS["text_sub"],
+                                    ),
+                                    task_name_field,
+                                ],
+                            ),
+                        ),
+                        ft.Container(
+                            expand=3,
+                            content=ft.Column(
+                                spacing=4,
+                                tight=True,
+                                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                                controls=[
+                                    ft.Text(
+                                        get_string("warming_preset_label"),
+                                        size=12,
+                                        font_family=FONT_SEMIBOLD,
+                                        color=COLORS["text_sub"],
+                                    ),
+                                    preset_dropdown,
+                                ],
+                            ),
+                        ),
+                    ],
+                ),
+                ft.Text(
+                    get_string("warming_custom_urls_label"),
+                    size=12,
+                    font_family=FONT_SEMIBOLD,
+                    color=COLORS["text_sub"],
+                ),
+                custom_urls_field,
+                ft.Row(
+                    spacing=10,
+                    run_spacing=8,
+                    wrap=True,
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    vertical_alignment=ft.CrossAxisAlignment.END,
+                    controls=[
+                        ft.Row(
+                            spacing=10,
+                            run_spacing=8,
+                            wrap=True,
+                            vertical_alignment=ft.CrossAxisAlignment.END,
+                            controls=[
+                                ft.Column(
+                                    spacing=4,
+                                    tight=True,
+                                    controls=[
+                                        ft.Text(
+                                            get_string("warming_duration_label"),
+                                            size=12,
+                                            font_family=FONT_SEMIBOLD,
+                                            color=COLORS["text_sub"],
+                                        ),
+                                        duration_field,
+                                    ],
+                                ),
+                                ft.Column(
+                                    spacing=4,
+                                    tight=True,
+                                    controls=[
+                                        ft.Text(
+                                            get_string("warming_schedule_label"),
+                                            size=12,
+                                            font_family=FONT_SEMIBOLD,
+                                            color=COLORS["text_sub"],
+                                        ),
+                                        schedule_field,
+                                    ],
+                                ),
+                                repeat_checkbox,
+                            ],
+                        ),
+                        ft.Row(
+                            spacing=8,
+                            run_spacing=8,
+                            wrap=True,
+                            controls=[
+                                ft.OutlinedButton(
+                                    get_string("warming_save_schedule_btn"),
+                                    icon=ft.Icons.SCHEDULE,
+                                    height=38,
+                                    style=OUTLINE_STYLE,
+                                    on_click=lambda _: _create_from_inputs(run_immediately=False),
+                                ),
+                                ft.Button(
+                                    get_string("warming_run_now_btn"),
+                                    icon=ft.Icons.PLAY_ARROW_ROUNDED,
+                                    height=38,
+                                    style=ACCENT_STYLE,
+                                    on_click=lambda _: _create_from_inputs(run_immediately=True),
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                feedback_text,
+                ft.Divider(height=8, color=COLORS["card_border"]),
+                ft.Text(
+                    get_string("warming_saved_tasks_title"),
+                    size=13,
+                    font_family=FONT_BOLD,
+                    color=COLORS["text_main"],
+                ),
+                tasks_col,
+            ],
+        ),
+    )
+
     dlg = ft.AlertDialog(
         modal=True,
         bgcolor=COLORS["card_bg"],
@@ -297,117 +436,7 @@ def open_warming_dialog(
                 ),
             ],
         ),
-        content=ft.Container(
-            width=820,
-            height=540,
-            content=ft.Column(
-                spacing=8,
-                expand=True,
-                controls=[
-                    ft.Row(
-                        spacing=10,
-                        controls=[
-                            ft.Container(
-                                expand=2,
-                                content=ft.Column(
-                                    spacing=4,
-                                    tight=True,
-                                    controls=[
-                                        ft.Text(
-                                            get_string("warming_task_name_label"),
-                                            size=12,
-                                            font_family=FONT_SEMIBOLD,
-                                            color=COLORS["text_sub"],
-                                        ),
-                                        task_name_field,
-                                    ],
-                                ),
-                            ),
-                            ft.Container(
-                                expand=3,
-                                content=ft.Column(
-                                    spacing=4,
-                                    tight=True,
-                                    controls=[
-                                        ft.Text(
-                                            get_string("warming_preset_label"),
-                                            size=12,
-                                            font_family=FONT_SEMIBOLD,
-                                            color=COLORS["text_sub"],
-                                        ),
-                                        preset_dropdown,
-                                    ],
-                                ),
-                            ),
-                        ],
-                    ),
-                    ft.Text(
-                        get_string("warming_custom_urls_label"),
-                        size=12,
-                        font_family=FONT_SEMIBOLD,
-                        color=COLORS["text_sub"],
-                    ),
-                    custom_urls_field,
-                    ft.Row(
-                        spacing=10,
-                        vertical_alignment=ft.CrossAxisAlignment.END,
-                        controls=[
-                            ft.Column(
-                                spacing=4,
-                                tight=True,
-                                controls=[
-                                    ft.Text(
-                                        get_string("warming_duration_label"),
-                                        size=12,
-                                        font_family=FONT_SEMIBOLD,
-                                        color=COLORS["text_sub"],
-                                    ),
-                                    duration_field,
-                                ],
-                            ),
-                            ft.Column(
-                                spacing=4,
-                                tight=True,
-                                controls=[
-                                    ft.Text(
-                                        get_string("warming_schedule_label"),
-                                        size=12,
-                                        font_family=FONT_SEMIBOLD,
-                                        color=COLORS["text_sub"],
-                                    ),
-                                    schedule_field,
-                                ],
-                            ),
-                            repeat_checkbox,
-                            ft.Container(expand=True),
-                            ft.OutlinedButton(
-                                get_string("warming_save_schedule_btn"),
-                                icon=ft.Icons.SCHEDULE,
-                                height=38,
-                                style=OUTLINE_STYLE,
-                                on_click=lambda _: _create_from_inputs(run_immediately=False),
-                            ),
-                            ft.Button(
-                                get_string("warming_run_now_btn"),
-                                icon=ft.Icons.PLAY_ARROW_ROUNDED,
-                                height=38,
-                                style=ACCENT_STYLE,
-                                on_click=lambda _: _create_from_inputs(run_immediately=True),
-                            ),
-                        ],
-                    ),
-                    feedback_text,
-                    ft.Divider(height=8, color=COLORS["card_border"]),
-                    ft.Text(
-                        get_string("warming_saved_tasks_title"),
-                        size=13,
-                        font_family=FONT_BOLD,
-                        color=COLORS["text_main"],
-                    ),
-                    tasks_col,
-                ],
-            ),
-        ),
+        content=body_container,
         actions=[
             ft.TextButton(
                 get_string("close_btn"),
@@ -415,5 +444,18 @@ def open_warming_dialog(
                 on_click=lambda _: page.pop_dialog(),
             ),
         ],
+    )
+    bind_responsive_dialog(
+        page,
+        dlg,
+        body_container,
+        base_width=860,
+        base_height=550,
+        width_ratio=0.86,
+        height_ratio=0.82,
+        min_width=480,
+        max_width=1060,
+        min_height=380,
+        max_height=800,
     )
     page.show_dialog(dlg)

@@ -4,12 +4,18 @@ import os
 import pathlib
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import PlainTextResponse
 
 from ...core.config import DATA_DIR
 from ...core.logging import get_logger
-from ...models.profile import CANVAS_MODES, ENGINES, WEBRTC_MODES, normalize_tags
+from ...models.profile import (
+    CANVAS_MODES,
+    ENGINES,
+    WEBRTC_MODES,
+    normalize_backup_codes,
+    normalize_tags,
+)
 from ...services.browser import chrome_prefetch, cookies, fingerprint
 from ...services.browser.launcher import ProfileBusyError
 from ...services.proxy.geo_check import check_geo
@@ -25,6 +31,7 @@ from ..dependencies import get_browser_launcher, get_event_bus, get_profile_mana
 from ..helpers import build_profile_response, profile_response, require_profile
 from ..schemas.common import ErrorResponse, SuccessResponse
 from ..schemas.profiles import (
+    BackupCodesResponse,
     CookieImportRequest,
     CookieImportResponse,
     DataDirResponse,
@@ -77,6 +84,14 @@ def _require_tags(tags: list[str] | None) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _require_backup_codes(backup_codes: str | None) -> None:
+    if backup_codes is not None:
+        try:
+            normalize_backup_codes(backup_codes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _require_geo(timezone: str | None, locale: str | None) -> None:
     for validate, value in ((validate_timezone, timezone), (validate_locale, locale)):
         valid, msg = validate(value or "")
@@ -112,6 +127,7 @@ def create_profile(
     _require_engine(body.engine)
     _require_geo(body.timezone, body.locale)
     _require_tags(body.tags)
+    _require_backup_codes(body.backup_codes)
 
     if body.proxy:
         valid, msg = validate_proxy_format(body.proxy)
@@ -138,24 +154,32 @@ def create_profile(
             status_code=400, detail=f"canvas_mode must be one of: {', '.join(CANVAS_MODES)}"
         )
 
-    if not pm.add_profile(
-        body.name,
-        body.proxy or "",
-        body.os_type,
-        body.timezone or None,
-        body.locale or None,
-        body.engine,
-        group=body.group,
-        tags=body.tags,
-        display_order=body.display_order,
-        account_uid=body.account_uid,
-        account_password=body.account_password,
-        two_fa_secret=body.two_fa_secret,
-        notes=body.notes,
-        start_url=body.start_url,
-        webrtc_mode=body.webrtc_mode,
-        canvas_mode=body.canvas_mode,
-    ):
+    try:
+        created = pm.add_profile(
+            body.name,
+            body.proxy or "",
+            body.os_type,
+            body.timezone or None,
+            body.locale or None,
+            body.engine,
+            group=body.group,
+            tags=body.tags,
+            extension_ids=body.extension_ids,
+            display_order=body.display_order,
+            account_uid=body.account_uid,
+            account_password=body.account_password,
+            two_fa_secret=body.two_fa_secret,
+            recovery_email=body.recovery_email,
+            backup_codes=body.backup_codes,
+            notes=body.notes,
+            start_url=body.start_url,
+            webrtc_mode=body.webrtc_mode,
+            canvas_mode=body.canvas_mode,
+            initial_fingerprint=body.initial_fingerprint,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not created:
         raise HTTPException(status_code=409, detail="Profile already exists")
 
     logger.info("API created profile: %s", body.name)
@@ -179,6 +203,26 @@ def get_profile(
     return build_profile_response(name, pm, bl)
 
 
+@router.get(
+    "/{name}/backup-codes",
+    response_model=BackupCodesResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+def get_backup_codes(
+    name: str,
+    response: Response,
+    pm: IProfileManager = Depends(get_profile_manager),
+) -> BackupCodesResponse:
+    """Explicit on-demand read of a profile's saved 2FA backup codes."""
+    profile = require_profile(name, pm)
+    response.headers["Cache-Control"] = "no-store"
+    return BackupCodesResponse(
+        name=profile.name,
+        has_backup_codes=bool(profile.backup_codes),
+        backup_codes=profile.backup_codes,
+    )
+
+
 @router.patch(
     "/{name}",
     response_model=ProfileResponse,
@@ -194,6 +238,7 @@ def update_profile(
     profile = require_profile(name, pm)
     supplied = body.model_dump(exclude_unset=True)
     _require_tags(body.tags)
+    _require_backup_codes(body.backup_codes)
 
     new_name = supplied.get("name", name)
     new_proxy = supplied.get("proxy", profile.proxy)
@@ -248,26 +293,34 @@ def update_profile(
         for k in (
             "group",
             "tags",
+            "extension_ids",
             "display_order",
             "account_uid",
             "account_password",
             "two_fa_secret",
+            "recovery_email",
+            "backup_codes",
             "notes",
             "start_url",
             "webrtc_mode",
             "canvas_mode",
+            "initial_fingerprint",
         )
         if k in supplied
     }
-    if not pm.update_profile(
-        name,
-        new_name,
-        new_proxy or "",
-        new_os,
-        new_timezone or None,
-        new_locale or None,
-        **extra_update,
-    ):
+    try:
+        updated = pm.update_profile(
+            name,
+            new_name,
+            new_proxy or "",
+            new_os,
+            new_timezone or None,
+            new_locale or None,
+            **extra_update,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not updated:
         raise HTTPException(status_code=409, detail="Update failed (name conflict?)")
 
     logger.info("API updated profile: %s -> %s", name, new_name)

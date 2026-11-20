@@ -49,7 +49,7 @@ def clean_totp_secret(raw: str | None) -> str:
 
 def generate_totp(
     secret: str | None,
-     period: int = 30,
+    period: int = 30,
     digits: int = 6,
     now: float | None = None,
 ) -> tuple[str, int] | None:
@@ -75,9 +75,42 @@ def generate_totp(
     return code, remaining
 
 
+def _split_space_account_tokens(line: str) -> list[str]:
+    """Split a space/tab-delimited account line 'uid pass [2fa] [note...]' into logical slots."""
+    if "\t" in line:
+        tab_parts = [p.strip() for p in line.strip().split("\t") if p.strip()]
+        if len(tab_parts) >= 2:
+            return tab_parts
+    tokens = line.strip().split()
+    if len(tokens) <= 2:
+        return tokens
+    uid, password = tokens[0], tokens[1]
+    rest = tokens[2:]
+    first_cand = rest[0]
+    if first_cand.lower().startswith("otpauth:") or len(clean_totp_secret(first_cand)) >= 16:
+        note = " ".join(rest[1:]).strip()
+        return [uid, password, first_cand, note] if note else [uid, password, first_cand]
+    # Check 4-character Base32 groups (e.g. "JBSW Y3DP EHPK 3PXP")
+    grp: list[str] = []
+    for tok in rest:
+        if re.fullmatch(r"[A-Za-z2-7]{4}", tok):
+            grp.append(tok)
+        else:
+            break
+    if len(grp) >= 4 and len(clean_totp_secret("".join(grp))) >= 16:
+        secret_part = " ".join(grp)
+        note = " ".join(rest[len(grp) :]).strip()
+        return [uid, password, secret_part, note] if note else [uid, password, secret_part]
+    return [uid, password, " ".join(rest)]
+
+
 def parse_account_line(line: str) -> dict[str, str]:
-    """Parse common MMO account format 'uid|password|2fa_secret|note_or_recovery'."""
-    parts = [p.strip() for p in line.strip().split("|")]
+    """Parse common MMO account format 'uid|password|2fa_secret|note' or space-separated 'uid password 2fa_secret note'."""
+    stripped = line.strip()
+    if "|" in stripped:
+        parts = [p.strip() for p in stripped.split("|")]
+    else:
+        parts = _split_space_account_tokens(stripped)
     result = {
         "account_uid": "",
         "account_password": "",

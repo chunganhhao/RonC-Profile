@@ -5,12 +5,11 @@
   <p>Per-profile device fingerprint, cookies and proxy · Two engines: Camoufox (Firefox) and Chrome · English and Vietnamese UI · REST API and MCP for automation</p>
 
   <p>
-    <a href="https://github.com/chienbm98/foxprofile/actions/workflows/ci.yml"><img src="https://github.com/chienbm98/foxprofile/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-    <a href="https://github.com/chienbm98/foxprofile/releases/latest"><img src="https://img.shields.io/github/v/release/chienbm98/foxprofile" alt="Release" /></a>
+    <a href="https://github.com/chunganhhao/RonC-Profile/actions/workflows/ci.yml"><img src="https://github.com/chunganhhao/RonC-Profile/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+    <a href="https://github.com/chunganhhao/RonC-Profile/releases/latest"><img src="https://img.shields.io/github/v/release/chunganhhao/RonC-Profile" alt="Release" /></a>
     <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+" />
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Windows | macOS | Linux" />
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/chienbm98/foxprofile" alt="MIT License" /></a>
-    <a href="https://buymeacoffee.com/chienbm98"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/chunganhhao/RonC-Profile" alt="MIT License" /></a>
   </p>
 
   <p>English · <a href="README.vi.md">Tiếng Việt</a></p>
@@ -23,21 +22,14 @@
   </p>
 </div>
 
-RonC Profile is a local rebrand of [FoxProfile by chienbm98](https://github.com/chienbm98/foxprofile). Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
+RonC Profile is a local rebrand of FoxProfile by chienbm98. Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
 
 ![RonC Profile](docs/images/en/main.png)
 
 RonC Profile manages anti-detect browser profiles: each profile is a separate identity with its own device fingerprint, cookies, proxy, timezone and locale. The default browser is [Camoufox](https://github.com/daijro/camoufox), a Firefox build that spoofs fingerprints at the engine level; a Chrome engine based on [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) is also available. It is a self-hosted alternative, on your machine or a VPS, to paid anti-detect browsers such as GoLogin, GPM or MoreLogin.
 
-## Support
-
-RonC Profile is free and open source, built in my spare time, and will stay that way. If it saves you time or money, you can buy me a coffee; it goes toward bug fixes, keeping up with upstream browser releases and faster replies on issues.
-
-<a href="https://buymeacoffee.com/chienbm98"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" /></a>
-
 ## Contents
 
-- [Support](#support)
 - [Features](#features)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
@@ -80,8 +72,8 @@ RonC Profile is free and open source, built in my spare time, and will stay that
 ## Quick start
 
 ```bash
-git clone https://github.com/chienbm98/foxprofile.git
-cd foxprofile
+git clone https://github.com/chunganhhao/RonC-Profile.git
+cd RonC-Profile
 
 python -m venv .venv
 .venv\Scripts\activate          # Windows
@@ -175,6 +167,10 @@ Then just ask, e.g. *"Open profile tiktok-us-02, go to tiktok.com and send me a 
 There is deliberately **no** delete tool, so an agent cannot wipe an account's cookies by mistake. Only `http`, `https` and `about:blank` can be opened; `file://` and `about:config` are blocked.
 
 ## Chrome engine
+
+Safety limits: cross-OS personas are refused by default because native worker WebGPU can expose the host GPU. The explicit Python `allow_unsupported` option is for diagnostics, not protection. Same-OS use is not an anonymity guarantee: the pinned native core still has known canvas-noise and worker-CSP defects pending a verified rebuilt core. Do not use it for sensitive accounts based only on passing unit tests.
+
+New Chrome profiles initialize Google search through Chromium's own settings editor. Existing search choices are not overwritten; use `chrome://settings/searchEngines` to change an existing profile manually. No search suggestions provider is enabled by this initialization.
 
 Besides Camoufox (Firefox), a profile can run on the **Chrome** engine: a Chromium build with fingerprint spoofing patched in C++ ([fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium), BSD-3 license). Pick it in **Engine** when creating a profile; it cannot be changed afterwards. The browser build (~140-190 MB depending on the OS, fetched from fingerprint-chromium's GitHub releases and verified by SHA-256) is downloaded in the background as soon as the first Chrome profile is created, or on launch if it is still missing; progress shows in the log. To fetch it ahead of time: `python -m chrome_engine fetch`.
 
@@ -299,7 +295,7 @@ Project layout, code conventions and the PR process are in [CONTRIBUTING.md](CON
 
 Contributions of all kinds are welcome: bug reports, feature ideas, docs, translations and code.
 
-- Bugs and ideas: open an [issue](https://github.com/chienbm98/foxprofile/issues/new/choose) from a template.
+- Bugs and ideas: open an [issue](https://github.com/chunganhhao/RonC-Profile/issues/new/choose) from a template.
 - Code: read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - Security issues: **do not** open a public issue, see [SECURITY.md](SECURITY.md).
 - Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).

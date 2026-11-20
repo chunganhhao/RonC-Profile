@@ -1,0 +1,1203 @@
+diff --git a/components/ungoogled/fingerprint_display.h b/components/ungoogled/fingerprint_display.h
+new file mode 100644
+--- /dev/null
++++ b/components/ungoogled/fingerprint_display.h
+@@ -0,0 +1,162 @@
++// Copyright 2026 The RonC Profile Authors
++// Use of this source code is governed by a BSD-style license in LICENSE.
++#ifndef COMPONENTS_UNGOOGLED_FINGERPRINT_DISPLAY_H_
++#define COMPONENTS_UNGOOGLED_FINGERPRINT_DISPLAY_H_
++
++#include <cmath>
++#include <cstddef>
++#include <mutex>
++#include <string>
++#include <string_view>
++#include <type_traits>
++
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
++#include "components/ungoogled/ungoogled_switches.h"
++
++namespace ungoogled::fingerprint {
++
++struct DisplayProfile {
++  bool has_screen = false;
++  int width = 0;
++  int height = 0;
++  int avail_left = 0;
++  int avail_top = 0;
++  int avail_width = 0;
++  int avail_height = 0;
++  double dpr = 0.0;
++  int color_depth = 0;    // 24 or 30 when explicitly set
++  int gamut = 0;          // 0=unset, 1=srgb, 2=p3
++  bool has_internal = false;
++  bool is_internal = false;
++  int color_scheme = 0;   // 0=unset, 1=light, 2=dark
++  bool has_display_profile = false;
++};
++
++static_assert(std::is_trivially_destructible_v<DisplayProfile>,
++              "DisplayProfile must stay trivially destructible");
++
++inline DisplayProfile ParseDisplayProfile() {
++  DisplayProfile profile;
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kDisableSpoofing)) {
++    const std::string disabled = base::ToLowerASCII(
++        command_line->GetSwitchValueASCII(switches::kDisableSpoofing));
++    if (disabled.find("screen") != std::string::npos ||
++        disabled.find("all") != std::string::npos) {
++      return profile;
++    }
++  }
++
++  int width = 0;
++  int height = 0;
++  if (command_line->HasSwitch(switches::kFingerprintScreenWidth) &&
++      command_line->HasSwitch(switches::kFingerprintScreenHeight) &&
++      base::StringToInt(
++          command_line->GetSwitchValueASCII(switches::kFingerprintScreenWidth),
++          &width) &&
++      base::StringToInt(
++          command_line->GetSwitchValueASCII(switches::kFingerprintScreenHeight),
++          &height) &&
++      width >= 320 && width <= 8192 && height >= 240 && height <= 8192) {
++    profile.has_screen = true;
++    profile.width = width;
++    profile.height = height;
++    profile.avail_width = width;
++    profile.avail_height = height;
++  }
++
++  double dpr = 0.0;
++  if (command_line->HasSwitch(switches::kFingerprintDeviceScaleFactor) &&
++      base::StringToDouble(
++          command_line->GetSwitchValueASCII(
++              switches::kFingerprintDeviceScaleFactor),
++          &dpr) &&
++      std::isfinite(dpr) && dpr >= 0.5 && dpr <= 4.0) {
++    profile.dpr = dpr;
++  }
++
++  if (command_line->HasSwitch(switches::kFingerprintDisplayProfile)) {
++    const std::string raw = command_line->GetSwitchValueASCII(
++        switches::kFingerprintDisplayProfile);
++    if (!raw.empty()) {
++      profile.has_display_profile = true;
++    }
++    for (std::string_view token : base::SplitStringPiece(
++             raw, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
++      const size_t eq = token.find('=');
++      if (eq == std::string_view::npos) {
++        continue;
++      }
++      const std::string key = base::ToLowerASCII(token.substr(0, eq));
++      const std::string val = base::ToLowerASCII(token.substr(eq + 1));
++      int iv = 0;
++      if (key == "avail_left" && base::StringToInt(val, &iv) && iv >= 0) {
++        profile.avail_left = iv;
++      } else if (key == "avail_top" && base::StringToInt(val, &iv) && iv >= 0) {
++        profile.avail_top = iv;
++      } else if (key == "avail_width" && base::StringToInt(val, &iv) &&
++                 iv >= 320) {
++        profile.avail_width = iv;
++      } else if (key == "avail_height" && base::StringToInt(val, &iv) &&
++                 iv >= 240) {
++        profile.avail_height = iv;
++      } else if (key == "color_depth" && base::StringToInt(val, &iv) &&
++                 (iv == 24 || iv == 30)) {
++        profile.color_depth = iv;
++      } else if (key == "gamut") {
++        if (val == "p3") {
++          profile.gamut = 2;
++        } else if (val == "srgb") {
++          profile.gamut = 1;
++        }
++      } else if (key == "internal") {
++        if (val == "1" || val == "true") {
++          profile.has_internal = true;
++          profile.is_internal = true;
++        } else if (val == "0" || val == "false") {
++          profile.has_internal = true;
++          profile.is_internal = false;
++        }
++      } else if (key == "scheme") {
++        if (val == "dark") {
++          profile.color_scheme = 2;
++        } else if (val == "light") {
++          profile.color_scheme = 1;
++        }
++      }
++    }
++  }
++
++  if (profile.has_screen) {
++    if (profile.avail_left >= profile.width) {
++      profile.avail_left = 0;
++    }
++    if (profile.avail_top >= profile.height) {
++      profile.avail_top = 0;
++    }
++    if (profile.avail_width > profile.width - profile.avail_left) {
++      profile.avail_width = profile.width - profile.avail_left;
++    }
++    if (profile.avail_height > profile.height - profile.avail_top) {
++      profile.avail_height = profile.height - profile.avail_top;
++    }
++  }
++  return profile;
++}
++
++inline const DisplayProfile& GetActiveDisplayProfile() {
++  // Use constinit std::once_flag so initialization stays thread-safe even under
++  // Chromium's -fno-threadsafe-statics without exit-time destructors.
++  static constinit std::once_flag kInitFlag;
++  static DisplayProfile kProfile;
++  std::call_once(kInitFlag, [] { kProfile = ParseDisplayProfile(); });
++  return kProfile;
++}
++
++}  // namespace ungoogled::fingerprint
++
++#endif  // COMPONENTS_UNGOOGLED_FINGERPRINT_DISPLAY_H_
+diff --git a/components/ungoogled/BUILD.gn b/components/ungoogled/BUILD.gn
+--- a/components/ungoogled/BUILD.gn
++++ b/components/ungoogled/BUILD.gn
+@@ -5,6 +5,7 @@
+ component("ungoogled_switches") {
+   sources = [
+     "fingerprint_data.h",
++    "fingerprint_display.h",
+     "fingerprint_gpu.h",
+     "webgl_config_data.h",
+     "ungoogled_switches.h",
+diff --git a/components/ungoogled/ungoogled_switches.h b/components/ungoogled/ungoogled_switches.h
+--- a/components/ungoogled/ungoogled_switches.h
++++ b/components/ungoogled/ungoogled_switches.h
+@@ -19,6 +19,7 @@
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintPlatformVersion[];
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintLocation[];
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintTimezone[];
++COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintDisplayProfile[];
+ }
+ 
+ #endif  // THIRD_PARTY_UNGOOGLED_FINGERPRINTING_SWITCHES_H_
+diff --git a/components/ungoogled/ungoogled_switches.cc b/components/ungoogled/ungoogled_switches.cc
+--- a/components/ungoogled/ungoogled_switches.cc
++++ b/components/ungoogled/ungoogled_switches.cc
+@@ -20,4 +20,7 @@
+ // Specify the timezone
+ const char kFingerprintTimezone[] = "timezone";
+ 
++// Specify coherent display profile attributes
++const char kFingerprintDisplayProfile[] = "fingerprint-display-profile";
++
+ }  // namespace switches
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -3787,6 +3787,7 @@
+       switches::kFingerprintPlatformVersion,
+       switches::kFingerprintLocation,
+       switches::kFingerprintTimezone,
++      switches::kFingerprintDisplayProfile,
+       switches::kForceDeviceScaleFactor,
+       switches::kForceDisplayColorProfile,
+       switches::kForceHighContrast,
+diff --git a/components/ungoogled/webgl_config_data.h b/components/ungoogled/webgl_config_data.h
+--- a/components/ungoogled/webgl_config_data.h
++++ b/components/ungoogled/webgl_config_data.h
+@@ -1983,6 +1983,186 @@
+     {0x8B30, 0x8DF5, 31, 30, 0},  // FRAGMENT_SHADER.HIGH_INT
+ };
+ 
++// ---- macOS config #2 str (Apple M1) ----
++inline constexpr WebGLStrParam kMac2_gl1_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++inline constexpr WebGLStrParam kMac2_gl2_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 2.0 (OpenGL ES 3.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++
++// ---- macOS config #3 str (Apple M3) ----
++inline constexpr WebGLStrParam kMac3_gl1_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++inline constexpr WebGLStrParam kMac3_gl2_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 2.0 (OpenGL ES 3.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++
++// ---- macOS config #4 str (Apple M1 Pro) ----
++inline constexpr WebGLStrParam kMac4_gl1_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++inline constexpr WebGLStrParam kMac4_gl2_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 2.0 (OpenGL ES 3.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++
++// ---- macOS config #5 str (Apple M2 Pro) ----
++inline constexpr WebGLStrParam kMac5_gl1_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++inline constexpr WebGLStrParam kMac5_gl2_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 2.0 (OpenGL ES 3.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++
++// ---- macOS config #6 str (Apple M3 Pro) ----
++inline constexpr WebGLStrParam kMac6_gl1_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++inline constexpr WebGLStrParam kMac6_gl2_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 2.0 (OpenGL ES 3.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++
++// ---- macOS config #7 str (Apple M4 Pro) ----
++inline constexpr WebGLStrParam kMac7_gl1_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++inline constexpr WebGLStrParam kMac7_gl2_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 2.0 (OpenGL ES 3.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++
++// ---- macOS config #8 str (Apple M1 Max) ----
++inline constexpr WebGLStrParam kMac8_gl1_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++inline constexpr WebGLStrParam kMac8_gl2_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 2.0 (OpenGL ES 3.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++
++// ---- macOS config #9 str (Apple M2 Max) ----
++inline constexpr WebGLStrParam kMac9_gl1_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Max, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++inline constexpr WebGLStrParam kMac9_gl2_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 2.0 (OpenGL ES 3.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Max, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++
++// ---- macOS config #10 str (Apple M3 Max) ----
++inline constexpr WebGLStrParam kMac10_gl1_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++inline constexpr WebGLStrParam kMac10_gl2_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 2.0 (OpenGL ES 3.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++
++// ---- macOS config #11 str (Apple M4 Max) ----
++inline constexpr WebGLStrParam kMac11_gl1_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Max, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++inline constexpr WebGLStrParam kMac11_gl2_str[] = {
++    {0x1F01, "WebKit WebGL"},  // RENDERER
++    {0x8B8C, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"},  // SHADING_LANGUAGE_VERSION
++    {0x1F00, "WebKit"},  // VENDOR
++    {0x1F02, "WebGL 2.0 (OpenGL ES 3.0 Chromium)"},  // VERSION
++    {0x9245, "Google Inc. (Apple)"},  // UNMASKED_VENDOR_WEBGL
++    {0x9246, "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Max, Unspecified Version)"},  // UNMASKED_RENDERER_WEBGL
++};
++
+ inline constexpr WebGLConfig kWindowsWebGLConfigs[] = {
+   // [0] ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)
+   {
+@@ -2076,6 +2256,72 @@
+     {kMac1_gl1_i32, kMac1_gl1_u32, {}, kMac1_gl1_f32, kMac1_gl1_farray, kMac1_gl1_iarray, kMac1_gl1_str, kMac1_gl1_prec, true},
+     {kMac1_gl2_i32, kMac1_gl2_u32, kMac1_gl2_i64, kMac1_gl2_f32, kMac1_gl2_farray, kMac1_gl2_iarray, kMac1_gl2_str, kMac1_gl2_prec, true},
+     "apple", "metal-3"
++  },
++  // [2] ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)
++  {
++    {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac2_gl1_str, kMac0_gl1_prec, true},
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac2_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
++  },
++  // [3] ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)
++  {
++    {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac3_gl1_str, kMac0_gl1_prec, true},
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac3_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
++  },
++  // [4] ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified Version)
++  {
++    {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac4_gl1_str, kMac0_gl1_prec, true},
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac4_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
++  },
++  // [5] ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)
++  {
++    {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac5_gl1_str, kMac0_gl1_prec, true},
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac5_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
++  },
++  // [6] ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)
++  {
++    {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac6_gl1_str, kMac0_gl1_prec, true},
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac6_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
++  },
++  // [7] ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)
++  {
++    {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac7_gl1_str, kMac0_gl1_prec, true},
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac7_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
++  },
++  // [8] ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)
++  {
++    {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac8_gl1_str, kMac0_gl1_prec, true},
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac8_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
++  },
++  // [9] ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Max, Unspecified Version)
++  {
++    {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac9_gl1_str, kMac0_gl1_prec, true},
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac9_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
++  },
++  // [10] ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)
++  {
++    {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac10_gl1_str, kMac0_gl1_prec, true},
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac10_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
++  },
++  // [11] ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Max, Unspecified Version)
++  {
++    {kMac0_gl1_i32, kMac0_gl1_u32, {}, kMac0_gl1_f32, kMac0_gl1_farray, kMac0_gl1_iarray, kMac11_gl1_str, kMac0_gl1_prec, true},
++    {kMac0_gl2_i32, kMac0_gl2_u32, kMac0_gl2_i64, kMac0_gl2_f32, kMac0_gl2_farray, kMac0_gl2_iarray, kMac11_gl2_str, kMac0_gl2_prec, true},
++    "apple", "metal-3"
++  },
++  // [12] ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)
++  {
++    {kMac1_gl1_i32, kMac1_gl1_u32, {}, kMac1_gl1_f32, kMac1_gl1_farray, kMac1_gl1_iarray, kMac1_gl1_str, kMac1_gl1_prec, true},
++    {kMac1_gl2_i32, kMac1_gl2_u32, kMac1_gl2_i64, kMac1_gl2_f32, kMac1_gl2_farray, kMac1_gl2_iarray, kMac1_gl2_str, kMac1_gl2_prec, true},
++    "apple", "metal-3"
+   }
+ };
+ 
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc b/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc
+--- a/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_fingerprint.cc
+@@ -29,8 +29,12 @@
+   return is_webgl2 ? config.gl2 : config.gl1;
+ }
+ 
+-// WEBGL_debug_renderer_info enums (webgl_debug_renderer_info.h). These are
+-// extension-gated upstream and handled at their case sites, not at the top.
++// Extension-gated enums are handled at their getParameter() case sites after
++// ExtensionEnabled() succeeds, so disabled extensions still raise INVALID_ENUM.
++constexpr unsigned kMaxTextureMaxAnisotropyExt = 0x84FF;
++constexpr unsigned kMaxDrawBuffersExt = 0x8824;
++constexpr unsigned kFragmentShaderDerivativeHintOes = 0x8B8B;
++constexpr unsigned kMaxColorAttachmentsExt = 0x8CDF;
+ constexpr unsigned kUnmaskedVendorWebgl = 0x9245;
+ constexpr unsigned kUnmaskedRendererWebgl = 0x9246;
+ 
+@@ -105,10 +109,11 @@
+                           unsigned pname,
+                           bool is_webgl2,
+                           ScriptValue* out) {
+-  // UNMASKED_* are extension-gated; let their case sites handle them via
+-  // TryGetWebGLUnmaskedParameter() so spoofing only happens once the
+-  // WEBGL_debug_renderer_info extension is enabled.
+-  if (pname == kUnmaskedVendorWebgl || pname == kUnmaskedRendererWebgl) {
++  if (pname == kUnmaskedVendorWebgl || pname == kUnmaskedRendererWebgl ||
++      pname == kMaxTextureMaxAnisotropyExt ||
++      (!is_webgl2 && (pname == kMaxDrawBuffersExt ||
++                      pname == kMaxColorAttachmentsExt ||
++                      pname == kFragmentShaderDerivativeHintOes))) {
+     return false;
+   }
+   return LookupWebGLParameter(script_state, pname, is_webgl2, out);
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -4015,9 +4015,15 @@
+     case GL_VIEWPORT:
+       return GetWebGLIntArrayParameter(script_state, pname);
+     case GL_FRAGMENT_SHADER_DERIVATIVE_HINT_OES:  // OES_standard_derivatives
+-      if (ExtensionEnabled(kOESStandardDerivativesName) || IsWebGL2())
++      if (ExtensionEnabled(kOESStandardDerivativesName) || IsWebGL2()) {
++        ScriptValue fingerprint_value;
++        if (TryGetWebGLUnmaskedParameter(script_state, pname, IsWebGL2(),
++                                         &fingerprint_value)) {
++          return fingerprint_value;
++        }
+         return GetUnsignedIntParameter(script_state,
+                                        GL_FRAGMENT_SHADER_DERIVATIVE_HINT_OES);
++      }
+       SynthesizeGLError(
+           GL_INVALID_ENUM, "getParameter",
+           "invalid parameter name, OES_standard_derivatives not enabled");
+@@ -4068,6 +4074,11 @@
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:  // EXT_texture_filter_anisotropic
+       if (ExtensionEnabled(kEXTTextureFilterAnisotropicName)) {
++        ScriptValue fingerprint_value;
++        if (TryGetWebGLUnmaskedParameter(script_state, pname, IsWebGL2(),
++                                         &fingerprint_value)) {
++          return fingerprint_value;
++        }
+         return GetFloatParameter(script_state,
+                                  GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+       }
+@@ -4119,15 +4130,27 @@
+           "invalid parameter name, WEBGL_blend_func_extended not enabled");
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case GL_MAX_COLOR_ATTACHMENTS_EXT:  // EXT_draw_buffers BEGIN
+-      if (ExtensionEnabled(kWebGLDrawBuffersName) || IsWebGL2())
++      if (ExtensionEnabled(kWebGLDrawBuffersName) || IsWebGL2()) {
++        ScriptValue fingerprint_value;
++        if (TryGetWebGLUnmaskedParameter(script_state, pname, IsWebGL2(),
++                                         &fingerprint_value)) {
++          return fingerprint_value;
++        }
+         return WebGLAny(script_state, MaxColorAttachments());
++      }
+       SynthesizeGLError(
+           GL_INVALID_ENUM, "getParameter",
+           "invalid parameter name, WEBGL_draw_buffers not enabled");
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case GL_MAX_DRAW_BUFFERS_EXT:
+-      if (ExtensionEnabled(kWebGLDrawBuffersName) || IsWebGL2())
++      if (ExtensionEnabled(kWebGLDrawBuffersName) || IsWebGL2()) {
++        ScriptValue fingerprint_value;
++        if (TryGetWebGLUnmaskedParameter(script_state, pname, IsWebGL2(),
++                                         &fingerprint_value)) {
++          return fingerprint_value;
++        }
+         return WebGLAny(script_state, MaxDrawBuffers());
++      }
+       SynthesizeGLError(
+           GL_INVALID_ENUM, "getParameter",
+           "invalid parameter name, WEBGL_draw_buffers not enabled");
+diff --git a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
+--- a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
++++ b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
+@@ -4,25 +4,61 @@
+ 
+ #include "third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h"
+ 
++#include <array>
++#include <string>
++
+ #include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
+ #include "base/system/sys_info.h"
++#include "build/build_config.h"
+ #include "components/ungoogled/ungoogled_switches.h"
+ 
+ namespace blink {
++
++namespace {
++
++// Matches kMacOSWebGLConfigs[0..12] chip core counts so unconfigured macOS
++// CLI runs never report non-Apple counts such as 18/22/26/30.
++constexpr std::array<unsigned, 13> kAppleSiliconFallbackCores = {
++    10, 8, 8, 8, 10, 12, 12, 14, 10, 12, 16, 16, 8};
++
++}  // namespace
+ 
+ unsigned NavigatorConcurrentHardware::hardwareConcurrency() const {
+   const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+ 
+   if (command_line->HasSwitch(switches::kFingerprintHardwareConcurrency)) {
+-    std::string value = command_line->GetSwitchValueASCII(switches::kFingerprintHardwareConcurrency);
+-    unsigned long custom_concurrency = std::stoul(value);
+-    return static_cast<unsigned>(custom_concurrency);
++    unsigned custom_concurrency = 0;
++    if (base::StringToUint(
++            command_line->GetSwitchValueASCII(
++                switches::kFingerprintHardwareConcurrency),
++            &custom_concurrency) &&
++        custom_concurrency >= 1 && custom_concurrency <= 64) {
++      return custom_concurrency;
++    }
+   }
+ 
+   if (command_line->HasSwitch(switches::kFingerprint)) {
+-    std::string fingerprint_str = command_line->GetSwitchValueASCII(switches::kFingerprint);
+-    uint32_t fingerprint = static_cast<uint32_t>(std::stoull(fingerprint_str));
+-    return static_cast<unsigned>(((fingerprint % 13) + 4) * 2);
++    uint64_t fingerprint = 0;
++    if (base::StringToUint64(
++            command_line->GetSwitchValueASCII(switches::kFingerprint),
++            &fingerprint)) {
++#if BUILDFLAG(IS_MAC)
++      std::string platform = "macos";
++#else
++      std::string platform = "windows";
++#endif
++      if (command_line->HasSwitch(switches::kFingerprintPlatform)) {
++        platform = base::ToLowerASCII(
++            command_line->GetSwitchValueASCII(switches::kFingerprintPlatform));
++      }
++      if (platform == "macos") {
++        return kAppleSiliconFallbackCores[static_cast<size_t>(
++            fingerprint % kAppleSiliconFallbackCores.size())];
++      }
++      return static_cast<unsigned>(((fingerprint % 13) + 4) * 2);
++    }
+   }
+ 
+   return static_cast<unsigned>(base::SysInfo::NumberOfProcessors());
+diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
+--- a/third_party/blink/renderer/core/BUILD.gn
++++ b/third_party/blink/renderer/core/BUILD.gn
+@@ -408,6 +408,7 @@
+     "//base",
+     "//components/attribution_reporting",
+     "//components/attribution_reporting:mojom_blink",
++    "//components/ungoogled:ungoogled_switches",
+     "//components/paint_preview/common",
+     "//components/performance_manager/public/mojom:mojom_blink",
+     "//components/shared_highlighting/core/common",
+diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
+--- a/third_party/blink/renderer/core/frame/screen.cc
++++ b/third_party/blink/renderer/core/frame/screen.cc
+@@ -29,6 +29,7 @@
+ #include "third_party/blink/renderer/core/frame/screen.h"
+ 
+ #include "base/numerics/safe_conversions.h"
++#include "components/ungoogled/fingerprint_display.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+ #include "third_party/blink/renderer/core/event_target_names.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+@@ -100,5 +101,9 @@
+   if (!DomWindow()) {
+     return unknown_color_depth;
++  }
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.color_depth > 0) {
++    return static_cast<unsigned>(dp.color_depth);
+   }
+   return GetScreenInfo().depth == 0
+              ? unknown_color_depth
+@@ -155,5 +160,9 @@
+   if (!context->IsFeatureEnabled(
+           network::mojom::PermissionsPolicyFeature::kWindowManagement)) {
++    return false;
++  }
++
++  if (ungoogled::fingerprint::GetActiveDisplayProfile().has_screen) {
+     return false;
+   }
+ 
+@@ -165,6 +174,20 @@
+     return gfx::Rect();
+   LocalFrame* frame = DomWindow()->GetFrame();
+   const display::ScreenInfo& screen_info = GetScreenInfo();
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.has_screen) {
++    gfx::Rect rect = available
++                         ? gfx::Rect(dp.avail_left, dp.avail_top,
++                                     dp.avail_width, dp.avail_height)
++                         : gfx::Rect(0, 0, dp.width, dp.height);
++    if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
++      const float dpr = dp.dpr > 0.0
++                            ? static_cast<float>(dp.dpr)
++                            : screen_info.device_scale_factor;
++      return gfx::ScaleToRoundedRect(rect, dpr);
++    }
++    return rect;
++  }
+   gfx::Rect rect = available ? screen_info.available_rect : screen_info.rect;
+   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk())
+     return gfx::ScaleToRoundedRect(rect, screen_info.device_scale_factor);
+diff --git a/third_party/blink/renderer/modules/screen_details/BUILD.gn b/third_party/blink/renderer/modules/screen_details/BUILD.gn
+--- a/third_party/blink/renderer/modules/screen_details/BUILD.gn
++++ b/third_party/blink/renderer/modules/screen_details/BUILD.gn
+@@ -19,5 +19,8 @@
+     "//ui/display/mojom:mojom_blink",
+   ]
+ 
+-  deps = [ "//third_party/blink/renderer/modules/permissions" ]
++  deps = [
++    "//components/ungoogled:ungoogled_switches",
++    "//third_party/blink/renderer/modules/permissions",
++  ]
+ }
+diff --git a/third_party/blink/renderer/modules/screen_details/screen_detailed.cc b/third_party/blink/renderer/modules/screen_details/screen_detailed.cc
+--- a/third_party/blink/renderer/modules/screen_details/screen_detailed.cc
++++ b/third_party/blink/renderer/modules/screen_details/screen_detailed.cc
+@@ -7,6 +7,7 @@
+ #include <cmath>
+ 
+ #include "base/numerics/safe_conversions.h"
++#include "components/ungoogled/fingerprint_display.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/frame/settings.h"
+@@ -116,24 +117,39 @@
+ bool ScreenDetailed::isPrimary() const {
+   if (!DomWindow())
+     return false;
++  if (ungoogled::fingerprint::GetActiveDisplayProfile().has_screen) {
++    return true;
++  }
+   return GetScreenInfo().is_primary;
+ }
+ 
+ bool ScreenDetailed::isInternal() const {
+   if (!DomWindow())
+     return false;
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.has_internal) {
++    return dp.is_internal;
++  }
+   return GetScreenInfo().is_internal;
+ }
+ 
+ float ScreenDetailed::devicePixelRatio() const {
+   if (!DomWindow())
+     return 0.f;
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.dpr > 0.0) {
++    return static_cast<float>(dp.dpr);
++  }
+   return GetScreenInfo().device_scale_factor;
+ }
+ 
+ String ScreenDetailed::label() const {
+   if (!DomWindow())
+     return String();
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.has_screen) {
++    return dp.is_internal ? String("Built-in Retina Display") : String();
++  }
+   return String::FromUtf8(GetScreenInfo().label);
+ }
+ 
+diff --git a/third_party/blink/renderer/modules/screen_details/screen_details.cc b/third_party/blink/renderer/modules/screen_details/screen_details.cc
+--- a/third_party/blink/renderer/modules/screen_details/screen_details.cc
++++ b/third_party/blink/renderer/modules/screen_details/screen_details.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ 
++#include "components/ungoogled/fingerprint_display.h"
+ #include "third_party/blink/renderer/core/dom/events/event.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+@@ -64,8 +65,19 @@
+   UpdateScreenInfosImpl(window, new_infos, /*dispatch_events=*/true);
+ }
+ 
+-void ScreenDetails::UpdateScreenInfosImpl(LocalDOMWindow* window,
+-                                          const display::ScreenInfos& new_infos,
+-                                          bool dispatch_events) {
++void ScreenDetails::UpdateScreenInfosImpl(
++    LocalDOMWindow* window,
++    const display::ScreenInfos& raw_infos,
++    bool dispatch_events) {
++  display::ScreenInfos single_screen_infos;
++  const display::ScreenInfos* effective_infos = &raw_infos;
++  if (ungoogled::fingerprint::GetActiveDisplayProfile().has_screen &&
++      !raw_infos.screen_infos.empty()) {
++    single_screen_infos.screen_infos.push_back(raw_infos.current());
++    single_screen_infos.current_display_id =
++        single_screen_infos.screen_infos[0].display_id;
++    effective_infos = &single_screen_infos;
++  }
++  const display::ScreenInfos& new_infos = *effective_infos;
+   // Expect that all updates contain a non-zero set of screens.
+   DCHECK(!new_infos.screen_infos.empty());
+diff --git a/third_party/blink/renderer/core/frame/local_dom_window.cc b/third_party/blink/renderer/core/frame/local_dom_window.cc
+--- a/third_party/blink/renderer/core/frame/local_dom_window.cc
++++ b/third_party/blink/renderer/core/frame/local_dom_window.cc
+@@ -26,6 +26,7 @@
+ 
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ 
++#include <algorithm>
+ #include <memory>
+ #include <optional>
+ #include <utility>
+@@ -37,6 +38,7 @@
+ #include "base/trace_event/typed_macros.h"
+ #include "build/build_config.h"
+ #include "cc/input/snap_selection_strategy.h"
++#include "components/ungoogled/fingerprint_display.h"
+ #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+ #include "net/storage_access_api/status.h"
+ #include "third_party/blink/public/common/features.h"
+@@ -1587,12 +1589,26 @@
+     return 0;
+ 
+   ChromeClient& chrome_client = page->GetChromeClient();
+-  if (page->GetSettings().GetReportScreenSizeInPhysicalPixelsQuirk()) {
+-    return static_cast<int>(
+-        lroundf(chrome_client.RootWindowRect(*frame).height() *
+-                chrome_client.GetScreenInfo(*frame).device_scale_factor));
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  const bool physical_quirk =
++      page->GetSettings().GetReportScreenSizeInPhysicalPixelsQuirk();
++  const float dpr =
++      dp.dpr > 0.0 ? static_cast<float>(dp.dpr)
++                   : chrome_client.GetScreenInfo(*frame).device_scale_factor;
++  int raw_height = chrome_client.RootWindowRect(*frame).height();
++  if (physical_quirk) {
++    raw_height = static_cast<int>(lroundf(raw_height * dpr));
+   }
+-  return chrome_client.RootWindowRect(*frame).height();
++  const int avail_height_cap =
++      physical_quirk ? static_cast<int>(lroundf(dp.avail_height * dpr))
++                     : dp.avail_height;
++  const int screen_height_cap =
++      physical_quirk ? static_cast<int>(lroundf(dp.height * dpr)) : dp.height;
++  if (dp.has_screen && avail_height_cap > 0 && raw_height > avail_height_cap) {
++    return std::clamp(avail_height_cap, innerHeight(),
++                      std::max(screen_height_cap, innerHeight()));
++  }
++  return raw_height;
+ }
+ 
+ int LocalDOMWindow::outerWidth() const {
+@@ -1612,12 +1628,26 @@
+     return 0;
+ 
+   ChromeClient& chrome_client = page->GetChromeClient();
+-  if (page->GetSettings().GetReportScreenSizeInPhysicalPixelsQuirk()) {
+-    return static_cast<int>(
+-        lroundf(chrome_client.RootWindowRect(*frame).width() *
+-                chrome_client.GetScreenInfo(*frame).device_scale_factor));
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  const bool physical_quirk =
++      page->GetSettings().GetReportScreenSizeInPhysicalPixelsQuirk();
++  const float dpr =
++      dp.dpr > 0.0 ? static_cast<float>(dp.dpr)
++                   : chrome_client.GetScreenInfo(*frame).device_scale_factor;
++  int raw_width = chrome_client.RootWindowRect(*frame).width();
++  if (physical_quirk) {
++    raw_width = static_cast<int>(lroundf(raw_width * dpr));
+   }
+-  return chrome_client.RootWindowRect(*frame).width();
++  const int avail_width_cap =
++      physical_quirk ? static_cast<int>(lroundf(dp.avail_width * dpr))
++                     : dp.avail_width;
++  const int screen_width_cap =
++      physical_quirk ? static_cast<int>(lroundf(dp.width * dpr)) : dp.width;
++  if (dp.has_screen && avail_width_cap > 0 && raw_width > avail_width_cap) {
++    return std::clamp(avail_width_cap, innerWidth(),
++                      std::max(screen_width_cap, innerWidth()));
++  }
++  return raw_width;
+ }
+ 
+ gfx::Size LocalDOMWindow::GetViewportSize() const {
+@@ -1802,6 +1832,10 @@
+   if (!GetFrame())
+     return 0.0;
+ 
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.dpr > 0.0) {
++    return dp.dpr;
++  }
+   return GetFrame()->DevicePixelRatio();
+ }
+ 
+diff --git a/third_party/blink/renderer/core/css/media_values.cc b/third_party/blink/renderer/core/css/media_values.cc
+--- a/third_party/blink/renderer/core/css/media_values.cc
++++ b/third_party/blink/renderer/core/css/media_values.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "third_party/blink/renderer/core/css/media_values.h"
+ 
++#include "components/ungoogled/fingerprint_display.h"
+ #include "third_party/blink/public/common/css/scripting.h"
+ #include "third_party/blink/renderer/core/css/css_resolution_units.h"
+ #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
+@@ -166,10 +167,13 @@
+   DCHECK(frame && frame->View() && frame->GetSettings() && frame->GetPage());
+   const display::ScreenInfo& screen_info =
+       frame->GetPage()->GetChromeClient().GetScreenInfo(*frame);
+-  int device_width = screen_info.rect.width();
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  int device_width = dp.has_screen ? dp.width : screen_info.rect.width();
+   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
+-    device_width = static_cast<int>(
+-        lroundf(device_width * screen_info.device_scale_factor));
++    const float dpr = dp.dpr > 0.0
++                          ? static_cast<float>(dp.dpr)
++                          : screen_info.device_scale_factor;
++    device_width = static_cast<int>(lroundf(device_width * dpr));
+   }
+   return device_width;
+ }
+@@ -178,10 +182,13 @@
+   DCHECK(frame && frame->View() && frame->GetSettings() && frame->GetPage());
+   const display::ScreenInfo& screen_info =
+       frame->GetPage()->GetChromeClient().GetScreenInfo(*frame);
+-  int device_height = screen_info.rect.height();
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  int device_height = dp.has_screen ? dp.height : screen_info.rect.height();
+   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
+-    device_height = static_cast<int>(
+-        lroundf(device_height * screen_info.device_scale_factor));
++    const float dpr = dp.dpr > 0.0
++                          ? static_cast<float>(dp.dpr)
++                          : screen_info.device_scale_factor;
++    device_height = static_cast<int>(lroundf(device_height * dpr));
+   }
+   return device_height;
+ }
+@@ -193,12 +200,20 @@
+ }
+ 
+ float MediaValues::CalculateDevicePixelRatio(LocalFrame* frame) {
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.dpr > 0.0) {
++    return static_cast<float>(dp.dpr);
++  }
+   return frame->DevicePixelRatio();
+ }
+ 
+ bool MediaValues::CalculateDeviceSupportsHDR(LocalFrame* frame) {
+   DCHECK(frame);
+   DCHECK(frame->GetPage());
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.color_depth == 24 || dp.gamut == 1) {
++    return false;
++  }
+   return frame->GetPage()
+       ->GetChromeClient()
+       .GetScreenInfo(*frame)
+@@ -208,6 +223,10 @@
+ int MediaValues::CalculateColorBitsPerComponent(LocalFrame* frame) {
+   DCHECK(frame);
+   DCHECK(frame->GetPage());
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.color_depth > 0) {
++    return dp.color_depth / 3;
++  }
+   const display::ScreenInfo& screen_info =
+       frame->GetPage()->GetChromeClient().GetScreenInfo(*frame);
+   if (screen_info.is_monochrome) {
+@@ -219,6 +238,9 @@
+ int MediaValues::CalculateMonochromeBitsPerComponent(LocalFrame* frame) {
+   DCHECK(frame);
+   DCHECK(frame->GetPage());
++  if (ungoogled::fingerprint::GetActiveDisplayProfile().color_depth > 0) {
++    return 0;
++  }
+   const display::ScreenInfo& screen_info =
+       frame->GetPage()->GetChromeClient().GetScreenInfo(*frame);
+   if (!screen_info.is_monochrome) {
+@@ -390,7 +412,17 @@
+   std::optional<ColorSpaceGamut> override_value =
+       overrides ? overrides->GetColorGamut() : std::nullopt;
+-  return override_value.value_or(color_space_utilities::GetColorSpaceGamut(
+-      frame->GetPage()->GetChromeClient().GetScreenInfo(*frame)));
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.gamut == 2) {
++    return ColorSpaceGamut::P3;
++  }
++  if (dp.gamut == 1) {
++    return ColorSpaceGamut::SRGB;
++  }
++  if (override_value.has_value()) {
++    return override_value.value();
++  }
++  return color_space_utilities::GetColorSpaceGamut(
++      frame->GetPage()->GetChromeClient().GetScreenInfo(*frame));
+ }
+ 
+ mojom::blink::PreferredColorScheme MediaValues::CalculatePreferredColorScheme(
+@@ -399,6 +431,13 @@
+   DCHECK(frame->GetSettings());
+   DCHECK(frame->GetDocument());
+   DCHECK(frame->GetPage());
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.color_scheme == 2) {
++    return mojom::blink::PreferredColorScheme::kDark;
++  }
++  if (dp.color_scheme == 1) {
++    return mojom::blink::PreferredColorScheme::kLight;
++  }
+   const MediaFeatureOverrides* overrides =
+       frame->GetPage()->GetMediaFeatureOverrides();
+   std::optional<mojom::blink::PreferredColorScheme> override_value =
+diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
+--- a/third_party/blink/renderer/core/loader/frame_fetch_context.cc
++++ b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
+@@ -41,6 +41,7 @@
+ #include "base/metrics/histogram_macros.h"
+ #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ #include "build/build_config.h"
++#include "components/ungoogled/fingerprint_display.h"
+ #include "mojo/public/cpp/bindings/associated_remote.h"
+ #include "net/http/structured_headers.h"
+ #include "services/network/public/cpp/client_hints.h"
+@@ -849,9 +850,12 @@
+   if (ShouldSendClientHint(*policy, resource_origin, is_1p_origin,
+                            WebClientHintsType::kPrefersColorScheme,
+                            hints_preferences)) {
++    const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++    const bool is_dark_mode =
++        dp.color_scheme != 0 ? (dp.color_scheme == 2) : document_->InDarkMode();
+     request.SetHttpHeaderField(
+         http_names::kPrefersColorScheme,
+-        document_->InDarkMode() ? http_names::kDark : http_names::kLight);
++        is_dark_mode ? http_names::kDark : http_names::kLight);
+   }
+ 
+   const float dpr = GetDevicePixelRatio();
+@@ -1368,6 +1372,10 @@
+ }
+ 
+ float FrameFetchContext::GetDevicePixelRatio() const {
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.dpr > 0.0) {
++    return static_cast<float>(dp.dpr);
++  }
+   if (GetResourceFetcherProperties().IsDetached()) {
+     return frozen_state_->device_pixel_ratio;
+   }
+diff --git a/content/browser/client_hints/client_hints.cc b/content/browser/client_hints/client_hints.cc
+--- a/content/browser/client_hints/client_hints.cc
++++ b/content/browser/client_hints/client_hints.cc
+@@ -20,6 +20,7 @@
+ #include "base/strings/string_util.h"
+ #include "base/time/time.h"
+ #include "build/build_config.h"
++#include "components/ungoogled/fingerprint_display.h"
+ #include "content/browser/devtools/devtools_instrumentation.h"
+ #include "content/browser/preloading/prerender/prerender_host.h"
+ #include "content/browser/renderer_host/frame_tree.h"
+@@ -140,6 +141,10 @@
+ }
+ 
+ double GetDeviceScaleFactor() {
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  if (dp.dpr > 0.0) {
++    return dp.dpr;
++  }
+   double device_scale_factor = 1.0;
+   if (display::Screen::Get()) {
+     device_scale_factor =
+@@ -256,7 +261,10 @@
+   DCHECK(headers);
+   DCHECK(context);
+   double device_scale_factor = GetDeviceScaleFactor();
+-  double zoom_factor = GetZoomFactor(context, url);
++  double zoom_factor =
++      ungoogled::fingerprint::GetActiveDisplayProfile().dpr > 0.0
++          ? 1.0
++          : GetZoomFactor(context, url);
+   SetHeaderToDouble(headers,
+                     use_deprecated_version ? WebClientHintsType::kDpr_DEPRECATED
+                                            : WebClientHintsType::kDpr,
+@@ -463,7 +471,11 @@
+           ->GetOrCreateWebPreferences()
+           .preferred_color_scheme;
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
+   bool is_dark_mode =
+-      preferred_color_scheme == blink::mojom::PreferredColorScheme::kDark;
++      dp.color_scheme != 0
++          ? (dp.color_scheme == 2)
++          : (preferred_color_scheme ==
++             blink::mojom::PreferredColorScheme::kDark);
+   SetHeaderToString(headers, WebClientHintsType::kPrefersColorScheme,
+                     is_dark_mode ? network::kPrefersColorSchemeDark
+                                  : network::kPrefersColorSchemeLight);
+diff --git a/content/browser/renderer_host/media/media_devices_manager.cc b/content/browser/renderer_host/media/media_devices_manager.cc
+--- a/content/browser/renderer_host/media/media_devices_manager.cc
++++ b/content/browser/renderer_host/media/media_devices_manager.cc
+@@ -27,6 +27,7 @@
+ #include "base/threading/thread_checker.h"
+ #include "base/time/time.h"
+ #include "build/build_config.h"
++#include "components/ungoogled/fingerprint_display.h"
+ #include "content/browser/media/media_devices_permission_checker.h"
+ #include "content/browser/renderer_host/media/media_stream_manager.h"
+ #include "content/browser/renderer_host/media/video_capture_manager.h"
+@@ -89,4 +90,34 @@
+ // Frame rates for sources with no support for capability enumeration.
+ const uint16_t kFallbackVideoFrameRates[] = {30, 60};
+ 
++// Project only web-exposed enumeration/change results while keeping raw
++// capture snapshots and operational device IDs untouched for MediaStreamManager.
++void ProjectWebExposedMediaDevices(
++    MediaDeviceType type,
++    bool use_fake_devices,
++    const ungoogled::fingerprint::DisplayProfile& dp,
++    blink::WebMediaDeviceInfoArray* devices) {
++  if (!dp.has_internal || use_fake_devices || !devices) {
++    return;
++  }
++  if (type == MediaDeviceType::kMediaVideoInput && !dp.is_internal) {
++    devices->clear();
++    return;
++  }
++  for (auto& info : *devices) {
++    if (!info.label.empty()) {
++      if (type == MediaDeviceType::kMediaAudioInput) {
++        info.label = "Built-in Microphone";
++      } else if (type == MediaDeviceType::kMediaAudioOutput) {
++        info.label = "Built-in Output";
++      } else if (type == MediaDeviceType::kMediaVideoInput) {
++        info.label = "FaceTime HD Camera";
++      }
++    }
++    if (type == MediaDeviceType::kMediaVideoInput) {
++      info.video_facing = blink::mojom::FacingMode::kUser;
++    }
++  }
++}
++
+ void SendLogMessage(const std::string& message) {
+@@ -1341,5 +1372,25 @@
+ void MediaDevicesManager::FinalizeDevicesEnumerated(
+     EnumerationState enumeration_state) {
++  auto video_capabilities =
++      enumeration_state.video_input_capabilities_requested
++          ? ComputeVideoInputCapabilities(
++                enumeration_state
++                    .raw_enumeration_results[static_cast<size_t>(
++                        MediaDeviceType::kMediaVideoInput)],
++                enumeration_state
++                    .hashed_enumeration_results[static_cast<size_t>(
++                        MediaDeviceType::kMediaVideoInput)])
++          : std::vector<VideoInputDeviceCapabilitiesPtr>();
++  const auto& dp = ungoogled::fingerprint::GetActiveDisplayProfile();
++  for (size_t i = 0; i < enumeration_state.hashed_enumeration_results.size();
++       ++i) {
++    ProjectWebExposedMediaDevices(
++        static_cast<MediaDeviceType>(i), use_fake_devices_, dp,
++        &enumeration_state.hashed_enumeration_results[i]);
++  }
++  if (dp.has_internal && !use_fake_devices_ && !dp.is_internal) {
++    video_capabilities.clear();
++  }
+   SendLogMessage(base::StringPrintf(
+       "FinalizeDevicesEnumerated({request_id=%llu}, {audio_count=%zu}, "
+       "{video_count=%zu})",
+@@ -1354,14 +1405,6 @@
+           .size()));
+   std::move(enumeration_state.completion_cb)
+       .Run(std::move(enumeration_state.hashed_enumeration_results),
+-           enumeration_state.video_input_capabilities_requested
+-               ? ComputeVideoInputCapabilities(
+-                     enumeration_state
+-                         .raw_enumeration_results[static_cast<size_t>(
+-                             MediaDeviceType::kMediaVideoInput)],
+-                     enumeration_state
+-                         .hashed_enumeration_results[static_cast<size_t>(
+-                             MediaDeviceType::kMediaVideoInput)])
+-               : std::vector<VideoInputDeviceCapabilitiesPtr>(),
++           std::move(video_capabilities),
+            std::move(enumeration_state.audio_capabilities));
+ }
+@@ -1795,8 +1838,10 @@
+                          subscription_id, DeviceTypeToString(type)));
+ 
+   const SubscriptionRequest& request = it->second;
+-  request.listener_->OnDevicesChanged(
+-      type,
+-      TranslateMediaDeviceInfoArray(has_permission, salt_and_origin,
+-                                    enumeration[static_cast<size_t>(type)]));
++  blink::WebMediaDeviceInfoArray translated = TranslateMediaDeviceInfoArray(
++      has_permission, salt_and_origin, enumeration[static_cast<size_t>(type)]);
++  ProjectWebExposedMediaDevices(
++      type, use_fake_devices_, ungoogled::fingerprint::GetActiveDisplayProfile(),
++      &translated);
++  request.listener_->OnDevicesChanged(type, translated);
+ }

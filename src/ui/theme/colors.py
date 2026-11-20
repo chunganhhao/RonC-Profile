@@ -20,11 +20,12 @@ LIGHT_COLORS: dict[str, str] = {
     "log_bg": "#F8FAFC",
     # Action & buttons (PionLogin obsidian CTA + royal blue accent)
     "accent": "#2563EB",
-    "accent_hover": "#1E293B",
+    "accent_hover": "#1D4ED8",
     "accent_soft": "#EFF6FF",
     "ink_button": "#0F172A",
-    "primary_cta_bg": "#0F172A",
+    "primary_cta_bg": "#2563EB",
     "primary_cta_fg": "#FFFFFF",
+    "primary_cta_hover": "#1D4ED8",
     # States & badges
     "live": "#10B981",
     "live_tint": "#E9FBF3",
@@ -71,8 +72,9 @@ DARK_COLORS: dict[str, str] = {
     "accent_hover": "#2563EB",
     "accent_soft": "#1E293B",
     "ink_button": "#272B35",
-    "primary_cta_bg": "#F9FAFB",
-    "primary_cta_fg": "#0B0C0E",
+    "primary_cta_bg": "#2563EB",
+    "primary_cta_fg": "#FFFFFF",
+    "primary_cta_hover": "#1D4ED8",
     # States & badges
     "live": "#10B981",
     "live_tint": "#0D1F1A",
@@ -96,8 +98,131 @@ DARK_COLORS: dict[str, str] = {
     "status_bar_bg": "#08090B",
 }
 
+# Hallmark 4-theme color presets matching the Appearance window swatches:
+# ("slate": Studio Slate, "blue": Grid Cobalt, "green": Passport Emerald, "orange": Rim Fox Orange)
+ACCENT_PRESETS: dict[str, dict[str, dict[str, str]]] = {
+    "slate": {
+        "swatch": "#1E222A",
+        "light": {
+            "accent": "#0F172A",
+            "accent_hover": "#1E293B",
+            "accent_soft": "#F1F5F9",
+            "primary_cta_bg": "#0F172A",
+            "primary_cta_fg": "#FFFFFF",
+            "primary_cta_hover": "#1E293B",
+            "card_selected_bg": "#F1F5F9",
+            "card_selected_border": "#334155",
+            "proxy_pill_bg": "#F1F5F9",
+            "proxy_pill_fg": "#0F172A",
+            "proxy_pill_border": "#CBD5E1",
+        },
+        "dark": {
+            "accent": "#94A3B8",
+            "accent_hover": "#CBD5E1",
+            "accent_soft": "#1E293B",
+            "primary_cta_bg": "#F9FAFB",
+            "primary_cta_fg": "#0B0C0E",
+            "primary_cta_hover": "#E5E7EB",
+            "card_selected_bg": "#1B2230",
+            "card_selected_border": "#94A3B8",
+            "proxy_pill_bg": "#1E293B",
+            "proxy_pill_fg": "#E2E8F0",
+            "proxy_pill_border": "#334155",
+        },
+    },
+    "blue": {
+        "swatch": "#1D6FF2",
+        "light": {
+            "accent": "#2563EB",
+            "accent_hover": "#1D4ED8",
+            "accent_soft": "#EFF6FF",
+            "primary_cta_bg": "#2563EB",
+            "primary_cta_fg": "#FFFFFF",
+            "primary_cta_hover": "#1D4ED8",
+            "card_selected_bg": "#EFF6FF",
+            "card_selected_border": "#2563EB",
+            "proxy_pill_bg": "#EFF6FF",
+            "proxy_pill_fg": "#1E40AF",
+            "proxy_pill_border": "#BFDBFE",
+        },
+        "dark": {
+            "accent": "#3B82F6",
+            "accent_hover": "#2563EB",
+            "accent_soft": "#1E293B",
+            "primary_cta_bg": "#2563EB",
+            "primary_cta_fg": "#FFFFFF",
+            "primary_cta_hover": "#1D4ED8",
+            "card_selected_bg": "#1B2230",
+            "card_selected_border": "#3B82F6",
+            "proxy_pill_bg": "#1E293B",
+            "proxy_pill_fg": "#93C5FD",
+            "proxy_pill_border": "#334155",
+        },
+    },
+    "green": {
+        "swatch": "#15803D",
+        "light": {
+            "accent": "#059669",
+            "accent_hover": "#047857",
+            "accent_soft": "#ECFDF5",
+            "primary_cta_bg": "#059669",
+            "primary_cta_fg": "#FFFFFF",
+            "primary_cta_hover": "#047857",
+            "card_selected_bg": "#ECFDF5",
+            "card_selected_border": "#059669",
+            "proxy_pill_bg": "#ECFDF5",
+            "proxy_pill_fg": "#065F46",
+            "proxy_pill_border": "#A7F3D0",
+        },
+        "dark": {
+            "accent": "#10B981",
+            "accent_hover": "#059669",
+            "accent_soft": "#0D281E",
+            "primary_cta_bg": "#059669",
+            "primary_cta_fg": "#FFFFFF",
+            "primary_cta_hover": "#047857",
+            "card_selected_bg": "#0D241C",
+            "card_selected_border": "#10B981",
+            "proxy_pill_bg": "#0D281E",
+            "proxy_pill_fg": "#6EE7B7",
+            "proxy_pill_border": "#1E4D3B",
+        },
+    },
+    "orange": {
+        "swatch": "#EA580C",
+        "light": {
+            "accent": "#EA580C",
+            "accent_hover": "#C2410C",
+            "accent_soft": "#FFF7ED",
+            "primary_cta_bg": "#EA580C",
+            "primary_cta_fg": "#FFFFFF",
+            "primary_cta_hover": "#C2410C",
+            "card_selected_bg": "#FFF7ED",
+            "card_selected_border": "#EA580C",
+            "proxy_pill_bg": "#FFF7ED",
+            "proxy_pill_fg": "#9A3412",
+            "proxy_pill_border": "#FED7AA",
+        },
+        "dark": {
+            "accent": "#F97316",
+            "accent_hover": "#EA580C",
+            "accent_soft": "#2A1810",
+            "primary_cta_bg": "#EA580C",
+            "primary_cta_fg": "#FFFFFF",
+            "primary_cta_hover": "#C2410C",
+            "card_selected_bg": "#261710",
+            "card_selected_border": "#F97316",
+            "proxy_pill_bg": "#2A1810",
+            "proxy_pill_fg": "#FDBA74",
+            "proxy_pill_border": "#4A2818",
+        },
+    },
+}
+
 _CURRENT_THEME = "light" if THEME_MODE == "light" else "dark"
+_CURRENT_ACCENT = "blue"
 COLORS: dict[str, str] = dict(LIGHT_COLORS if _CURRENT_THEME == "light" else DARK_COLORS)
+COLORS.update(ACCENT_PRESETS[_CURRENT_ACCENT][_CURRENT_THEME])
 
 # Families registered in configure_page; Flutter needs one file per weight.
 FONT = "Be Vietnam Pro"
@@ -107,8 +232,19 @@ FONT_BOLD = "Be Vietnam Pro Bold"
 FONT_DATA = "JetBrains Mono"
 
 
+def _sync_colors() -> None:
+    base = LIGHT_COLORS if _CURRENT_THEME == "light" else DARK_COLORS
+    COLORS.clear()
+    COLORS.update(base)
+    COLORS.update(ACCENT_PRESETS.get(_CURRENT_ACCENT, ACCENT_PRESETS["blue"])[_CURRENT_THEME])
+
+
 def current_theme_mode() -> str:
     return _CURRENT_THEME
+
+
+def current_accent_color() -> str:
+    return _CURRENT_ACCENT
 
 
 def set_theme_mode(mode: str) -> str:
@@ -116,10 +252,18 @@ def set_theme_mode(mode: str) -> str:
     global _CURRENT_THEME
     normalized = "light" if str(mode).strip().lower() == "light" else "dark"
     _CURRENT_THEME = normalized
-    palette = LIGHT_COLORS if normalized == "light" else DARK_COLORS
-    COLORS.clear()
-    COLORS.update(palette)
+    _sync_colors()
     return _CURRENT_THEME
+
+
+def set_accent_color(preset: str) -> str:
+    """Switch between Hallmark accent presets ('slate', 'blue', 'green', 'orange')."""
+    global _CURRENT_ACCENT
+    key = str(preset).strip().lower()
+    if key in ACCENT_PRESETS:
+        _CURRENT_ACCENT = key
+    _sync_colors()
+    return _CURRENT_ACCENT
 
 
 def toggle_theme_mode() -> str:

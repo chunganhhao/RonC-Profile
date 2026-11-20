@@ -3,7 +3,7 @@ from collections.abc import Callable
 import flet as ft
 
 from ...core.strings import get_string
-from ...models.profile import Profile
+from ...models.profile import Profile, extract_backup_code_tokens
 from ...utils.proxy_parser import mask_proxy
 from ..theme.colors import COLORS, FONT_DATA, FONT_SEMIBOLD
 from ..theme.styles import DANGER_ICON_STYLE, ICON_STYLE
@@ -28,13 +28,14 @@ _TAG_PALETTES = (
 # PionLogin table grid: (expand, fixed_width)
 COLUMNS = {
     "select": (None, 32),
-    "id": (None, 70),
-    "name": (10, None),
+    "id": (None, 64),
+    "name": (9, None),
     "group": (6, None),
-    "proxy": (7, None),
-    "notes": (9, None),
-    "status": (None, 96),
-    "actions": (None, 250),
+    "proxy": (6, None),
+    "recovery": (7, None),
+    "notes": (10, None),
+    "status": (None, 92),
+    "actions": (None, 276),
 }
 ROW_HEIGHT = 72
 
@@ -85,6 +86,7 @@ def build_header_row(
                 _cell("name", label("col_profile")),
                 _cell("group", label("col_group")),
                 _cell("proxy", label("col_proxy")),
+                _cell("recovery", label("col_recovery")),
                 _cell("notes", label("col_notes")),
                 _cell("status", label("col_status")),
                 _cell("actions", label("col_actions")),
@@ -110,9 +112,13 @@ def build_profile_card(
     failed: bool = False,
     row_index: int = 1,
     on_copy_user: Callable[[str], None] | None = None,
+    on_copy_recovery: Callable[[str], None] | None = None,
     on_edit_field: Callable[[str, str, int], None] | None = None,
+    on_backup_codes: Callable[[str, int], None] | None = None,
+    active_feedback: set[str] | None = None,
 ) -> ft.Container:
     """One profile as a PionLogin-style table row."""
+    fb = active_feedback or set()
     if is_running:
         bg = COLORS["card_hover"]
     elif is_selected:
@@ -123,19 +129,22 @@ def build_profile_card(
     def editable(field: str, content: ft.Control) -> ft.Control:
         if not on_edit_field:
             return content
+        is_done = f"edit_{field}" in fb
         return ft.Row(
             spacing=2,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 ft.Container(content, expand=True),
                 ft.IconButton(
-                    icon=ft.Icons.EDIT_OUTLINED,
+                    icon=ft.Icons.CHECK_ROUNDED if is_done else ft.Icons.EDIT_OUTLINED,
                     icon_size=14,
                     width=28,
                     height=36,
-                    icon_color=COLORS["text_sub"],
-                    style=ICON_STYLE,
-                    tooltip=get_string(
+                    icon_color=COLORS["live"] if is_done else COLORS["text_sub"],
+                    style=_feedback_icon_style() if is_done else ICON_STYLE,
+                    tooltip=get_string("saved_badge")
+                    if is_done
+                    else get_string(
                         "edit_field",
                         field=get_string(
                             {
@@ -153,9 +162,14 @@ def build_profile_card(
             ],
         )
 
+    backup_handler = on_backup_codes or (
+        (lambda n, idx=row_index: on_edit_field(n, "backup_codes", idx))
+        if on_edit_field is not None
+        else None
+    )
+
     return ft.Container(
-        height=ROW_HEIGHT,
-        padding=ft.Padding.symmetric(horizontal=14),
+        padding=ft.Padding.symmetric(horizontal=14, vertical=10),
         bgcolor=bg,
         border=ft.Border.only(bottom=ft.BorderSide(1, COLORS["card_border"])),
         content=ft.Row(
@@ -182,9 +196,29 @@ def build_profile_card(
                         ),
                     ),
                 ),
-                _cell("name", editable("name", _profile_identity(profile, on_copy_user))),
+                _cell(
+                    "name",
+                    editable(
+                        "name",
+                        _profile_identity(
+                            profile,
+                            on_copy_user,
+                            copied_user="copy_user" in fb,
+                        ),
+                    ),
+                ),
                 _cell("group", editable("tags", _group_and_engine_badges(profile))),
                 _cell("proxy", editable("proxy", _proxy_badge(profile))),
+                _cell(
+                    "recovery",
+                    _recovery_cell(
+                        profile,
+                        row_index,
+                        on_copy_recovery=on_copy_recovery,
+                        on_edit_field=on_edit_field,
+                        active_feedback=fb,
+                    ),
+                ),
                 _cell("notes", editable("notes", _notes_and_device(profile, device))),
                 _cell("status", ft.Row(controls=[_stamp(is_loading, is_running, since, failed)])),
                 _cell(
@@ -204,6 +238,9 @@ def build_profile_card(
                                 on_cookies,
                                 on_copy_pass,
                                 on_copy_2fa,
+                                on_backup_codes=backup_handler,
+                                row_index=row_index,
+                                active_feedback=fb,
                             ),
                         ],
                     ),
@@ -213,8 +250,22 @@ def build_profile_card(
     )
 
 
+def _feedback_icon_style() -> ft.ButtonStyle:
+    return ft.ButtonStyle(
+        shape=ft.RoundedRectangleBorder(radius=6),
+        bgcolor={
+            ft.ControlState.DEFAULT: COLORS["live_tint"],
+            ft.ControlState.HOVERED: COLORS["live_tint"],
+        },
+        padding=0,
+    )
+
+
 def _profile_identity(
-    profile: Profile, on_copy_user: Callable[[str], None] | None = None
+    profile: Profile,
+    on_copy_user: Callable[[str], None] | None = None,
+    *,
+    copied_user: bool = False,
 ) -> ft.Control:
     os_icon = _OS_ICONS.get(profile.os_type, ft.Icons.COMPUTER)
     top_line = ft.Row(
@@ -243,22 +294,29 @@ def _profile_identity(
     )
     if not profile.account_uid:
         return top_line
+    uid_text = _minor(profile.account_uid, data=True)
+    if copied_user:
+        uid_text.color = COLORS["live"]
     return _stack(
         top_line,
         ft.Row(
             spacing=2,
             controls=[
-                ft.Container(_minor(profile.account_uid, data=True), expand=True),
+                ft.Container(uid_text, expand=True),
                 *(
                     [
                         ft.IconButton(
-                            icon=ft.Icons.CONTENT_COPY_OUTLINED,
+                            icon=ft.Icons.CHECK_ROUNDED
+                            if copied_user
+                            else ft.Icons.CONTENT_COPY_OUTLINED,
                             icon_size=14,
                             width=28,
                             height=28,
-                            tooltip=get_string("copy_user"),
-                            style=ICON_STYLE,
-                            icon_color=COLORS["text_sub"],
+                            tooltip=get_string("copied_badge")
+                            if copied_user
+                            else get_string("copy_user"),
+                            style=_feedback_icon_style() if copied_user else ICON_STYLE,
+                            icon_color=COLORS["live"] if copied_user else COLORS["text_sub"],
                             on_click=lambda _: on_copy_user(profile.name),
                         )
                     ]
@@ -271,63 +329,51 @@ def _profile_identity(
 
 
 def _group_and_engine_badges(profile: Profile) -> ft.Control:
-    pills: list[ft.Control] = []
-    for tag in (profile.tags or ([profile.group] if profile.group else []))[:1]:
+    tag_pills: list[ft.Control] = []
+    for tag in profile.effective_tags:
         bg_col, fg_col = _tag_colors(tag)
-        pills.append(
+        tag_pills.append(
             ft.Container(
                 padding=ft.Padding.symmetric(horizontal=8, vertical=2),
                 border_radius=5,
                 bgcolor=bg_col,
+                tooltip=tag,
                 content=ft.Text(
                     tag,
                     size=11,
                     font_family=FONT_SEMIBOLD,
                     color=fg_col,
                     no_wrap=True,
-                    overflow=ft.TextOverflow.ELLIPSIS,
                 ),
             )
         )
     engine_label = "Chrome" if profile.engine == "chrome" else "Camoufox"
-    pills.append(
-        ft.Container(
-            padding=ft.Padding.symmetric(horizontal=6, vertical=1.5),
-            border_radius=4,
-            bgcolor=COLORS["paper_sunk"],
-            border=ft.Border.all(1, COLORS["card_border"]),
-            content=ft.Text(
-                engine_label,
-                size=10.5,
-                font_family=FONT_DATA,
-                color=COLORS["text_sub"],
-            ),
-        )
+    engine_pill = ft.Container(
+        padding=ft.Padding.symmetric(horizontal=6, vertical=1.5),
+        border_radius=4,
+        bgcolor=COLORS["paper_sunk"],
+        border=ft.Border.all(1, COLORS["card_border"]),
+        content=ft.Text(
+            engine_label,
+            size=10.5,
+            font_family=FONT_DATA,
+            color=COLORS["text_sub"],
+        ),
     )
-    if len(profile.effective_tags) > 1:
-        pills.insert(
-            -1,
-            ft.Text(
-                f"+{len(profile.effective_tags) - 1}",
-                size=11,
-                color=COLORS["text_sub"],
-                tooltip=", ".join(profile.tags),
-            ),
-        )
     return ft.Column(
-        spacing=3,
+        spacing=4,
         alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.START,
         controls=[
             ft.Row(
+                wrap=True,
                 spacing=4,
-                controls=[
-                    ft.Container(pill, expand=True if idx == 0 else None)
-                    for idx, pill in enumerate(pills[:-1])
-                ],
+                run_spacing=4,
+                controls=tag_pills,
             )
-            if pills[:-1]
+            if tag_pills
             else ft.Text("—", color=COLORS["text_dim"]),
-            pills[-1],
+            engine_pill,
         ],
     )
 
@@ -374,18 +420,109 @@ def _proxy_badge(profile: Profile) -> ft.Control:
     )
 
 
+def _recovery_cell(
+    profile: Profile,
+    row_index: int,
+    on_copy_recovery: Callable[[str], None] | None = None,
+    on_edit_field: Callable[[str, str, int], None] | None = None,
+    active_feedback: set[str] | None = None,
+) -> ft.Control:
+    fb = active_feedback or set()
+    rec_mail = profile.effective_recovery_email
+    copied_rec = "copy_recovery" in fb
+    edited_rec = "edit_recovery_email" in fb
+
+    if rec_mail:
+        badge: ft.Control = ft.Container(
+            expand=True,
+            padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+            border_radius=6,
+            bgcolor=COLORS["paper_sunk"],
+            border=ft.Border.all(1, COLORS["card_border"]),
+            tooltip=rec_mail,
+            content=ft.Row(
+                spacing=5,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Icon(
+                        ft.Icons.MARK_EMAIL_READ_OUTLINED,
+                        size=13,
+                        color=COLORS["live"] if copied_rec else COLORS["accent"],
+                    ),
+                    ft.Text(
+                        rec_mail,
+                        expand=True,
+                        size=11.5,
+                        font_family=FONT_DATA,
+                        color=COLORS["live"] if copied_rec else COLORS["text_main"],
+                        no_wrap=True,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                ],
+            ),
+        )
+    else:
+        badge = ft.Text("—", size=12, color=COLORS["text_dim"], expand=True)
+
+    actions: list[ft.Control] = []
+    if rec_mail and on_copy_recovery:
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.CHECK_ROUNDED if copied_rec else ft.Icons.CONTENT_COPY_OUTLINED,
+                icon_size=13,
+                width=24,
+                height=24,
+                tooltip=get_string("copied_badge") if copied_rec else get_string("copy_recovery"),
+                style=_feedback_icon_style() if copied_rec else ICON_STYLE,
+                icon_color=COLORS["live"] if copied_rec else COLORS["text_sub"],
+                on_click=lambda _: on_copy_recovery(profile.name),
+            )
+        )
+    if on_edit_field:
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.CHECK_ROUNDED if edited_rec else ft.Icons.EDIT_OUTLINED,
+                icon_size=13,
+                width=24,
+                height=24,
+                tooltip=get_string("saved_badge")
+                if edited_rec
+                else get_string("edit_field", field=get_string("recovery_email_label")),
+                style=_feedback_icon_style() if edited_rec else ICON_STYLE,
+                icon_color=COLORS["live"] if edited_rec else COLORS["text_sub"],
+                on_click=lambda _: on_edit_field(profile.name, "recovery_email", row_index),
+            )
+        )
+    return ft.Row(
+        spacing=2,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        controls=[badge, *actions],
+    )
+
+
 def _notes_and_device(profile: Profile, device: str) -> ft.Control:
     geo_part = profile.timezone or get_string("follows_ip")
     hw_line = f"{device} / {geo_part}" if device else geo_part
-    if profile.notes:
+    clean_notes = profile.effective_notes
+    if clean_notes:
+        one_line_notes = " · ".join(
+            part.strip() for part in clean_notes.splitlines() if part.strip()
+        )
         return _stack(
-            ft.Text(
-                profile.notes,
-                size=12.5,
-                color=COLORS["text_main"],
-                no_wrap=True,
-                overflow=ft.TextOverflow.ELLIPSIS,
-                tooltip=profile.notes,
+            ft.Row(
+                key=f"notes_scroll_{profile.name}",
+                scroll=ft.ScrollMode.AUTO,
+                spacing=0,
+                controls=[
+                    ft.Text(
+                        one_line_notes,
+                        size=12.5,
+                        color=COLORS["text_main"],
+                        no_wrap=True,
+                        selectable=True,
+                        tooltip=clean_notes,
+                    )
+                ],
             ),
             _minor(hw_line, data=True),
         )
@@ -463,33 +600,69 @@ def _action_buttons(
     on_cookies: Callable[[str], None] | None,
     on_copy_pass: Callable[[str], None] | None,
     on_copy_2fa: Callable[[str], None] | None,
+    on_backup_codes: Callable[[str, int], None] | None = None,
+    row_index: int = 1,
+    active_feedback: set[str] | None = None,
 ) -> list[ft.IconButton]:
+    fb = active_feedback or set()
     name = profile.name
     buttons: list[ft.IconButton] = []
     if profile.account_password and on_copy_pass:
+        pass_done = "copy_pass" in fb
         buttons.append(
             ft.IconButton(
-                icon=ft.Icons.KEY_OUTLINED,
+                icon=ft.Icons.CHECK_ROUNDED if pass_done else ft.Icons.KEY_OUTLINED,
                 width=30,
                 height=36,
                 icon_size=17,
-                icon_color=COLORS["text_sub"],
-                tooltip=get_string("tooltip_copy_pass", uid=profile.account_uid or name),
-                style=ICON_STYLE,
+                icon_color=COLORS["live"] if pass_done else COLORS["text_sub"],
+                tooltip=get_string("copied_badge")
+                if pass_done
+                else get_string("tooltip_copy_pass", uid=profile.account_uid or name),
+                style=_feedback_icon_style() if pass_done else ICON_STYLE,
                 on_click=lambda _, n=name: on_copy_pass(n),
             )
         )
     if profile.two_fa_secret and on_copy_2fa:
+        tfa_done = "copy_2fa" in fb
         buttons.append(
             ft.IconButton(
-                icon=ft.Icons.SECURITY_OUTLINED,
+                icon=ft.Icons.CHECK_ROUNDED if tfa_done else ft.Icons.SECURITY_OUTLINED,
                 width=30,
                 height=36,
                 icon_size=17,
-                icon_color=COLORS["accent"],
-                tooltip=get_string("tooltip_copy_2fa"),
-                style=ICON_STYLE,
+                icon_color=COLORS["live"] if tfa_done else COLORS["accent"],
+                tooltip=get_string("copied_badge") if tfa_done else get_string("tooltip_copy_2fa"),
+                style=_feedback_icon_style() if tfa_done else ICON_STYLE,
                 on_click=lambda _, n=name: on_copy_2fa(n),
+            )
+        )
+    if on_backup_codes is not None:
+        bkp_done = "edit_backup_codes" in fb or "copy_backup_codes" in fb
+        code_count = len(extract_backup_code_tokens(profile.backup_codes))
+        has_bkp = bool((profile.backup_codes or "").strip())
+        bkp_tooltip = (
+            get_string("saved_badge")
+            if bkp_done
+            else (
+                get_string("tooltip_backup_codes", count=code_count or 1)
+                if has_bkp
+                else get_string("tooltip_add_backup_codes")
+            )
+        )
+        buttons.append(
+            ft.IconButton(
+                key=f"backup_codes_btn_{name}",
+                icon=ft.Icons.CHECK_ROUNDED if bkp_done else ft.Icons.PIN_OUTLINED,
+                width=30,
+                height=36,
+                icon_size=17,
+                icon_color=COLORS["live"]
+                if bkp_done
+                else (COLORS["accent"] if has_bkp else COLORS["text_sub"]),
+                tooltip=bkp_tooltip,
+                style=_feedback_icon_style() if bkp_done else ICON_STYLE,
+                on_click=lambda _, n=name, idx=row_index: on_backup_codes(n, idx),
             )
         )
     if on_cookies:
@@ -506,16 +679,17 @@ def _action_buttons(
                 on_click=lambda _, n=name: on_cookies(n),
             ),
         )
+    edit_done = "edit_profile" in fb
     return [
         *buttons,
         ft.IconButton(
-            icon=ft.Icons.EDIT_OUTLINED,
+            icon=ft.Icons.CHECK_ROUNDED if edit_done else ft.Icons.EDIT_OUTLINED,
             icon_size=18,
             width=30,
             height=36,
-            icon_color=COLORS["text_sub"],
-            tooltip=get_string("tooltip_edit"),
-            style=ICON_STYLE,
+            icon_color=COLORS["live"] if edit_done else COLORS["text_sub"],
+            tooltip=get_string("saved_badge") if edit_done else get_string("tooltip_edit"),
+            style=_feedback_icon_style() if edit_done else ICON_STYLE,
             on_click=lambda _, n=name: on_edit(n),
         ),
         ft.IconButton(

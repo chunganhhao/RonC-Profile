@@ -5,7 +5,10 @@ from src.utils.totp import clean_totp_secret, generate_totp, parse_account_line
 
 def test_clean_and_generate_totp():
     assert clean_totp_secret("JBSW Y3DP EHPK 3PXP") == "JBSWY3DPEHPK3PXP"
-    assert clean_totp_secret("otpauth://totp/Test?secret=JBSWY3DPEHPK3PXP&issuer=Google") == "JBSWY3DPEHPK3PXP"
+    assert (
+        clean_totp_secret("otpauth://totp/Test?secret=JBSWY3DPEHPK3PXP&issuer=Google")
+        == "JBSWY3DPEHPK3PXP"
+    )
     assert clean_totp_secret("not-base32-!!!") == ""
     res = generate_totp("JBSW Y3DP EHPK 3PXP", now=0)
     assert res is not None
@@ -84,7 +87,9 @@ def test_coherence_zero_violations_across_all_os():
             os_type,
             screen_spec="1512x982" if os_type == "macos" else "1920x1080",
             cpu_cores=8,
-            gpu_pair=gpus[-1],  # On macos, gpus[-1] is Intel/AMD; ensures notched-panel auto-resolution works
+            gpu_pair=gpus[
+                -1
+            ],  # On macos, gpus[-1] is Intel/AMD; ensures notched-panel auto-resolution works
         )
         cfg = from_fpgen(fp, "158")
         cfg["webGl:vendor"] = fp["webgl"]["vendor"]
@@ -280,21 +285,34 @@ def test_f1_f2_f3_dialog_regressions():
     with patch("src.utils.totp.time.time", return_value=90):
         assert preview.visible is False
 
-    # F3: Chrome engine disables the 5 Camoufox hardware/WebRTC/Canvas dropdowns and Roll button
+    # F3: Chrome engine disables Screen/GPU/Canvas dropdowns while keeping CPU Cores, WebRTC, and Roll New enabled
     chrome_page = DummyPage()
     open_profile_dialog(
         chrome_page,
         None,
         on_save,
-        Profile("chrome-fixture", engine="chrome", os_type="macos", webrtc_mode="disable", canvas_mode="noise"),
+        Profile(
+            "chrome-fixture",
+            engine="chrome",
+            os_type="macos",
+            webrtc_mode="disable",
+            canvas_mode="noise",
+        ),
     )
     chrome_controls = list(walk(chrome_page.dialog))
     hw_dropdowns = [c for c in chrome_controls if isinstance(c, ft.Dropdown)][3:]
     assert len(hw_dropdowns) == 5
-    assert all(c.disabled for c in hw_dropdowns)
+    # [screen_dropdown, cores_dropdown, gpu_dropdown, webrtc_dropdown, canvas_dropdown]
+    assert [c.disabled for c in hw_dropdowns] == [True, False, True, False, True]
     chrome_page.dialog.actions[-1].on_click(None)
     assert saved["webrtc_mode"] == "disable"
     assert saved["canvas_mode"] == "noise"
+    assert saved["initial_fingerprint"] is None
+    next(
+        c for c in chrome_controls if getattr(c, "icon", None) == ft.Icons.CASINO_OUTLINED
+    ).on_click(None)
+    chrome_page.dialog.actions[-1].on_click(None)
+    assert isinstance(saved["initial_fingerprint"].get("seed"), int)
     chrome_page.dialog.on_dismiss(None)
 
 
@@ -321,7 +339,13 @@ def test_ponytail_findings_start_url_auto_screen_os_reset_and_card_perf(tmp_path
     # Finding #1: start_url validation & scheme sanitization
     assert normalize_start_url("mail.google.com") == "https://mail.google.com"
     assert normalize_start_url("https://example.com/login?x=1") == "https://example.com/login?x=1"
-    for unsafe in ("file:///etc/passwd", "%66ile:///etc/passwd", "javascript:alert(1)", "chrome://settings", "about:config"):
+    for unsafe in (
+        "file:///etc/passwd",
+        "%66ile:///etc/passwd",
+        "javascript:alert(1)",
+        "chrome://settings",
+        "about:config",
+    ):
         assert normalize_start_url(unsafe) == ""
         assert validate_start_url(unsafe)[0] is False
 
@@ -329,20 +353,40 @@ def test_ponytail_findings_start_url_auto_screen_os_reset_and_card_perf(tmp_path
     assert not pm.add_profile("bad-url", "", "macos", start_url="file:///etc/passwd")
     assert pm.add_profile("good-url", "", "macos", start_url="mail.google.com")
     assert pm.profiles["good-url"].start_url == "https://mail.google.com"
-    assert not pm.update_profile("good-url", "good-url", "", "macos", start_url="javascript:alert(1)")
+    assert not pm.update_profile(
+        "good-url", "good-url", "", "macos", start_url="javascript:alert(1)"
+    )
 
     # ZIP import strips unsafe start_url
     zip_path = tmp_path / "unsafe.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr("profile.json", json.dumps({"name": "zip-prof", "os_type": "macos", "start_url": "file:///etc/passwd"}))
+        zf.writestr(
+            "profile.json",
+            json.dumps({"name": "zip-prof", "os_type": "macos", "start_url": "file:///etc/passwd"}),
+        )
     ok, imported = import_from_zip(str(zip_path), str(tmp_path / "data"))
     assert ok and imported.start_url is None
 
     # API rejects unsafe start_url and invalid webrtc_mode/canvas_mode
     with TestClient(create_app(Container()), base_url="http://127.0.0.1") as client:
-        assert client.post("/api/v1/profiles", json={"name": "p-bad", "start_url": "file:///etc/passwd"}).status_code == 400
-        assert client.post("/api/v1/profiles", json={"name": "p-bad2", "webrtc_mode": "invalid"}).status_code == 400
-        assert client.patch("/api/v1/profiles/good-url", json={"start_url": "chrome://version"}).status_code == 400
+        assert (
+            client.post(
+                "/api/v1/profiles", json={"name": "p-bad", "start_url": "file:///etc/passwd"}
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                "/api/v1/profiles", json={"name": "p-bad2", "webrtc_mode": "invalid"}
+            ).status_code
+            == 400
+        )
+        assert (
+            client.patch(
+                "/api/v1/profiles/good-url", json={"start_url": "chrome://version"}
+            ).status_code
+            == 400
+        )
 
     # Finding #4: Selecting "auto" in screen_dropdown resets _custom_screen and keeps dropdown value "auto"
     class DummyPage:
@@ -398,7 +442,9 @@ def test_ponytail_findings_start_url_auto_screen_os_reset_and_card_perf(tmp_path
     assert not fp_file.exists() and not persona_file.exists()
 
     # Finding #11: build_profile_card does not call generate_totp during render
-    with patch("src.utils.totp.generate_totp", side_effect=AssertionError("should not be called on render")):
+    with patch(
+        "src.utils.totp.generate_totp", side_effect=AssertionError("should not be called on render")
+    ):
         card = build_profile_card(
             Profile("card-test", two_fa_secret="JBSWY3DPEHPK3PXP"),
             is_loading=False,
@@ -410,3 +456,705 @@ def test_ponytail_findings_start_url_auto_screen_os_reset_and_card_perf(tmp_path
             row_index=1,
         )
         assert card is not None
+
+
+def test_space_delimited_quick_paste_and_trait_hash_and_geo_sync_and_responsive_dialogs():
+    import flet as ft
+
+    from src.models.profile import Profile
+    from src.services.proxy.geo_check import GeoCheckResult, SourceResult
+    from src.ui.dialogs.profile import _geo_lines, open_profile_dialog
+
+    # 1. Space-delimited and tab-delimited Quick Paste formats
+    p_space_3 = parse_account_line("user@gmail.com 9351702a dtvw2ocwirobpfkabcdef23456723456")
+    assert p_space_3 == {
+        "account_uid": "user@gmail.com",
+        "account_password": "9351702a",
+        "two_fa_secret": "DTVW2OCWIROBPFKABCDEF23456723456",
+        "notes": "",
+    }
+    p_space_4 = parse_account_line(
+        "user@gmail.com 9351702a dtvw2ocwirobpfkabcdef23456723456 Recovery mail note"
+    )
+    assert p_space_4 == {
+        "account_uid": "user@gmail.com",
+        "account_password": "9351702a",
+        "two_fa_secret": "DTVW2OCWIROBPFKABCDEF23456723456",
+        "notes": "Recovery mail note",
+    }
+    p_space_grouped = parse_account_line("user@gmail.com Pass123! JBSW Y3DP EHPK 3PXP Backup note")
+    assert p_space_grouped == {
+        "account_uid": "user@gmail.com",
+        "account_password": "Pass123!",
+        "two_fa_secret": "JBSWY3DPEHPK3PXP",
+        "notes": "Backup note",
+    }
+    p_space_url_note = parse_account_line("user@gmail.com Pass123! https://example.test/recovery")
+    assert p_space_url_note == {
+        "account_uid": "user@gmail.com",
+        "account_password": "Pass123!",
+        "two_fa_secret": "",
+        "notes": "https://example.test/recovery",
+    }
+    p_tab = parse_account_line("user@gmail.com\tPass123!\tJBSWY3DPEHPK3PXP\tTab note")
+    assert p_tab == {
+        "account_uid": "user@gmail.com",
+        "account_password": "Pass123!",
+        "two_fa_secret": "JBSWY3DPEHPK3PXP",
+        "notes": "Tab note",
+    }
+
+    # 2. extract_details normalizes runtime Firefox version & computes trait_hash
+    fp = fingerprint.generate_coherent_fingerprint("macos", screen_spec="1512x982", cpu_cores=8)
+    details = fingerprint.extract_details(fp, "macos")
+    assert "rv:158.0" in details["user_agent"]
+    assert "Firefox/158.0" in details["user_agent"]
+    assert details["trait_hash"].startswith("#") and len(details["trait_hash"]) == 9
+
+    # 3. _geo_lines warns on Timezone/Locale mismatch and provides Use Timezone, Use Locale, and Sync Both buttons
+    geo_res = GeoCheckResult(
+        exit_ip="203.0.113.42",
+        country="US",
+        auto_timezone="America/Chicago",
+        suggested_locale="en-US",
+        timezone="America/Chicago",
+        timezone_pinned=False,
+        locale=None,
+        locale_pinned=False,
+        sources=[
+            SourceResult(
+                "ipinfo",
+                ip="203.0.113.42",
+                country="US",
+                city="Chicago",
+                timezone="America/Chicago",
+            ),
+        ],
+        warnings=[],
+        error=None,
+    )
+    applied = {"tz": "", "loc": ""}
+    ctrls = _geo_lines(
+        geo_res,
+        use_locale=lambda v: applied.__setitem__("loc", v),
+        use_timezone=lambda v: applied.__setitem__("tz", v),
+        use_both=lambda t_v, l_v: (applied.__setitem__("tz", t_v), applied.__setitem__("loc", l_v)),
+        current_tz="",
+        current_locale="",
+    )
+    texts = [c.value for c in ctrls if isinstance(c, ft.Text)]
+    assert any("America/Chicago" in t and "en-US" in t and "\u26a0" in t for t in texts)
+    btn_row = next(c for c in ctrls if isinstance(c, ft.Row))
+    assert len(btn_row.controls) == 3
+    # Click Use Timezone
+    btn_row.controls[0].on_click(None)
+    assert applied["tz"] == "America/Chicago"
+    # Click Use Locale
+    btn_row.controls[1].on_click(None)
+    assert applied["loc"] == "en-US"
+    # Click Sync Both
+    applied["tz"] = applied["loc"] = ""
+    btn_row.controls[2].on_click(None)
+    assert applied == {"tz": "America/Chicago", "loc": "en-US"}
+
+    # Once synced, _geo_lines shows ✓ No mismatch found and no action buttons
+    synced_ctrls = _geo_lines(
+        geo_res,
+        use_locale=lambda v: None,
+        use_timezone=lambda v: None,
+        use_both=lambda t_v, l_v: None,
+        current_tz="America/Chicago",
+        current_locale="en-US",
+    )
+    synced_texts = [c.value for c in synced_ctrls if isinstance(c, ft.Text)]
+    assert any("\u2713" in t for t in synced_texts)
+    assert not any(isinstance(c, ft.Row) for c in synced_ctrls)
+
+    # 4. Responsive dialog resize scaling & cleanup on dismiss
+    class ResizablePage:
+        def __init__(self, width=1280, height=820):
+            self.width = width
+            self.height = height
+            self.dialog = None
+            self.on_resize = None
+
+        def update(self):
+            pass
+
+        def show_dialog(self, dlg):
+            self.dialog = dlg
+
+        def pop_dialog(self):
+            self.dialog = None
+
+    rpage = ResizablePage(1280, 820)
+    open_profile_dialog(rpage, None, lambda *a, **kw: None, Profile("resp-test", os_type="macos"))
+    body = rpage.dialog.content
+    w_initial = body.width
+    assert 800 <= w_initial <= 1120
+    # Shrink window to compact width -> columns stack & width scales down
+    rpage.width = 640
+    rpage.height = 560
+    rpage.on_resize(None)
+    assert body.width < w_initial
+    assert len(body.content.controls) == 3  # stacked left_column + Divider + right_column
+    # Expand window back to wide -> 2-column Row restored
+    rpage.width = 1360
+    rpage.height = 900
+    rpage.on_resize(None)
+    assert len(body.content.controls) == 1 and isinstance(body.content.controls[0], ft.Row)
+    rpage.dialog.on_dismiss(None)
+    assert rpage.on_resize is None
+
+
+def test_chrome_extensions_zip_recovery_email_split_and_chrome_persona(tmp_path, monkeypatch):
+    import io
+    import json
+    import zipfile
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import create_app
+    from src.core.container import Container
+    from src.models.profile import Profile, split_recovery_and_notes
+    from src.services.browser import extensions as ext_mod
+    from src.services.browser import fingerprint
+    from src.services.profile import manager as pm_mod
+    from src.ui.dialogs.extensions import open_extension_settings_dialog, open_extensions_dialog
+
+    # 1. split_recovery_and_notes handles legacy formats cleanly
+    assert split_recovery_and_notes(None, "Mail Recovery: recovery@gmail.com") == (
+        "recovery@gmail.com",
+        "",
+    )
+    assert split_recovery_and_notes(None, "alt@example.test") == ("alt@example.test", "")
+    assert split_recovery_and_notes(None, "Backup account alt@example.test") == (
+        "alt@example.test",
+        "Backup account",
+    )
+    assert split_recovery_and_notes("explicit@gmail.com", "Keep note") == (
+        "explicit@gmail.com",
+        "Keep note",
+    )
+
+    p_legacy = Profile("leg", notes="Mail Recovery: old@gmail.com")
+    assert p_legacy.effective_recovery_email == "old@gmail.com"
+    assert p_legacy.effective_notes == ""
+
+    # 2. Chrome Persona generator & extractor
+    cp = fingerprint.generate_chrome_persona("macos", cpu_cores=12, seed=987654321)
+    cd = fingerprint.extract_chrome_details(cp, "macos")
+    assert cd["trait_hash"].startswith("#SEED-")
+    assert cd["hardware_concurrency"] == 12
+    assert "Chrome/148.0.0.0" in cd["user_agent"]
+    persona_path = fingerprint.save_chrome_persona(str(tmp_path / "cprof"), cp)
+    assert fingerprint.load_saved_chrome_persona(str(tmp_path / "cprof"))["seed"] == cd["seed"]
+    assert persona_path.endswith("chrome_persona.json")
+
+    # 3. ExtensionService .zip install, pin_mode, profile assignment, and resolve_for_profile
+    ext_svc = ext_mod.ExtensionService(
+        extensions_file=str(tmp_path / "extensions.json"),
+        extensions_dir=str(tmp_path / "extensions_dir"),
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "nested/manifest.json",
+            json.dumps(
+                {
+                    "manifest_version": 3,
+                    "name": "Gemini Pro 24m",
+                    "version": "1.0.0",
+                    "description": "Google One / AI Pro",
+                    "icons": {"128": "icon.png"},
+                }
+            ),
+        )
+        zf.writestr("nested/icon.png", b"\x89PNG\r\n\x1a\nfake")
+    entry = ext_svc.install_from_zip(buf.getvalue(), filename="gemini_pro.zip")
+    assert entry.name == "Gemini Pro 24m"
+    assert entry.version == "1.0.0"
+    assert len(entry.chrome_ext_id) == 32
+    assert all("a" <= ch <= "p" for ch in entry.chrome_ext_id)
+
+    ext_svc.update_extension(entry.id, pin_mode="force_pinned")
+    paths, pinned, unpinned = ext_svc.resolve_for_profile([entry.id])
+    assert len(paths) == 1
+    assert pinned == [entry.chrome_ext_id]
+    assert unpinned == []
+
+    ext_svc.update_extension(entry.id, pin_mode="force_unpinned")
+    _, pinned2, unpinned2 = ext_svc.resolve_for_profile([entry.id])
+    assert pinned2 == []
+    assert unpinned2 == [entry.chrome_ext_id]
+
+    # 4. ProfileManager + ExtensionService assignment & FastAPI routes
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("chrome-1", "", "macos", engine="chrome", recovery_email="rec1@gmail.com")
+    pm.add_profile("chrome-2", "", "windows", engine="chrome")
+    ext_svc.assign_profiles(entry.id, ["chrome-1"], pm)
+    assert pm.profiles["chrome-1"].extension_ids == [entry.id]
+    assert ext_svc.usage_counts(pm)[entry.id] == 1
+
+    container = Container()
+    container._instances["pm"] = pm
+    container._instances["es"] = ext_svc
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        r_list = client.get("/api/v1/extensions")
+        assert r_list.status_code == 200
+        assert len(r_list.json()["items"]) == 1
+        r_icon = client.get(f"/api/v1/extensions/{entry.id}/icon")
+        assert r_icon.status_code == 200
+        r_patch = client.patch(
+            f"/api/v1/extensions/{entry.id}",
+            json={"pin_mode": "force_pinned", "assigned_profiles": ["chrome-1", "chrome-2"]},
+        )
+        assert r_patch.status_code == 200
+        assert r_patch.json()["pin_mode"] == "force_pinned"
+        assert pm.profiles["chrome-2"].extension_ids == [entry.id]
+
+    # 5. Flet Extensions Dialog & Extension Settings Dialog
+    class DummyPage:
+        def __init__(self):
+            self.width = 1280
+            self.height = 820
+            self.dialog = None
+            self.on_resize = None
+            self.overlay = []
+
+        def update(self):
+            pass
+
+        def show_dialog(self, dlg):
+            self.dialog = dlg
+
+        def pop_dialog(self):
+            self.dialog = None
+
+    dpage = DummyPage()
+    open_extensions_dialog(dpage, ext_svc, pm)
+    assert dpage.dialog is not None
+    dpage.dialog.on_dismiss(None)
+
+    spage = DummyPage()
+    open_extension_settings_dialog(spage, entry, ext_svc, pm)
+    assert spage.dialog is not None
+    # Confirm button saves pin_mode & assigned_profiles
+    spage.dialog.actions[-1].on_click(None)
+
+
+def test_reviewer_findings_legacy_recovery_upload_dedupe_pin_validation(tmp_path, monkeypatch):
+    import base64
+    import io
+    import json
+    import zipfile
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import create_app
+    from src.core.container import Container
+    from src.services.browser import extensions as ext_mod
+    from src.services.profile import manager as pm_mod
+
+    # P1: legacy notes holding a recovery mail are normalized on load and survive inline edits
+    store = tmp_path / "profiles.json"
+    store.write_text(
+        json.dumps(
+            {
+                "leg": {
+                    "name": "leg",
+                    "os_type": "macos",
+                    "notes": "Mail Recovery: old@gmail.com\nMy note",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(store))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    pm = pm_mod.ProfileManager()
+    assert pm.profiles["leg"].recovery_email == "old@gmail.com"
+    assert pm.profiles["leg"].notes == "My note"
+    assert pm.update_profile("leg", "leg", "", "macos", notes="Updated note")
+    assert pm.profiles["leg"].recovery_email == "old@gmail.com"
+    assert pm.update_profile("leg", "leg", "", "macos", recovery_email="")
+    assert pm.profiles["leg"].effective_recovery_email == ""
+    assert pm.profiles["leg"].effective_notes == "Updated note"
+
+    # P1: uploading the same .zip twice updates one entry; P2: invalid pin_mode -> 400
+    ext_svc = ext_mod.ExtensionService(
+        file_path=str(tmp_path / "extensions.json"), extensions_dir=str(tmp_path / "ext")
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "manifest.json", json.dumps({"manifest_version": 3, "name": "Dup", "version": "1.0"})
+        )
+    payload = {"filename": "dup.zip", "zip_base64": base64.b64encode(buf.getvalue()).decode()}
+    container = Container()
+    container._instances["pm"] = pm
+    container._instances["es"] = ext_svc
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        first = client.post("/api/v1/extensions/upload", json=payload).json()
+        second = client.post("/api/v1/extensions/upload", json=payload).json()
+        assert first["id"] == second["id"]
+        assert first["source_zip"] == "dup.zip"
+        assert len(ext_svc.list_entries()) == 1
+        assert (
+            client.patch(
+                f"/api/v1/extensions/{first['id']}", json={"pin_mode": "bogus"}
+            ).status_code
+            == 400
+        )
+
+    # P2: tampered icon path outside the extension dir is never served
+    entry = ext_svc.list_entries()[0]
+    entry.icon_rel_path = "../../profiles.json"
+    assert entry.icon_abs_path is None
+
+
+def test_atomic_extension_reimport_preserves_on_failure(tmp_path):
+    """Corrupted re-import must not delete or break a working installed extension."""
+    import io
+    import json
+    import struct
+    import zipfile
+    from pathlib import Path
+
+    import pytest
+
+    from src.services.browser.extensions import ExtensionService
+
+    svc = ExtensionService(
+        file_path=str(tmp_path / "extensions.json"),
+        extensions_dir=str(tmp_path / "extensions"),
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps({"manifest_version": 3, "name": "AtomicTest", "version": "1.0"}),
+        )
+        zf.writestr("code.js", "console.log('original');")
+    good_bytes = buf.getvalue()
+    entry = svc.install_from_zip(good_bytes, filename="ext.zip")
+
+    target_path = Path(entry.path)
+    assert target_path.exists()
+    assert (target_path / "code.js").read_text() == "console.log('original');"
+    assert len(svc.resolve_for_profile([entry.id])[0]) == 1
+
+    # Corrupt zip payload
+    with zipfile.ZipFile(io.BytesIO(good_bytes)) as zf:
+        offset = zf.getinfo("code.js").header_offset
+    corrupt = bytearray(good_bytes)
+    fn_len, extra_len = struct.unpack_from("<HH", corrupt, offset + 26)
+    corrupt[offset + 30 + fn_len + extra_len] ^= 1
+
+    with pytest.raises(ValueError, match="Bad CRC-32"):
+        svc.install_from_zip(bytes(corrupt), filename="ext.zip")
+
+    # Working extension and files must remain completely intact
+    assert target_path.exists()
+    assert (target_path / "code.js").read_text() == "console.log('original');"
+    assert svc.get(entry.id) is not None
+    assert len(svc.resolve_for_profile([entry.id])[0]) == 1
+
+
+def test_extension_relocation_fallback_after_workspace_rename(tmp_path):
+    """Stale absolute paths in extensions.json fall back to current extensions_dir/<id>."""
+    import io
+    import json
+    import shutil
+    import zipfile
+    from pathlib import Path
+
+    from src.services.browser.extensions import ExtensionService, compute_chrome_extension_id
+
+    old_root = tmp_path / "foxprofile"
+    new_root = tmp_path / "RonC Profile"
+    svc_old = ExtensionService(
+        file_path=str(old_root / "extensions.json"),
+        extensions_dir=str(old_root / "extensions_data"),
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps({"manifest_version": 3, "name": "PortableExt", "version": "1.0"}),
+        )
+    installed = svc_old.install_from_zip(buf.getvalue(), filename="portable.zip")
+    assert str(old_root) in installed.path
+
+    # Simulate renaming the workspace folder while extensions.json still stores old_root.
+    shutil.move(str(old_root), str(new_root))
+    svc_new = ExtensionService(
+        file_path=str(new_root / "extensions.json"),
+        extensions_dir=str(new_root / "extensions_data"),
+    )
+    relocated = svc_new.get(installed.id)
+    assert relocated is not None
+    expected_dir = (new_root / "extensions_data" / installed.id).resolve()
+    assert relocated.path == str(expected_dir)
+    assert relocated.chrome_id == compute_chrome_extension_id(expected_dir)
+    paths, _, _ = svc_new.resolve_for_profile([installed.id])
+    assert paths == [str(expected_dir)]
+
+    # Reconcile stale chrome_id even when extensions.json already has the renamed path.
+    ext_cfg = json.loads((new_root / "extensions.json").read_text())
+    ext_cfg["extensions"][0]["path"] = str(expected_dir)
+    ext_cfg["extensions"][0]["chrome_id"] = "a" * 32
+    ext_cfg["extensions"][0]["chrome_ext_id"] = "a" * 32
+    (new_root / "extensions.json").write_text(json.dumps(ext_cfg))
+    reconciled = svc_new.get(installed.id)
+    assert reconciled is not None
+    assert reconciled.chrome_id == compute_chrome_extension_id(expected_dir)
+
+    # Multi-segment / dot IDs must not resolve to extensions_dir or wipe it on remove.
+    bad_cfg = {
+        "extensions": [
+            {
+                "id": "sub/..",
+                "name": "BadRel",
+                "path": str(new_root / "missing" / "."),
+                "chrome_id": "b" * 32,
+            }
+        ]
+    }
+    (new_root / "extensions.json").write_text(json.dumps(bad_cfg))
+    bad_entry = svc_new.get("sub/..")
+    assert bad_entry is not None
+    assert Path(bad_entry.path) != (new_root / "extensions_data").resolve()
+    bad_entry.path = str((new_root / "extensions_data").resolve())
+    svc_new._save()
+    assert svc_new.remove_extension("sub/..")
+    assert (new_root / "extensions_data").is_dir()
+    assert expected_dir.is_dir()
+
+
+def test_rename_workspace_script_blocks_keyless_extensions_without_confirmation(tmp_path):
+    """rename_workspace_to_ronc.sh must refuse keyless extensions unless explicitly confirmed."""
+    import base64
+    import io
+    import json
+    import os
+    import subprocess
+    import zipfile
+    from pathlib import Path
+
+    from src.services.browser.extensions import ExtensionService, compute_chrome_extension_id
+
+    script = Path(__file__).resolve().parents[1] / "scripts/rename_workspace_to_ronc.sh"
+    parent = tmp_path / "ws"
+    old_dir = parent / "foxprofile"
+    new_dir = parent / "RonC Profile"
+    old_dir.mkdir(parents=True)
+
+    svc = ExtensionService(
+        file_path=str(old_dir / "extensions.json"),
+        extensions_dir=str(old_dir / "extensions_data"),
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps({"manifest_version": 3, "name": "KeylessExt", "version": "1.0"}),
+        )
+    installed = svc.install_from_zip(buf.getvalue(), filename="keyless.zip")
+
+    env = {**os.environ, "RONC_RENAME_PARENT": str(parent)}
+    blocked = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
+    assert blocked.returncode != 0
+    assert installed.id in blocked.stderr
+    assert old_dir.is_dir() and not new_dir.exists()
+
+    confirmed = subprocess.run(
+        ["bash", str(script), "--allow-extension-id-reset"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert confirmed.returncode == 0, confirmed.stderr
+    assert new_dir.is_dir() and not old_dir.exists()
+
+    # Keyed extensions preserve their Chrome ID without needing the reset flag.
+    parent_keyed = tmp_path / "ws_keyed"
+    old_keyed = parent_keyed / "foxprofile"
+    new_keyed = parent_keyed / "RonC Profile"
+    old_keyed.mkdir(parents=True)
+    svc_k = ExtensionService(
+        file_path=str(old_keyed / "extensions.json"),
+        extensions_dir=str(old_keyed / "extensions_data"),
+    )
+    key_b64 = base64.b64encode(b"fixed-public-key-der").decode("ascii")
+    buf_k = io.BytesIO()
+    with zipfile.ZipFile(buf_k, "w") as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps(
+                {"manifest_version": 3, "name": "KeyedExt", "version": "1.0", "key": key_b64}
+            ),
+        )
+    installed_k = svc_k.install_from_zip(buf_k.getvalue(), filename="keyed.zip")
+    ok_keyed = subprocess.run(
+        ["bash", str(script)],
+        env={**os.environ, "RONC_RENAME_PARENT": str(parent_keyed)},
+        capture_output=True,
+        text=True,
+    )
+    assert ok_keyed.returncode == 0, ok_keyed.stderr
+    assert new_keyed.is_dir()
+    cfg = json.loads((new_keyed / "extensions.json").read_text())
+    expected_cid = compute_chrome_extension_id(
+        new_keyed / "extensions_data" / installed_k.id, {"key": key_b64}
+    )
+    assert cfg["extensions"][0]["chrome_id"] == expected_cid
+    assert cfg["extensions"][0]["chrome_id"] == installed_k.chrome_id
+
+    # P2 #1 regression: keyless extension resolved via stale-path basename fallback (id != folder)
+    # must be blocked by default without mutating fixture files or chrome_id.
+    parent_bn = tmp_path / "ws_basename"
+    old_bn = parent_bn / "foxprofile"
+    new_bn = parent_bn / "RonC Profile"
+    actual_ext = old_bn / "extensions_data" / "actual-folder"
+    actual_ext.mkdir(parents=True)
+    (actual_ext / "manifest.json").write_text(
+        json.dumps({"manifest_version": 3, "name": "KeylessLegacy", "version": "1.0"})
+    )
+    stale_registry = {
+        "extensions": [
+            {
+                "id": "logical-id",
+                "name": "KeylessLegacy",
+                "path": "/gone/previous-workspace/extensions_data/actual-folder",
+                "chrome_id": "a" * 32,
+                "enabled": True,
+                "apply_to_all": True,
+            }
+        ]
+    }
+    (old_bn / "extensions.json").write_text(json.dumps(stale_registry))
+    svc_bn = ExtensionService(
+        file_path=str(old_bn / "extensions.json"),
+        extensions_dir=str(old_bn / "extensions_data"),
+    )
+    resolved_bn = svc_bn.get("logical-id")
+    assert resolved_bn is not None
+    assert resolved_bn.path == str(actual_ext.resolve())
+    expected_before_id = compute_chrome_extension_id(actual_ext.resolve())
+    assert resolved_bn.chrome_id == expected_before_id
+    # Keep stale path untouched in extensions.json (matching real pre-rename stale registry).
+    stale_registry["extensions"][0]["chrome_id"] = expected_before_id
+    (old_bn / "extensions.json").write_text(json.dumps(stale_registry))
+    snapshot_before = (old_bn / "extensions.json").read_text()
+
+    blocked_bn = subprocess.run(
+        ["bash", str(script)],
+        env={**os.environ, "RONC_RENAME_PARENT": str(parent_bn)},
+        capture_output=True,
+        text=True,
+    )
+    assert blocked_bn.returncode != 0
+    assert "logical-id" in blocked_bn.stderr
+    assert old_bn.is_dir() and not new_bn.exists()
+    assert (old_bn / "extensions.json").read_text() == snapshot_before
+    assert compute_chrome_extension_id(actual_ext.resolve()) == expected_before_id
+
+    # Escape / outside-extensions_data symlink must not bypass containment or break rename cleanly.
+    outside_target = tmp_path / "outside_ext"
+    outside_target.mkdir()
+    (outside_target / "manifest.json").write_text(
+        json.dumps({"manifest_version": 3, "name": "OutsideSymlink", "version": "1.0"})
+    )
+    parent_sym = tmp_path / "ws_symlink"
+    old_sym = parent_sym / "foxprofile"
+    new_sym = parent_sym / "RonC Profile"
+    (old_sym / "extensions_data").mkdir(parents=True)
+    (old_sym / "extensions_data" / "escape-folder").symlink_to(outside_target)
+    (old_sym / "extensions.json").write_text(
+        json.dumps(
+            {
+                "extensions": [
+                    {
+                        "id": "escape-id",
+                        "name": "OutsideSymlink",
+                        "path": "/gone/previous-workspace/extensions_data/escape-folder",
+                        "chrome_id": "c" * 32,
+                    }
+                ]
+            }
+        )
+    )
+    ok_sym = subprocess.run(
+        ["bash", str(script)],
+        env={**os.environ, "RONC_RENAME_PARENT": str(parent_sym)},
+        capture_output=True,
+        text=True,
+    )
+    assert ok_sym.returncode == 0, ok_sym.stderr
+    assert new_sym.is_dir() and not old_sym.exists()
+
+    # With explicit --allow-extension-id-reset, basename fallback rename succeeds and reconciles to a new chrome_id
+    # (confirmed ID reset, NOT storage preservation).
+    confirmed_bn = subprocess.run(
+        ["bash", str(script), "--allow-extension-id-reset"],
+        env={**os.environ, "RONC_RENAME_PARENT": str(parent_bn)},
+        capture_output=True,
+        text=True,
+    )
+    assert confirmed_bn.returncode == 0, confirmed_bn.stderr
+    assert new_bn.is_dir() and not old_bn.exists()
+    after_bn_svc = ExtensionService(
+        file_path=str(new_bn / "extensions.json"),
+        extensions_dir=str(new_bn / "extensions_data"),
+    )
+    after_bn = after_bn_svc.get("logical-id")
+    expected_moved_dir = (new_bn / "extensions_data" / "actual-folder").resolve()
+    assert after_bn is not None
+    assert after_bn.path == str(expected_moved_dir)
+    assert after_bn.chrome_id == compute_chrome_extension_id(expected_moved_dir)
+    assert after_bn.chrome_id != expected_before_id
+
+
+def test_chrome_persona_preserves_identity_on_metadata_update(tmp_path):
+    """save_chrome_persona must preserve brand, version, timezone, locale on metadata edits."""
+    from pathlib import Path
+
+    from src.services.browser import fingerprint as fp_svc
+
+    profile_dir = str(tmp_path / "chrome_p1")
+    Path(profile_dir).mkdir(parents=True, exist_ok=True)
+
+    original_persona = {
+        "seed": 4242,
+        "platform": "windows",
+        "platform_version": "10.0.0",
+        "brand": "Edge",
+        "hardware_concurrency": 20,
+        "timezone": "Europe/London",
+        "locale": "en-GB",
+    }
+    fp_svc.save_chrome_persona(profile_dir, original_persona)
+    saved = fp_svc.load_saved_chrome_persona(profile_dir)
+    assert saved["seed"] == 4242
+    assert saved["brand"] == "Edge"
+    assert saved["hardware_concurrency"] == 20
+    assert saved["platform_version"] == "10.0.0"
+    assert saved["timezone"] == "Europe/London"
+
+    # Simulate metadata-only or core-only update (e.g. from Web / API PATCH)
+    partial_update = {
+        "seed": 4242,
+        "platform": "windows",
+        "hardware_concurrency": 16,
+    }
+    fp_svc.save_chrome_persona(profile_dir, partial_update)
+    updated = fp_svc.load_saved_chrome_persona(profile_dir)
+    assert updated["seed"] == 4242
+    assert updated["hardware_concurrency"] == 16
+    assert updated["brand"] == "Edge", "Brand must be preserved"
+    assert updated["platform_version"] == "10.0.0", "Platform version must be preserved"
+    assert updated["timezone"] == "Europe/London", "Timezone must be preserved"
+    assert updated["locale"] == "en-GB", "Locale must be preserved"

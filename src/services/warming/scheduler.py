@@ -341,7 +341,9 @@ class WarmingSchedulerService:
                             log(f"[Warming] [{prof_name}] Navigate warning on {url}: {nav_err}")
                             continue
 
-                        dwell = per_url_dwell if single_pass else min(per_url_dwell, remaining_dwell)
+                        dwell = (
+                            per_url_dwell if single_pass else min(per_url_dwell, remaining_dwell)
+                        )
                         if not single_pass:
                             remaining_dwell -= dwell
                         if dwell > 0 and not cancel_ev.wait(dwell / 2.0):

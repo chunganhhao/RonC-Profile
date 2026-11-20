@@ -58,3 +58,9 @@ class Container:
         from ..services.warming.scheduler import WarmingSchedulerService
 
         return self._get("ws", WarmingSchedulerService)
+
+    @property
+    def extension_service(self):
+        from ..services.browser.extensions import ExtensionService
+
+        return self._get("es", ExtensionService)

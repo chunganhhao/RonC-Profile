@@ -70,16 +70,24 @@ def build_content_area(
     on_export: Callable | None = None,
     on_refresh: Callable | None = None,
     on_toggle_theme: Callable[[str], None] | None = None,
+    on_open_appearance: Callable | None = None,
+    toast_banner: ft.Control | None = None,
     total_count_text: ft.Text | None = None,
     footer_proxy_text: ft.Text | None = None,
     footer_warming_text: ft.Text | None = None,
+    first_btn: ft.IconButton | None = None,
+    last_btn: ft.IconButton | None = None,
+    page_size_dropdown: ft.Dropdown | None = None,
+    running_filter_btn: ft.Control | None = None,
 ) -> ft.Container:
     """Main PionLogin-style workspace: Top header, Action toolbar, Data table, Pagination & Status bar."""
     is_dark = current_theme_mode() == "dark"
+    min_table_width = 1360
 
-    # Keep field labels readable on narrow desktop windows; only the table scrolls.
+    # Keep field labels and full notes readable; horizontal scrollbar stays available.
     table = ft.Container(
-        width=1140,
+        key="profiles_table_container",
+        width=min_table_width,
         content=ft.Column(
             spacing=0,
             expand=True,
@@ -92,12 +100,13 @@ def build_content_area(
     )
 
     def resize_table(event: ft.LayoutSizeChangeEvent) -> None:
-        width = max(1140, event.width - 2)
+        width = max(min_table_width, event.width - 2)
         if table.width != width:
             table.width = width
             table.update()
 
     sheet = ft.Container(
+        key="profiles_sheet_container",
         expand=True,
         bgcolor=COLORS["card_bg"],
         border=ft.Border.all(1, COLORS["card_border"]),
@@ -105,9 +114,10 @@ def build_content_area(
         clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
         on_size_change=resize_table,
         content=ft.Row(
+            key="profiles_horizontal_scroll_row",
             spacing=0,
             expand=True,
-            scroll=ft.ScrollMode.AUTO,
+            scroll=ft.ScrollMode.ALWAYS,
             vertical_alignment=ft.CrossAxisAlignment.STRETCH,
             controls=[table],
         ),
@@ -146,6 +156,8 @@ def build_content_area(
                 on_import,
             )
         )
+    if running_filter_btn is not None:
+        toolbar_left.append(running_filter_btn)
 
     toolbar_right: list[ft.Control] = []
     if search_field is not None:
@@ -163,15 +175,44 @@ def build_content_area(
         )
 
     top_right_controls: list[ft.Control] = []
-    if on_toggle_theme is not None:
-        next_mode = "light" if is_dark else "dark"
+    if toast_banner is not None:
+        top_right_controls.append(toast_banner)
+    if on_refresh is not None:
         top_right_controls.append(
-            ft.OutlinedButton(
-                get_string("theme_light" if is_dark else "theme_dark"),
-                icon=ft.Icons.LIGHT_MODE_OUTLINED if is_dark else ft.Icons.DARK_MODE_OUTLINED,
-                height=34,
-                style=OUTLINE_STYLE,
-                on_click=lambda _: on_toggle_theme(next_mode),
+            ft.IconButton(
+                key="header_refresh_btn",
+                icon=ft.Icons.SYNC_ROUNDED,
+                icon_size=19,
+                icon_color=COLORS["text_sub"],
+                tooltip=get_string("toolbar_sync"),
+                style=ICON_STYLE,
+                on_click=on_refresh,
+            )
+        )
+    if on_open_appearance is not None or on_toggle_theme is not None:
+        next_mode = "light" if is_dark else "dark"
+        prefs_handler = (
+            on_open_appearance
+            if on_open_appearance is not None
+            else (lambda _: on_toggle_theme(next_mode) if on_toggle_theme else None)
+        )
+        top_right_controls.append(
+            ft.Container(
+                key="open_appearance_btn",
+                width=38,
+                height=36,
+                border_radius=9,
+                bgcolor=COLORS["paper_sunk"],
+                border=ft.Border.all(1, COLORS["card_border"]),
+                alignment=ft.Alignment(0, 0),
+                ink=True,
+                tooltip=get_string("prefs_tooltip"),
+                on_click=prefs_handler,
+                content=ft.Icon(
+                    ft.Icons.TUNE_ROUNDED,
+                    size=18,
+                    color=COLORS["text_main"],
+                ),
             )
         )
 
@@ -299,9 +340,29 @@ def build_content_area(
                             ),
                         ),
                         ft.Row(
-                            spacing=4,
+                            spacing=6,
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            controls=[prev_btn, page_label, next_btn],
+                            controls=[
+                                *(
+                                    [
+                                        page_size_dropdown,
+                                        ft.Text(
+                                            get_string("rows_per_page_label"),
+                                            size=12,
+                                            font_family=FONT_MEDIUM,
+                                            color=COLORS["text_sub"],
+                                        ),
+                                        ft.Container(width=4),
+                                    ]
+                                    if page_size_dropdown is not None
+                                    else []
+                                ),
+                                page_label,
+                                *([first_btn] if first_btn is not None else []),
+                                prev_btn,
+                                next_btn,
+                                *([last_btn] if last_btn is not None else []),
+                            ],
                         ),
                     ],
                 ),

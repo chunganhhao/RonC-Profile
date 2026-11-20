@@ -25,6 +25,7 @@ class Runner:
     def __init__(self, data_dir: Path, *args: str, restore_tabs: bool = True) -> None:
         env = {
             **os.environ,
+            "FOXPROFILE_PROFILES_FILE": str(data_dir / "profiles.json"),
             "FOXPROFILE_DATA_DIR": str(data_dir),
             "FOXPROFILE_HEADLESS": "true",
             "FOXPROFILE_RESTORE_TABS": "true" if restore_tabs else "false",

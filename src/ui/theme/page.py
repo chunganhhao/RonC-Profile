@@ -16,7 +16,7 @@ from .colors import (
 
 def build_page_theme() -> ft.Theme:
     is_dark = current_theme_mode() == "dark"
-    primary_color = COLORS["accent"] if is_dark else COLORS["sidebar"]
+    primary_color = COLORS["accent"]
     return ft.Theme(
         font_family=FONT,
         color_scheme_seed=primary_color,

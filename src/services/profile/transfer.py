@@ -10,7 +10,9 @@ from ...models.profile import (
     ENGINES,
     WEBRTC_MODES,
     Profile,
+    normalize_backup_codes,
     normalize_tags,
+    split_recovery_and_notes,
     valid_display_order,
 )
 from ...utils.totp import clean_totp_secret
@@ -19,6 +21,7 @@ from ...utils.validation import (
     valid_or_none,
     validate_locale,
     validate_profile_name,
+    validate_proxy_format,
     validate_timezone,
 )
 from ..browser.fingerprint import IDENTITY_FILES
@@ -101,15 +104,23 @@ def import_from_zip(
                 return False, f"Invalid profile name in archive: {msg}"
 
             tags = normalize_tags(profile_data.get("tags", []))
+            backup_codes = normalize_backup_codes(profile_data.get("backup_codes")) or None
             display_order = profile_data.get("display_order")
             if not valid_display_order(display_order):
                 return False, "Invalid display order in archive"
+            proxy = profile_data.get("proxy")
+            if proxy in ("", "None"):
+                proxy = None  # Legacy CLI direct-connection sentinel.
+            if proxy is not None and (
+                not isinstance(proxy, str) or not validate_proxy_format(proxy)[0]
+            ):
+                return False, "Invalid proxy configuration in archive"
             profile = Profile(
                 name=name,
                 core_version=profile_data.get("core_version")
                 if isinstance(profile_data.get("core_version"), str)
                 else None,
-                proxy=profile_data.get("proxy"),
+                proxy=proxy,
                 os_type=profile_data.get("os_type", "windows"),
                 timezone=valid_or_none(profile_data.get("timezone"), validate_timezone),
                 locale=valid_or_none(profile_data.get("locale"), validate_locale),
@@ -118,11 +129,26 @@ def import_from_zip(
                 else "camoufox",
                 group=tags[0] if tags else (profile_data.get("group") or "").strip() or None,
                 tags=tags,
+                extension_ids=[
+                    str(x).strip()
+                    for x in (profile_data.get("extension_ids") or [])
+                    if isinstance(x, str) and x.strip()
+                ]
+                if isinstance(profile_data.get("extension_ids"), list)
+                else [],
                 display_order=display_order,
                 account_uid=(profile_data.get("account_uid") or "").strip() or None,
                 account_password=profile_data.get("account_password") or None,
                 two_fa_secret=clean_totp_secret(profile_data.get("two_fa_secret")) or None,
-                notes=(profile_data.get("notes") or "").strip() or None,
+                recovery_email=split_recovery_and_notes(
+                    profile_data.get("recovery_email"), profile_data.get("notes")
+                )[0]
+                or None,
+                backup_codes=backup_codes,
+                notes=split_recovery_and_notes(
+                    profile_data.get("recovery_email"), profile_data.get("notes")
+                )[1]
+                or None,
                 start_url=normalize_start_url(profile_data.get("start_url")) or None,
                 webrtc_mode=profile_data.get("webrtc_mode")
                 if profile_data.get("webrtc_mode") in WEBRTC_MODES

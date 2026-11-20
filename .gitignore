@@ -13,6 +13,8 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+/.native-build/
+/native-build.log
 develop-eggs/
 dist/
 downloads/
@@ -180,6 +182,8 @@ camoufox_data/
 profiles.json
 proxies.json
 warming_tasks.json
+extensions.json
+extensions_data/
 logs/
 
 # Tooling artefacts

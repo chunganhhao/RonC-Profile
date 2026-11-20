@@ -11,7 +11,12 @@ from fastapi.testclient import TestClient
 
 from src.api.dependencies import get_browser_launcher, get_event_bus, get_profile_manager
 from src.api.routes.profiles import router
-from src.models.profile import Profile, normalize_tags
+from src.models.profile import (
+    Profile,
+    extract_backup_code_tokens,
+    normalize_backup_codes,
+    normalize_tags,
+)
 from src.services.profile import manager as pm_mod
 from src.services.profile.transfer import export_to_zip, import_from_zip
 
@@ -228,3 +233,141 @@ def test_rename_keeps_legacy_row_position_and_identity(pm, tmp_path):
     assert pm.profiles["renamed"].account_uid == "fixed@example.test"
     assert pm.profiles["renamed"].core_version == "fixture-core"
     assert (tmp_path / "data" / "renamed" / "session.fixture").read_text() == "unchanged"
+
+
+def test_backup_codes_parse_persist_api_and_zip_round_trip(pm, tmp_path, monkeypatch):
+    import asyncio
+
+    from src.api.app import create_app
+    from src.core import config as app_config
+    from src.core.container import Container
+    from src.mcp_server import server as mcp_srv
+
+    monkeypatch.setattr(app_config, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(app_config, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr("src.core.container.LOG_DIR", str(tmp_path / "logs"))
+
+    sheet = (
+        "FIXTURE BACKUP CODES\n"
+        "Synthetic verification sheet for automated tests.\n\n"
+        "1. 1111 0001        6. 1111 0006\n"
+        "2. 1111 0002        7. 1111 0007\n"
+        "3. 1111 0003        8. 1111 0008\n"
+        "4. 1111 0004        9. 1111 0009\n"
+        "5. 1111 0005       10. 1111 0010\n\n"
+        "(fixture-user@example.test)"
+    )
+    canary = "1111 0001"
+    tokens = extract_backup_code_tokens(sheet)
+    assert tokens == [
+        "1111 0001",
+        "1111 0006",
+        "1111 0002",
+        "1111 0007",
+        "1111 0003",
+        "1111 0008",
+        "1111 0004",
+        "1111 0009",
+        "1111 0005",
+        "1111 0010",
+    ]
+    assert normalize_backup_codes("  1. 1111 0001\r\n2. 1111 0002  ") == (
+        "1. 1111 0001\n2. 1111 0002"
+    )
+    with pytest.raises(ValueError, match="4096"):
+        normalize_backup_codes("x" * 4097)
+
+    assert pm.add_profile("bkp", "", "macos", backup_codes=sheet)
+    assert pm.profiles["bkp"].backup_codes == sheet
+    reloaded = pm_mod.ProfileManager()
+    assert reloaded.profiles["bkp"].backup_codes == sheet
+
+    # ZIP round-trip preserves backup_codes even when browser data is excluded
+    ok, archive = export_to_zip(
+        reloaded.profiles["bkp"], str(tmp_path / "absent"), str(tmp_path), include_data=False
+    )
+    assert ok
+    ok_imp, imported = import_from_zip(archive, str(tmp_path / "imported"))
+    assert ok_imp and imported.backup_codes == sheet
+
+    # Authenticated REST & MCP metadata must NOT expose raw backup codes;
+    # only the dedicated authenticated GET /{name}/backup-codes route returns them with no-store.
+    container = Container()
+    monkeypatch.setattr("src.api.app.API_TOKEN", "fixture-secret-token")
+    monkeypatch.setattr("src.api.auth.API_TOKEN", "fixture-secret-token")
+    app = create_app(container)
+    app.dependency_overrides[get_profile_manager] = lambda: pm
+    app.dependency_overrides[get_browser_launcher] = lambda: SimpleNamespace(
+        is_running=lambda _: False, running_profile_names=lambda: set()
+    )
+    app.dependency_overrides[get_event_bus] = lambda: SimpleNamespace(emit=lambda: None)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    auth = {"Authorization": "Bearer fixture-secret-token"}
+
+    assert client.get("/api/v1/profiles/bkp/backup-codes").status_code == 401
+    res_list = client.get("/api/v1/profiles", headers=auth)
+    assert res_list.status_code == 200
+    assert canary not in res_list.text
+    list_item = next(item for item in res_list.json()["profiles"] if item["name"] == "bkp")
+    assert list_item["has_backup_codes"] is True
+    assert "backup_codes" not in list_item
+
+    res_get = client.get("/api/v1/profiles/bkp", headers=auth)
+    assert res_get.status_code == 200
+    assert canary not in res_get.text
+    assert res_get.json()["has_backup_codes"] is True
+    assert "backup_codes" not in res_get.json()
+
+    res_post = client.post(
+        "/api/v1/profiles",
+        headers=auth,
+        json={"name": "bkp-post", "os_type": "macos", "backup_codes": "1. 3333 0001"},
+    )
+    assert res_post.status_code == 201
+    assert "3333 0001" not in res_post.text
+    assert res_post.json()["has_backup_codes"] is True
+
+    # MCP metadata tools forward REST metadata without exposing backup codes or adding a secret tool
+    tool_names = set(mcp_srv.mcp._tool_manager._tools.keys())
+    assert not any("backup" in t_name for t_name in tool_names)
+
+    async def _fake_arequest(method, path, payload=None):
+        resp = client.request(method, f"/api/v1{path}", json=payload, headers=auth)
+        return resp.json()
+
+    monkeypatch.setattr(mcp_srv, "_arequest", _fake_arequest)
+    mcp_list = asyncio.run(mcp_srv.list_profiles())
+    mcp_detail = asyncio.run(mcp_srv.get_profile("bkp"))
+    assert canary not in json.dumps(mcp_list)
+    assert canary not in json.dumps(mcp_detail)
+
+    # Explicit on-demand backup-codes endpoint returns no-store + secret
+    res_bkp = client.get("/api/v1/profiles/bkp/backup-codes", headers=auth)
+    assert res_bkp.status_code == 200
+    assert res_bkp.headers.get("cache-control") == "no-store"
+    assert res_bkp.json() == {"name": "bkp", "has_backup_codes": True, "backup_codes": sheet}
+
+    # Notes-only PATCH omitting backup_codes preserves sheet; PATCH with "" clears it
+    res_notes_only = client.patch(
+        "/api/v1/profiles/bkp", headers=auth, json={"notes": "updated note"}
+    )
+    assert res_notes_only.status_code == 200
+    assert canary not in res_notes_only.text
+    assert pm.profiles["bkp"].backup_codes == sheet
+
+    res_patch = client.patch(
+        "/api/v1/profiles/bkp", headers=auth, json={"backup_codes": "1. 2222 0001"}
+    )
+    assert res_patch.status_code == 200
+    assert "2222 0001" not in res_patch.text
+    assert pm.profiles["bkp"].backup_codes == "1. 2222 0001"
+
+    res_bad = client.patch("/api/v1/profiles/bkp", headers=auth, json={"backup_codes": "x" * 4097})
+    assert res_bad.status_code == 400
+    assert pm.profiles["bkp"].backup_codes == "1. 2222 0001"
+
+    res_clear = client.patch("/api/v1/profiles/bkp", headers=auth, json={"backup_codes": ""})
+    assert res_clear.status_code == 200
+    assert res_clear.json()["has_backup_codes"] is False
+    assert pm.profiles["bkp"].backup_codes is None

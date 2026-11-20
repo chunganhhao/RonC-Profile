@@ -16,6 +16,8 @@ def _env(key: str, default: str) -> str:
 PROFILES_FILE = _env("PROFILES_FILE", "profiles.json")
 PROXY_POOL_FILE = _env("PROXY_POOL_FILE", "proxies.json")
 WARMING_FILE = _env("WARMING_FILE", "warming_tasks.json")
+EXTENSIONS_FILE = _env("EXTENSIONS_FILE", "extensions.json")
+EXTENSIONS_DIR = _env("EXTENSIONS_DIR", "extensions_data")
 DATA_DIR = _env("DATA_DIR", "camoufox_data")
 LOG_DIR = _env("LOG_DIR", "logs")
 LOG_LEVEL = _env("LOG_LEVEL", "INFO")

@@ -5,16 +5,24 @@ from collections.abc import Callable
 import flet as ft
 
 from ...core.strings import get_string
-from ...models.profile import DEFAULT_GROUPS, Profile
+from ...models.profile import (
+    DEFAULT_GROUPS,
+    Profile,
+    extract_backup_code_tokens,
+    normalize_backup_codes,
+)
 from ...utils.validation import validate_profile_name, validate_proxy_format
-from ..theme.colors import COLORS, FONT_SEMIBOLD
-from ..theme.styles import ACCENT_STYLE, DLG_FIELD_KWARGS
+from ..theme.colors import COLORS, FONT_DATA, FONT_SEMIBOLD
+from ..theme.styles import ACCENT_STYLE, DLG_FIELD_KWARGS, OUTLINE_STYLE
+from .responsive import bind_responsive_dialog
 
 FIELD_LABELS = {
     "display_order": "col_id",
     "name": "col_profile",
     "tags": "col_group",
     "proxy": "col_proxy",
+    "recovery_email": "recovery_email_label",
+    "backup_codes": "backup_codes_label",
     "notes": "notes_label",
 }
 
@@ -27,23 +35,37 @@ def open_profile_field_dialog(
     *,
     row_index: int = 1,
     known_tags: list[str] | None = None,
+    on_copy_code: Callable[[str], None] | None = None,
 ) -> None:
     if field not in FIELD_LABELS:
         raise ValueError("Unsupported profile field")
     label = get_string(FIELD_LABELS[field])
     tags = list(profile.tags or ([profile.group] if profile.group else []))
-    value = (
-        (profile.display_order or row_index)
-        if field == "display_order"
-        else getattr(profile, field)
+    if field == "display_order":
+        value: object = profile.display_order or row_index
+    elif field == "recovery_email":
+        value = profile.effective_recovery_email
+    elif field == "backup_codes":
+        value = profile.backup_codes or ""
+    elif field == "notes":
+        value = profile.effective_notes
+    else:
+        value = getattr(profile, field)
+    initial_backup_codes = (
+        normalize_backup_codes(profile.backup_codes) if field == "backup_codes" else ""
     )
+    is_multi = field in ("notes", "backup_codes")
     entry = ft.TextField(
         label=label,
         value="" if field == "tags" else str(value or ""),
+        hint_text=get_string("backup_codes_placeholder") if field == "backup_codes" else None,
         autofocus=True,
-        multiline=field == "notes",
-        min_lines=3 if field == "notes" else 1,
-        max_lines=5 if field == "notes" else 1,
+        multiline=is_multi,
+        min_lines=6 if field == "backup_codes" else (3 if field == "notes" else 1),
+        max_lines=10 if field == "backup_codes" else (5 if field == "notes" else 1),
+        text_style=ft.TextStyle(font_family=FONT_DATA, size=12.5)
+        if field == "backup_codes"
+        else None,
         **DLG_FIELD_KWARGS,
     )
     error = ft.Text("", color=COLORS["error"], size=12, visible=False)
@@ -129,6 +151,15 @@ def open_profile_field_dialog(
             if not valid:
                 report(message)
                 return
+        elif field == "backup_codes":
+            try:
+                draft = normalize_backup_codes(entry.value or "")
+            except ValueError as exc:
+                report(str(exc))
+                return
+            if draft == initial_backup_codes:
+                page.pop_dialog()
+                return
         message = on_save(draft)
         if message:
             report(message)
@@ -166,30 +197,94 @@ def open_profile_field_dialog(
         )
     else:
         controls.append(entry)
+        if field == "backup_codes":
+            code_chips = ft.Row(wrap=True, spacing=6, run_spacing=6)
+
+            def render_backup_chips(_: object = None) -> None:
+                raw_text = (entry.value or "").strip()
+                tokens = extract_backup_code_tokens(raw_text)
+                chip_items: list[ft.Control] = [
+                    ft.OutlinedButton(
+                        f"{idx}. {tok}",
+                        key=f"backup_code_chip_{idx}",
+                        height=30,
+                        style=OUTLINE_STYLE,
+                        on_click=lambda _, code=tok: on_copy_code(code) if on_copy_code else None,
+                    )
+                    for idx, tok in enumerate(tokens, 1)
+                ]
+                if raw_text:
+                    chip_items.append(
+                        ft.OutlinedButton(
+                            get_string("copy_backup_codes"),
+                            key="copy_all_backup_codes_btn",
+                            icon=ft.Icons.CONTENT_COPY_OUTLINED,
+                            height=30,
+                            style=OUTLINE_STYLE,
+                            on_click=lambda _: on_copy_code(raw_text) if on_copy_code else None,
+                        )
+                    )
+                code_chips.controls = chip_items
+
+            def on_bkp_change(_: object = None) -> None:
+                render_backup_chips()
+                page.update()
+
+            entry.on_change = on_bkp_change
+            render_backup_chips()
+            controls.append(code_chips)
     hint = {
         "name": "field_name_hint",
         "proxy": "field_proxy_hint",
         "display_order": "field_order_hint",
         "tags": "field_tags_hint",
+        "recovery_email": "recovery_email_hint",
+        "backup_codes": "backup_codes_hint",
         "notes": "field_notes_hint",
     }[field]
     controls.extend([ft.Text(get_string(hint), size=12, color=COLORS["text_sub"]), error])
-    page.show_dialog(
-        ft.AlertDialog(
-            modal=True,
-            bgcolor=COLORS["card_bg"],
-            shape=ft.RoundedRectangleBorder(radius=12),
-            title=ft.Text(
-                get_string("edit_field", field=label), size=19, font_family=FONT_SEMIBOLD
-            ),
-            content=ft.Container(
-                width=480,
-                height=300 if field == "tags" else 230 if field == "notes" else 180,
-                content=ft.Column(controls, tight=True, spacing=14, scroll=ft.ScrollMode.AUTO),
-            ),
-            actions=[
-                ft.TextButton(get_string("cancel"), on_click=lambda _: page.pop_dialog()),
-                ft.Button(get_string("save_changes"), style=ACCENT_STYLE, on_click=submit),
-            ],
-        )
+    base_h = (
+        340
+        if field == "backup_codes"
+        else 300
+        if field == "tags"
+        else 230
+        if field == "notes"
+        else 180
     )
+    body_container = ft.Container(
+        width=480,
+        height=base_h,
+        content=ft.Column(
+            controls,
+            tight=True,
+            spacing=14,
+            scroll=ft.ScrollMode.AUTO,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+        ),
+    )
+    dlg = ft.AlertDialog(
+        modal=True,
+        bgcolor=COLORS["card_bg"],
+        shape=ft.RoundedRectangleBorder(radius=12),
+        title=ft.Text(get_string("edit_field", field=label), size=19, font_family=FONT_SEMIBOLD),
+        content=body_container,
+        actions=[
+            ft.TextButton(get_string("cancel"), on_click=lambda _: page.pop_dialog()),
+            ft.Button(get_string("save_changes"), style=ACCENT_STYLE, on_click=submit),
+        ],
+    )
+    bind_responsive_dialog(
+        page,
+        dlg,
+        body_container,
+        base_width=480,
+        base_height=base_h,
+        width_ratio=0.58,
+        height_ratio=0.50,
+        min_width=360,
+        max_width=640,
+        min_height=base_h,
+        max_height=420,
+    )
+    page.show_dialog(dlg)

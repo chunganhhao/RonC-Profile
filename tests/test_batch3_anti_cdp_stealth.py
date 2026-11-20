@@ -5,7 +5,7 @@ WebGPU + Client Hints Coherence Probe, and Humanized Behavioral Input Stealth.
 from __future__ import annotations
 
 import asyncio
-import copy
+import hashlib
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,12 +15,11 @@ from fastapi.testclient import TestClient
 
 from chrome_engine import engine as engine_mod
 from chrome_engine import persona as personas
-from chrome_engine import probe, stealth
+from chrome_engine import stealth
 from chrome_engine.engine import ChromeEngine, build_args
 from chrome_engine.persona import Persona
 from src.api.app import create_app
 from src.core.container import Container
-from src.services.browser import control as control_mod
 from src.services.browser.control import PageController
 
 
@@ -64,6 +63,22 @@ def test_anti_cdp_init_script_and_webgpu_profiles():
     assert '"platform": "linux"' in lin_script
     assert "clampDeviceMemory" in win_script
     assert "RE_LEAK" in win_script
+    for i in range(1, 14):
+        v, a, d, desc = stealth._MACOS_WEBGPU_TABLE[(3 * i) % 13]
+        assert stealth.webgpu_profile_for("macos", 3 * i) == {
+            "vendor": v,
+            "architecture": a,
+            "device": d,
+            "description": desc,
+        }
+    for i in range(13):
+        v, a, d, desc = stealth._WIN_WEBGPU_TABLE[(3 * i) % 13]
+        assert stealth.webgpu_profile_for("windows", 3 * i) == {
+            "vendor": v,
+            "architecture": a,
+            "device": d,
+            "description": desc,
+        }
 
 
 def test_bezier_curve_and_keystroke_delays():
@@ -80,10 +95,58 @@ def test_bezier_curve_and_keystroke_delays():
     assert stealth.keystroke_delays_ms("") == []
 
 
-def test_chrome_engine_block_webrtc_and_init_script_injection(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    (
+        "native_realms",
+        "explicit_executable",
+        "selected_host",
+        "manifest_mode",
+        "expected_scripts",
+    ),
+    [
+        (False, False, "macos", "none", 1),
+        (False, False, "macos", "valid", 0),
+        (False, True, "macos", "valid", 0),
+        (False, True, "macos", "failed_status", 1),
+        (False, True, "macos", "bad_sha", 1),
+        (False, True, "macos", "none", 1),
+        (True, False, "macos", "none", 1),
+        (True, False, "windows-x64", "none", 1),
+    ],
+)
+def test_chrome_engine_block_webrtc_and_init_script_injection(
+    tmp_path,
+    monkeypatch,
+    native_realms,
+    explicit_executable,
+    selected_host,
+    manifest_mode,
+    expected_scripts,
+):
     """Verify ChromeEngine sets WEBRTC_POLICY_PROXY when block_webrtc=True and injects init script."""
-    exe = tmp_path / "chrome"
-    exe.write_bytes(b"")
+    if manifest_mode != "none":
+        exe = tmp_path / "Chromium.app" / "Contents" / "MacOS" / "Chromium"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"native-stub")
+        from chrome_engine.native_bundle import bundle_sha256
+
+        monkeypatch.setattr(
+            engine_mod, "NATIVE_REALM_BUNDLES", {bundle_sha256(tmp_path / "Chromium.app")}
+        )
+        sha = hashlib.sha256(b"native-stub").hexdigest()
+        manifest = {
+            "binary_sha256": "0" * 64 if manifest_mode == "bad_sha" else sha,
+            "acceptance": (
+                "FAILED_OR_INCOMPLETE"
+                if manifest_mode == "failed_status"
+                else "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
+            ),
+            "cases": {"macos:2": {}, "macos:3": {}},
+        }
+        (tmp_path / "native-acceptance.json").write_text(json.dumps(manifest), encoding="utf-8")
+    else:
+        exe = tmp_path / "chrome"
+        exe.write_bytes(b"")
     added_scripts: list[str] = []
 
     class FakeContext:
@@ -115,12 +178,31 @@ def test_chrome_engine_block_webrtc_and_init_script_injection(tmp_path, monkeypa
 
     monkeypatch.setattr(pw, "async_playwright", lambda: FakeStarter())
     monkeypatch.setattr(engine_mod, "host_os", lambda: "macos")
+    from chrome_engine import release as release_mod
+    from chrome_engine.release import Asset, Release
+
+    mixed = Release(
+        "fixture",
+        {
+            "macos": Asset("fixture", "test", 0, "zip", "chrome", native_realms),
+            "windows-x64": Asset("fixture", "test", 0, "zip", "chrome"),
+        },
+    )
+    monkeypatch.setattr(release_mod, "get_release", lambda _: mixed)
+    monkeypatch.setattr(release_mod, "host_platform", lambda: selected_host)
+    monkeypatch.setattr(engine_mod.fetch, "installed_executable", lambda _: exe)
+    from chrome_engine import search
+
+    async def no_search(context):
+        pass
+
+    monkeypatch.setattr(search, "initialize_search", no_search)
 
     profile_dir = tmp_path / "prof"
     eng = ChromeEngine(
         profile_dir,
         platform="macos",
-        executable=exe,
+        executable=exe if explicit_executable else None,
         block_webrtc=True,
         stealth_js=True,
     )
@@ -128,9 +210,11 @@ def test_chrome_engine_block_webrtc_and_init_script_injection(tmp_path, monkeypa
     try:
         prefs = json.loads((profile_dir / "Default" / "Preferences").read_text("utf-8"))
         assert prefs["webrtc"]["ip_handling_policy"] == engine_mod.WEBRTC_POLICY_PROXY
-        assert len(added_scripts) == 1
-        assert "clampDeviceMemory" in added_scripts[0]
-        assert "--disable-blink-features=AutomationControlled" in build_args(eng.persona)
+        assert len(added_scripts) == expected_scripts
+        if expected_scripts:
+            assert "clampDeviceMemory" in added_scripts[0]
+        assert "--disable-blink-features=AutomationControlled" not in build_args(eng.persona)
+        assert "--disable-blink-features=AutomationControlled" in engine_mod.IGNORED_DEFAULT_ARGS
     finally:
         asyncio.run(eng.stop())
 
@@ -217,9 +301,7 @@ def test_page_controller_humanized_click_type_and_scroll():
     assert moves[-1] == (240.0, 180.0)
     assert clicks == [(240.0, 180.0)]
 
-    res_type = asyncio.run(
-        controller.dispatch("keyboard_type", {"text": "abc", "humanize": True})
-    )
+    res_type = asyncio.run(controller.dispatch("keyboard_type", {"text": "abc", "humanize": True}))
     assert res_type["title"] == "Rich"
     assert "".join(typed) == "abc"
 
@@ -299,6 +381,7 @@ def test_worker_variants_base_url_module_tla_and_shared_worker_semantics():
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from pathlib import Path
+
     from playwright.sync_api import sync_playwright
 
     exe = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -464,9 +547,9 @@ def test_worker_variants_base_url_module_tla_and_shared_worker_semantics():
                       return results;
                     }"""
                 )
-                assert default_options == [
-                    {"name": "", "connection": i} for i in range(1, 5)
-                ] + [{"name": "null", "connection": 1}], default_options
+                assert default_options == [{"name": "", "connection": i} for i in range(1, 5)] + [
+                    {"name": "null", "connection": 1}
+                ], default_options
 
                 # Verify R4-B3-F1: zero stealth registry keys or markers in web-observable storage
                 # and R5-B3-F2: synchronous TypeError on invalid SharedWorker options

@@ -61,9 +61,7 @@ def staging_home() -> Path:
 
 def backup_home() -> Path:
     return Path(
-        os.environ.get(
-            "FOXPROFILE_CORE_BACKUP_HOME", str(_default_storage_root() / "core-backups")
-        )
+        os.environ.get("FOXPROFILE_CORE_BACKUP_HOME", str(_default_storage_root() / "core-backups"))
     )
 
 
@@ -265,7 +263,10 @@ def stage(engine: str, version: str, *, confirm_download: bool = False) -> dict:
         # Prune in another desktop/API process must not remove a live download.
         with profile_lease(home):
             exe = fetch.install_release(
-                release, asset, destination, prepare=prepare_camoufox if engine == "camoufox" else None
+                release,
+                asset,
+                destination,
+                prepare=prepare_camoufox if engine == "camoufox" else None,
             )
         return {"engine": engine, "version": version, "staged": exe.is_file(), "activated": False}
     finally:
@@ -502,7 +503,9 @@ def prune_unused(pm, bl, *, confirm_prune: bool = False) -> dict:
     if not confirm_prune:
         raise CoreError("Explicit prune confirmation is required")
     if os.name == "nt":
-        raise CoreError("Core/backup pruning on Windows is blocked until ACL verification is supported")
+        raise CoreError(
+            "Core/backup pruning on Windows is blocked until ACL verification is supported"
+        )
     if not _STAGE_LOCK.acquire(blocking=False):
         raise CoreError("Another core operation is already running; refresh before retrying")
     try:

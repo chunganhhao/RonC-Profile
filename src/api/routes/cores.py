@@ -44,9 +44,7 @@ class PruneRequest(BaseModel):
 
 
 @router.post("/activate")
-def activate(
-    request: ApplyRequest, container=Depends(_container)
-) -> dict:
+def activate(request: ApplyRequest, container=Depends(_container)) -> dict:
     try:
         if not (request.confirm_backup and request.confirm_apply):
             raise cores.CoreError("Separate backup and apply confirmations are required")
@@ -64,9 +62,7 @@ def activate(
 
 
 @router.post("/prune")
-def prune(
-    request: PruneRequest, container=Depends(_container)
-) -> dict:
+def prune(request: PruneRequest, container=Depends(_container)) -> dict:
     try:
         return cores.prune_unused(
             container.profile_manager,

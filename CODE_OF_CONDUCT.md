@@ -9,4 +9,4 @@ Tóm tắt:
 - Không quấy rối, không đăng nội dung xúc phạm, không công khai thông tin cá nhân của người khác.
 - Không dùng issue hay discussion để quảng cáo, bán tài khoản, bán proxy hoặc dịch vụ.
 
-Vi phạm có thể dẫn đến việc bị xóa bình luận, khóa issue hoặc chặn khỏi dự án. Báo cáo vi phạm cho maintainer qua GitHub ([@chienbm98](https://github.com/chienbm98)). Mọi báo cáo được giữ kín.
+Vi phạm có thể dẫn đến việc bị xóa bình luận, khóa issue hoặc chặn khỏi dự án. Báo cáo vi phạm cho maintainer qua GitHub ([@chunganhhao](https://github.com/chunganhhao)). Mọi báo cáo được giữ kín.

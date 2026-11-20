@@ -1,0 +1,752 @@
+diff --git a/gpu/command_buffer/common/gles2_cmd_utils.cc b/gpu/command_buffer/common/gles2_cmd_utils.cc
+--- a/gpu/command_buffer/common/gles2_cmd_utils.cc
++++ b/gpu/command_buffer/common/gles2_cmd_utils.cc
+@@ -343,6 +343,10 @@
+     case GL_BUFFER_MAP_OFFSET:
+       return 1;
+ 
++    // Internal attachment extents; Blink's JavaScript enum validation is unchanged.
++    case GL_TEXTURE_WIDTH:
++    case GL_TEXTURE_HEIGHT:
++      return 1;
+     // -- glGetFramebufferAttachmentParameteriv
+     case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE:
+       return 1;
+diff --git a/gpu/command_buffer/build_gles2_cmd_buffer.py b/gpu/command_buffer/build_gles2_cmd_buffer.py
+--- a/gpu/command_buffer/build_gles2_cmd_buffer.py
++++ b/gpu/command_buffer/build_gles2_cmd_buffer.py
+@@ -666,6 +666,8 @@
+   'FramebufferAttachmentParameter': {
+     'type': 'GLenum',
+     'valid': [
++      'GL_TEXTURE_WIDTH',
++      'GL_TEXTURE_HEIGHT',
+       'GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE',
+       'GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME',
+       'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL',
+diff --git a/gpu/command_buffer/service/gles2_cmd_validation_implementation_autogen.h b/gpu/command_buffer/service/gles2_cmd_validation_implementation_autogen.h
+--- a/gpu/command_buffer/service/gles2_cmd_validation_implementation_autogen.h
++++ b/gpu/command_buffer/service/gles2_cmd_validation_implementation_autogen.h
+@@ -233,6 +233,8 @@
+ }
+ 
+ static const GLenum valid_framebuffer_attachment_parameter_table[] = {
++    GL_TEXTURE_WIDTH,
++    GL_TEXTURE_HEIGHT,
+     GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
+     GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
+     GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL,
+diff --git a/gpu/command_buffer/service/gles2_cmd_decoder.cc b/gpu/command_buffer/service/gles2_cmd_decoder.cc
+--- a/gpu/command_buffer/service/gles2_cmd_decoder.cc
++++ b/gpu/command_buffer/service/gles2_cmd_decoder.cc
+@@ -7387,6 +7387,20 @@
+     GLsizei params_size) {
+   const char kFunctionName[] = "glGetFramebufferAttachmentParameteriv";
+   Framebuffer* framebuffer = GetFramebufferInfoForTarget(target);
++  if (pname == GL_TEXTURE_WIDTH || pname == GL_TEXTURE_HEIGHT) {
++    const Framebuffer::Attachment* att =
++        framebuffer ? framebuffer->GetAttachment(attachment) : nullptr;
++    if (att && att->samples() > 0) {
++      *params = -1;
++      return;
++    }
++    const gfx::Size size =
++        att ? gfx::Size(att->width(), att->height())
++            : (framebuffer ? framebuffer->GetFramebufferValidSize()
++                           : GetBoundReadFramebufferSize());
++    *params = pname == GL_TEXTURE_WIDTH ? size.width() : size.height();
++    return;
++  }
+   if (!framebuffer) {
+     if (!feature_info_->IsWebGL2OrES3Context()) {
+       LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, kFunctionName,
+diff --git a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
+--- a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
++++ b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
+@@ -1641,6 +1641,86 @@
+ 
+   CheckErrorCallbackState();
+ 
++  if (pname == GL_TEXTURE_WIDTH || pname == GL_TEXTURE_HEIGHT) {
++    if (bufsize < 1) {
++      *length = 0;
++      InsertError(GL_INVALID_OPERATION, "No space for attachment extent.");
++      return error::kNoError;
++    }
++    GLint object_type = GL_NONE;
++    GLint object = 0;
++    api()->glGetFramebufferAttachmentParameterivEXTFn(
++        target, updated_attachment, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
++        &object_type);
++    api()->glGetFramebufferAttachmentParameterivEXTFn(
++        target, updated_attachment, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
++        &object);
++    *params = 0;
++    if (object_type == GL_RENDERBUFFER && object > 0) {
++      GLint previous = 0;
++      api()->glGetIntegervFn(GL_RENDERBUFFER_BINDING, &previous);
++      if (previous != object) {
++        api()->glBindRenderbufferEXTFn(GL_RENDERBUFFER,
++                                       static_cast<GLuint>(object));
++      }
++      GLint samples = 0;
++      if (feature_info_->gl_version_info().is_es3) {
++        api()->glGetRenderbufferParameterivEXTFn(
++            GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &samples);
++      }
++      if (samples > 0) {
++        *params = -1;
++      } else {
++        api()->glGetRenderbufferParameterivEXTFn(
++            GL_RENDERBUFFER,
++            pname == GL_TEXTURE_WIDTH ? GL_RENDERBUFFER_WIDTH
++                                      : GL_RENDERBUFFER_HEIGHT,
++            params);
++      }
++      if (previous != object) {
++        api()->glBindRenderbufferEXTFn(GL_RENDERBUFFER,
++                                       static_cast<GLuint>(previous));
++      }
++    } else if (object_type == GL_TEXTURE && object > 0) {
++      GLuint client_id = 0;
++      scoped_refptr<TexturePassthrough> texture;
++      if (resources_->texture_id_map.GetClientID(static_cast<GLuint>(object),
++                                                 &client_id) &&
++          resources_->texture_object_map.GetServiceID(client_id, &texture) &&
++          texture) {
++        GLint level = 0;
++        GLint face = 0;
++        api()->glGetFramebufferAttachmentParameterivEXTFn(
++            target, updated_attachment, GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL,
++            &level);
++        api()->glGetFramebufferAttachmentParameterivEXTFn(
++            target, updated_attachment,
++            GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE, &face);
++        const GLenum tex_target = texture->target();
++        const TextureTarget internal_type = GLenumToTextureTarget(tex_target);
++        if (internal_type < TextureTarget::kUnkown) {
++          const auto& unit_bindings =
++              bound_textures_[static_cast<size_t>(internal_type)];
++          const GLuint old_texture =
++              active_texture_unit_ < unit_bindings.size() &&
++                      unit_bindings[active_texture_unit_].texture
++                  ? unit_bindings[active_texture_unit_].texture->service_id()
++                  : 0;
++          if (old_texture != static_cast<GLuint>(object)) {
++            api()->glBindTextureFn(tex_target, static_cast<GLuint>(object));
++          }
++          api()->glGetTexLevelParameterivANGLEFn(
++              face ? static_cast<GLenum>(face) : tex_target, level, pname,
++              params);
++          if (old_texture != static_cast<GLuint>(object)) {
++            api()->glBindTextureFn(tex_target, old_texture);
++          }
++        }
++      }
++    }
++    *length = CheckErrorCallbackState() ? 0 : 1;
++    return error::kNoError;
++  }
+   api()->glGetFramebufferAttachmentParameterivRobustANGLEFn(
+       target, updated_attachment, pname, bufsize, length, params);
+ 
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h
+@@ -1958,6 +1958,11 @@
+   gfx::Rect SafeGetImageSize(Image*);
+   gfx::Rect GetImageDataSize(ImageData*);
+ 
++  // Canonical source readback for native WebGL UNORM and float noise contracts.
++  bool ReadFingerprintPixels(WebGLFramebuffer*, GLint, GLint, GLsizei, GLsizei,
++                             GLenum, GLenum, uint8_t*, size_t, GLuint = 0,
++                             int64_t = 0);
++
+   // Helper implementing readPixels for WebGL 1.0 and 2.0.
+   void ReadPixelsHelper(GLint x,
+                         GLint y,
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -25,7 +25,14 @@
+ 
+ #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h"
+ 
++#include <algorithm>
++#include <array>
++#include <cmath>
++#include <cstdint>
++#include <cstring>
+ #include <memory>
++#include <string>
++#include <unordered_set>
+ #include <utility>
+ 
+ #include "base/bit_cast.h"
+@@ -5125,6 +5132,499 @@
+   ReadPixelsHelper(x, y, width, height, format, type, pixels.Get(), 0);
+ }
+ 
++
++namespace {
++
++float HalfToFloat(uint16_t h) {
++  const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
++  const uint32_t exp = (h >> 10) & 0x1Fu;
++  const uint32_t mant = h & 0x03FFu;
++  uint32_t out = 0;
++  if (exp == 0u) {
++    if (mant == 0u) {
++      out = sign;
++    } else {
++      uint32_t m = mant;
++      uint32_t e = 127u - 14u;
++      while ((m & 0x0400u) == 0u) {
++        m <<= 1;
++        --e;
++      }
++      m &= 0x03FFu;
++      out = sign | (e << 23) | (m << 13);
++    }
++  } else if (exp == 0x1Fu) {
++    out = sign | 0x7F800000u | (mant ? (mant << 13) | 0x00400000u : 0u);
++  } else {
++    out = sign | ((exp + (127u - 15u)) << 23) | (mant << 13);
++  }
++  return base::bit_cast<float>(out);
++}
++
++uint16_t FloatToHalf(float value) {
++  const uint32_t bits = base::bit_cast<uint32_t>(value);
++  const uint16_t sign = static_cast<uint16_t>((bits >> 16) & 0x8000u);
++  const uint32_t abs_bits = bits & 0x7FFFFFFFu;
++  if (abs_bits > 0x7F800000u) {
++    const uint32_t mant = (abs_bits & 0x007FFFFFu) >> 13;
++    return static_cast<uint16_t>(sign | 0x7E00u | (mant ? mant : 1u));
++  }
++  if (abs_bits >= 0x47800000u) {
++    return static_cast<uint16_t>(sign | 0x7C00u);
++  }
++  if (abs_bits < 0x38800000u) {
++    const uint32_t exp = abs_bits >> 23;
++    if (exp < 102u) {
++      return sign;
++    }
++    const uint32_t shift = 126u - exp;
++    const uint32_t mant = 0x00800000u | (abs_bits & 0x007FFFFFu);
++    uint32_t h_mant = mant >> shift;
++    const uint32_t rem = mant & ((1u << shift) - 1u);
++    const uint32_t half = 1u << (shift - 1u);
++    if (rem > half || (rem == half && (h_mant & 1u) != 0u)) {
++      ++h_mant;
++    }
++    return static_cast<uint16_t>(sign | h_mant);
++  }
++  uint32_t exp = (abs_bits >> 23) - (127u - 15u);
++  uint32_t mant = abs_bits & 0x007FFFFFu;
++  const uint32_t round_bits = mant & 0x00001FFFu;
++  mant >>= 13;
++  if (round_bits > 0x00001000u ||
++      (round_bits == 0x00001000u && (mant & 1u) != 0u)) {
++    ++mant;
++    if (mant == 0x0400u) {
++      mant = 0u;
++      ++exp;
++      if (exp >= 31u) {
++        return static_cast<uint16_t>(sign | 0x7C00u);
++      }
++    }
++  }
++  return static_cast<uint16_t>(sign | (exp << 10) | mant);
++}
++
++uint8_t FingerprintBit(const std::string& seed_str, int x, int y,
++                       const char* suffix) {
++  const std::string key = seed_str + "_x" + std::to_string(x) + "_y" +
++                          std::to_string(y) + suffix;
++  return static_cast<uint8_t>(std::hash<std::string>{}(key) & 1u);
++}
++
++void ShuffleExtendedWebGLPixels(uint8_t* data, int width, int height,
++                                size_t stride, size_t pixel_size, GLenum type,
++                                const std::string& seed_str) {
++  if (!data || width < 2 || height < 2 || seed_str.empty()) {
++    return;
++  }
++  const int64_t area_budget = (static_cast<int64_t>(width) * height) / 128;
++  const int max_pixels =
++      static_cast<int>(std::clamp<int64_t>(area_budget, 2, 10));
++  int modified_pixels = 0;
++  std::unordered_set<int> processed_rows;
++  std::unordered_set<int> processed_cols;
++
++  auto pixel_ptr = [&](int px, int py) -> uint8_t* {
++    return UNSAFE_TODO(data + static_cast<size_t>(py) * stride +
++                       static_cast<size_t>(px) * pixel_size);
++  };
++  auto load_float4 = [&](const uint8_t* ptr) -> std::array<float, 4> {
++    std::array<float, 4> out{};
++    if (type == GL_FLOAT) {
++      UNSAFE_TODO(std::memcpy(out.data(), ptr, 16));
++      return out;
++    }
++    std::array<uint16_t, 4> raw{};
++    UNSAFE_TODO(std::memcpy(raw.data(), ptr, 8));
++    for (size_t i = 0; i < 4; ++i) {
++      out[i] = HalfToFloat(raw[i]);
++    }
++    return out;
++  };
++  auto store_float4 = [&](uint8_t* ptr, const std::array<float, 4>& in) {
++    if (type == GL_FLOAT) {
++      UNSAFE_TODO(std::memcpy(ptr, in.data(), 16));
++      return;
++    }
++    std::array<uint16_t, 4> raw{};
++    for (size_t i = 0; i < 4; ++i) {
++      raw[i] = FloatToHalf(in[i]);
++    }
++    UNSAFE_TODO(std::memcpy(ptr, raw.data(), 8));
++  };
++
++  for (int y = 0; y < height - 1 && modified_pixels < max_pixels; ++y) {
++    if (processed_rows.contains(y)) {
++      continue;
++    }
++    for (int x = 0; x < width - 1 && modified_pixels < max_pixels; ++x) {
++      if (processed_cols.contains(x)) {
++        continue;
++      }
++      uint8_t* cur_ptr = pixel_ptr(x, y);
++      const uint8_t* right_ptr = pixel_ptr(x + 1, y);
++      const uint8_t* bottom_ptr = pixel_ptr(x, y + 1);
++      if (type == GL_UNSIGNED_SHORT_5_5_5_1) {
++        uint16_t cur = 0;
++        uint16_t right = 0;
++        uint16_t bottom = 0;
++        UNSAFE_TODO(std::memcpy(&cur, cur_ptr, 2));
++        UNSAFE_TODO(std::memcpy(&right, right_ptr, 2));
++        UNSAFE_TODO(std::memcpy(&bottom, bottom_ptr, 2));
++        unsigned r = (cur >> 11) & 0x1Fu;
++        unsigned g = (cur >> 6) & 0x1Fu;
++        unsigned b = (cur >> 1) & 0x1Fu;
++        const bool is_valid =
++            !((r == 0u && g == 0u && b == 0u) ||
++              (r == 31u && g == 31u && b == 31u));
++        if (!is_valid || (cur == right && cur == bottom)) {
++          continue;
++        }
++        const unsigned a = cur & 0x1u;
++        r = (r & ~0x1u) | FingerprintBit(seed_str, x, y, "_r");
++        g = (g & ~0x1u) | FingerprintBit(seed_str, x, y, "_g");
++        b = (b & ~0x1u) | FingerprintBit(seed_str, x, y, "_b");
++        const uint16_t packed =
++            static_cast<uint16_t>((r << 11) | (g << 6) | (b << 1) | a);
++        UNSAFE_TODO(std::memcpy(cur_ptr, &packed, 2));
++        ++modified_pixels;
++        processed_rows.insert(y);
++        processed_cols.insert(x);
++        continue;
++      }
++
++      std::array<float, 4> cur = load_float4(cur_ptr);
++      bool in_gamut = true;
++      for (size_t i = 0; i < 4; ++i) {
++        if (!std::isfinite(cur[i]) || cur[i] < 0.0f || cur[i] > 1.0f) {
++          in_gamut = false;
++          break;
++        }
++      }
++      if (!in_gamut) {
++        continue;
++      }
++      std::array<uint8_t, 3> q{};
++      for (size_t i = 0; i < 3; ++i) {
++        q[i] = static_cast<uint8_t>(std::lround(cur[i] * 255.0f));
++      }
++      if ((q[0] == 0u && q[1] == 0u && q[2] == 0u) ||
++          (q[0] == 255u && q[1] == 255u && q[2] == 255u)) {
++        continue;
++      }
++      const std::array<float, 4> right = load_float4(right_ptr);
++      const std::array<float, 4> bottom = load_float4(bottom_ptr);
++      bool is_edge = false;
++      for (size_t i = 0; i < 4; ++i) {
++        if (!(cur[i] == right[i]) || !(cur[i] == bottom[i])) {
++          is_edge = true;
++          break;
++        }
++      }
++      if (!is_edge) {
++        continue;
++      }
++      const std::array<uint8_t, 3> bits = {
++          FingerprintBit(seed_str, x, y, "_r"),
++          FingerprintBit(seed_str, x, y, "_g"),
++          FingerprintBit(seed_str, x, y, "_b"),
++      };
++      for (size_t i = 0; i < 3; ++i) {
++        const uint8_t perturbed = (q[i] & ~uint8_t{1}) | bits[i];
++        if (perturbed != q[i]) {
++          cur[i] = static_cast<float>(perturbed) / 255.0f;
++        }
++      }
++      store_float4(cur_ptr, cur);
++      ++modified_pixels;
++      processed_rows.insert(y);
++      processed_cols.insert(x);
++    }
++  }
++}
++
++}  // namespace
++
++bool WebGLRenderingContextBase::ReadFingerprintPixels(
++    WebGLFramebuffer* framebuffer, GLint x, GLint y, GLsizei width,
++    GLsizei height, GLenum format, GLenum type, uint8_t* data,
++    size_t destination_size, GLuint pack_buffer, int64_t pack_offset) {
++  constexpr GLenum kInternalTextureWidth = 0x1000;
++  constexpr GLenum kInternalTextureHeight = 0x1001;
++  const auto* command = base::CommandLine::ForCurrentProcess();
++  if (!command->HasSwitch(switches::kFingerprint) ||
++      command->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") !=
++          std::string::npos ||
++      width <= 0 || height <= 0 ||
++      !(base::CheckedNumeric<int32_t>(x) + width).IsValid() ||
++      !(base::CheckedNumeric<int32_t>(y) + height).IsValid()) {
++    return false;
++  }
++  const std::string seed_str = command->GetSwitchValueASCII(switches::kFingerprint);
++  if (seed_str.empty()) {
++    return false;
++  }
++  std::optional<SkColorType> sk_color_type;
++  size_t pixel_size = 0;
++  size_t type_align = 1u;
++  if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
++    sk_color_type = kRGBA_8888_SkColorType;
++    pixel_size = 4u;
++    type_align = 1u;
++  } else if (format == GL_RGB && type == GL_UNSIGNED_SHORT_5_6_5) {
++    sk_color_type = kRGB_565_SkColorType;
++    pixel_size = 2u;
++    type_align = 2u;
++  } else if (format == GL_RGBA && type == GL_UNSIGNED_SHORT_4_4_4_4) {
++    sk_color_type = kARGB_4444_SkColorType;
++    pixel_size = 2u;
++    type_align = 2u;
++  } else if (format == GL_RGBA && type == GL_UNSIGNED_SHORT_5_5_5_1) {
++    pixel_size = 2u;
++    type_align = 2u;
++  } else if (format == GL_RGBA &&
++             (type == GL_HALF_FLOAT || type == GL_HALF_FLOAT_OES)) {
++    pixel_size = 8u;
++    type_align = 2u;
++  } else if (format == GL_RGBA && type == GL_FLOAT) {
++    pixel_size = 16u;
++    type_align = 4u;
++  } else {
++    return false;  // Integer/unknown read formats fall back to driver validation.
++  }
++  if (pack_buffer &&
++      (pack_offset < 0 ||
++       (static_cast<uint64_t>(pack_offset) % type_align) != 0)) {
++    return false;
++  }
++  const auto pack = GetPackPixelStoreParams();
++  const int64_t data_store_width = pack.row_length > 0 ? pack.row_length : width;
++  if (static_cast<int64_t>(pack.skip_pixels) + width > data_store_width) {
++    return false;
++  }
++  const GLenum target = IsWebGL2() ? GL_READ_FRAMEBUFFER : GL_FRAMEBUFFER;
++  if (ContextGL()->CheckFramebufferStatus(target) != GL_FRAMEBUFFER_COMPLETE) {
++    return false;
++  }
++  if (framebuffer &&
++      (framebuffer->GetReadBuffer() == GL_NONE ||
++       (!framebuffer->Opaque() &&
++        !framebuffer->GetAttachmentObject(framebuffer->GetReadBuffer())))) {
++    return false;
++  }
++  if (!framebuffer && IsWebGL2()) {
++    GLint read_buffer = GL_BACK;
++    ContextGL()->GetIntegerv(GL_READ_BUFFER, &read_buffer);
++    if (read_buffer == GL_NONE) {
++      return false;
++    }
++  }
++  GLint implementation_format = 0;
++  GLint implementation_type = 0;
++  ContextGL()->GetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT,
++                           &implementation_format);
++  ContextGL()->GetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE,
++                           &implementation_type);
++  const bool is_unorm_implementation_type =
++      implementation_type == GL_UNSIGNED_BYTE ||
++      implementation_type == GL_UNSIGNED_SHORT_5_6_5 ||
++      implementation_type == GL_UNSIGNED_SHORT_4_4_4_4 ||
++      implementation_type == GL_UNSIGNED_SHORT_5_5_5_1;
++  const bool is_half_float_type =
++      type == GL_HALF_FLOAT || type == GL_HALF_FLOAT_OES;
++  const bool is_half_float_impl =
++      implementation_format == GL_RGBA &&
++      (implementation_type == GL_HALF_FLOAT ||
++       implementation_type == GL_HALF_FLOAT_OES);
++  const bool is_float_impl =
++      implementation_type == GL_FLOAT ||
++      implementation_type == GL_HALF_FLOAT ||
++      implementation_type == GL_HALF_FLOAT_OES ||
++      implementation_type == GL_UNSIGNED_INT_10F_11F_11F_REV;
++  const bool matches_impl =
++      format == static_cast<GLenum>(implementation_format) &&
++      type == static_cast<GLenum>(implementation_type);
++  if (!matches_impl &&
++      !(format == GL_RGBA && type == GL_UNSIGNED_BYTE &&
++        is_unorm_implementation_type) &&
++      !(format == GL_RGBA && is_half_float_type && is_half_float_impl) &&
++      !(format == GL_RGBA && type == GL_FLOAT && is_float_impl)) {
++    return false;  // Preserve the driver's validation for illegal read pairs.
++  }
++  GLint source_width = drawingBufferWidth();
++  GLint source_height = drawingBufferHeight();
++  if (framebuffer) {
++    ContextGL()->GetFramebufferAttachmentParameteriv(
++        target, framebuffer->GetReadBuffer(), kInternalTextureWidth,
++        &source_width);
++    ContextGL()->GetFramebufferAttachmentParameteriv(
++        target, framebuffer->GetReadBuffer(), kInternalTextureHeight,
++        &source_height);
++  }
++  if (source_width < 0 || source_height < 0) {
++    return false;  // Multisampled attachment -> let driver emit INVALID_OPERATION.
++  }
++  if (source_width == 0 || source_height == 0) {
++    GLint attachment_type = GL_NONE;
++    if (framebuffer) {
++      ContextGL()->GetFramebufferAttachmentParameteriv(
++          target, framebuffer->GetReadBuffer(),
++          GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &attachment_type);
++    }
++    if (!framebuffer || attachment_type == GL_NONE) {
++      return false;  // Unattached readBuffer -> let driver emit INVALID_OPERATION.
++    }
++    SynthesizeGLError(GL_INVALID_OPERATION, "readPixels",
++                      "Native readback extent unavailable");
++    return true;
++  }
++  constexpr size_t kMaxReadbackBytes = 256u * 1024u * 1024u;
++  const base::CheckedNumeric<size_t> checked_source_stride =
++      base::CheckedNumeric<size_t>(static_cast<size_t>(source_width)) *
++      pixel_size;
++  const base::CheckedNumeric<size_t> checked_source_size =
++      checked_source_stride * static_cast<size_t>(source_height);
++  if (!checked_source_stride.IsValid() || !checked_source_size.IsValid() ||
++      checked_source_size.ValueOrDie() > kMaxReadbackBytes) {
++    SynthesizeGLError(GL_OUT_OF_MEMORY, "readPixels",
++                      "Native readback budget exceeded");
++    return true;  // Fail closed; never fall back to an unprotected read.
++  }
++  const size_t source_stride = checked_source_stride.ValueOrDie();
++  const size_t source_size = checked_source_size.ValueOrDie();
++  std::optional<SkImageInfo> sk_info;
++  if (sk_color_type.has_value()) {
++    const SkAlphaType alpha_type = *sk_color_type == kRGB_565_SkColorType
++                                       ? kOpaque_SkAlphaType
++                                       : kUnpremul_SkAlphaType;
++    sk_info = SkImageInfo::Make(source_width, source_height, *sk_color_type,
++                                alpha_type);
++    const size_t sk_size = sk_info->computeMinByteSize();
++    if (sk_info->isEmpty() || SkImageInfo::ByteSizeOverflowed(sk_size) ||
++        sk_size != source_size || sk_info->minRowBytes() != source_stride) {
++      SynthesizeGLError(GL_OUT_OF_MEMORY, "readPixels",
++                        "Native readback layout mismatch");
++      return true;
++    }
++  }
++  unsigned bytes = 0;
++  unsigned padding = 0;
++  unsigned skip = 0;
++  if (WebGLImageConversion::ComputeImageSizeInBytes(
++          format, type, width, height, 1, pack, &bytes, &padding, &skip) !=
++          GL_NO_ERROR ||
++      static_cast<uint64_t>(bytes) + skip > destination_size) {
++    SynthesizeGLError(GL_INVALID_OPERATION, "readPixels",
++                      "Invalid native pack layout");
++    return true;
++  }
++  const base::CheckedNumeric<size_t> checked_row_bytes =
++      base::CheckedNumeric<size_t>(static_cast<size_t>(width)) * pixel_size;
++  const base::CheckedNumeric<size_t> checked_stride =
++      base::CheckedNumeric<size_t>(
++          static_cast<size_t>(pack.row_length ? pack.row_length : width)) *
++          pixel_size +
++      static_cast<size_t>(padding);
++  if (!checked_row_bytes.IsValid() || !checked_stride.IsValid() ||
++      checked_row_bytes.ValueOrDie() > kMaxReadbackBytes) {
++    SynthesizeGLError(GL_OUT_OF_MEMORY, "readPixels",
++                      "Native row budget exceeded");
++    return true;
++  }
++  const size_t row_bytes = checked_row_bytes.ValueOrDie();
++  const size_t stride = checked_stride.ValueOrDie();
++  Vector<uint8_t> source(static_cast<wtf_size_t>(source_size));
++  uint8_t* tail = UNSAFE_TODO(source.data() + source_size - pixel_size);
++  UNSAFE_TODO(std::memset(tail, 0xA5, pixel_size));
++  if (pack_buffer) {
++    ContextGL()->BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
++  }
++  ContextGL()->PixelStorei(GL_PACK_ALIGNMENT, 1);
++  if (IsWebGL2()) {
++    ContextGL()->PixelStorei(GL_PACK_ROW_LENGTH, 0);
++    ContextGL()->PixelStorei(GL_PACK_SKIP_PIXELS, 0);
++    ContextGL()->PixelStorei(GL_PACK_SKIP_ROWS, 0);
++  }
++  ContextGL()->ReadPixels(0, 0, source_width, source_height, format, type,
++                          source.data());
++  bool read_succeeded = false;
++  for (size_t i = 0; i < pixel_size; ++i) {
++    if (UNSAFE_TODO(tail[i]) != 0xA5) {
++      read_succeeded = true;
++      break;
++    }
++  }
++  if (!read_succeeded) {
++    uint8_t probe[16];
++    UNSAFE_TODO(std::memset(probe, 0x5A, pixel_size));
++    ContextGL()->ReadPixels(source_width - 1, source_height - 1, 1, 1, format,
++                            type, probe);
++    for (size_t i = 0; i < pixel_size; ++i) {
++      if (UNSAFE_TODO(probe[i]) != 0x5A) {
++        read_succeeded = true;
++        break;
++      }
++    }
++  }
++  DrawingBufferClientRestorePixelPackParameters();
++  DrawingBufferClientRestorePixelPackBufferBinding();
++  if (!read_succeeded) {
++    return true;
++  }
++  // Both canvas exports and native noise use top-down source coordinates.
++  for (int row = 0; row < source_height / 2; ++row) {
++    uint8_t* top = UNSAFE_TODO(
++        source.data() + static_cast<size_t>(row) * source_stride);
++    uint8_t* bottom = UNSAFE_TODO(
++        source.data() +
++        static_cast<size_t>(source_height - 1 - row) * source_stride);
++    UNSAFE_TODO(std::swap_ranges(top, top + source_stride, bottom));
++  }
++  if (sk_info.has_value()) {
++    StaticBitmapImage::ShuffleSubchannelColorData(source.data(), *sk_info, 0, 0);
++  } else {
++    ShuffleExtendedWebGLPixels(source.data(), source_width, source_height,
++                               source_stride, pixel_size, type, seed_str);
++  }
++  const int64_t left = std::max<int64_t>(0, -static_cast<int64_t>(x));
++  const int64_t right =
++      std::min<int64_t>(width, static_cast<int64_t>(source_width) - x);
++  Vector<uint8_t> pbo_row(
++      static_cast<wtf_size_t>(pack_buffer ? row_bytes : 0));
++  for (int row = 0; row < height; ++row) {
++    const uint64_t destination =
++        static_cast<uint64_t>(skip) + static_cast<uint64_t>(row) * stride;
++    if (destination > destination_size ||
++        row_bytes > destination_size - destination) {
++      SynthesizeGLError(GL_INVALID_OPERATION, "readPixels",
++                        "Native row exceeds destination");
++      return true;
++    }
++    uint8_t* output =
++        pack_buffer ? pbo_row.data() : UNSAFE_TODO(data + destination);
++    UNSAFE_TODO(std::memset(output, 0, row_bytes));
++    const int64_t sy = static_cast<int64_t>(y) + row;
++    if (sy >= 0 && sy < source_height && left < right) {
++      const size_t position =
++          static_cast<size_t>(source_height - 1 - sy) * source_stride +
++          static_cast<size_t>(static_cast<int64_t>(x) + left) * pixel_size;
++      UNSAFE_TODO(std::memcpy(
++          output + static_cast<size_t>(left) * pixel_size,
++          source.data() + position,
++          static_cast<size_t>(right - left) * pixel_size));
++    }
++    if (pack_buffer) {
++      ContextGL()->BufferSubData(
++          GL_PIXEL_PACK_BUFFER,
++          static_cast<GLintptr>(static_cast<uint64_t>(pack_offset) +
++                                destination),
++          static_cast<GLsizeiptr>(row_bytes), output);
++    }
++  }
++  return true;
++}
++
+ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
+                                                  GLint y,
+                                                  GLsizei width,
+@@ -5198,37 +5698,9 @@
+     if (!binder.Succeeded()) {
+       return;
+     }
+-    ContextGL()->ReadPixels(x, y, width, height, format, type, data);
+-
+-    // Anti-detect pixel noise bounded to verified packed formats (#99, #102).
+-    const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-    if (command_line->HasSwitch(switches::kFingerprint) &&
+-        (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+-         command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") == std::string::npos)) {
+-      const auto pack_params = GetPackPixelStoreParams();
+-      if (pack_params.row_length == 0 && pack_params.skip_pixels == 0 &&
+-          pack_params.skip_rows == 0 && pack_params.alignment <= 4) {
+-        std::optional<SkImageInfo> image_info;
+-        if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
+-          image_info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType,
+-                                         kUnpremul_SkAlphaType);
+-        } else if ((width & 1) == 0 && format == GL_RGB &&
+-                   type == GL_UNSIGNED_SHORT_5_6_5) {
+-          image_info = SkImageInfo::Make(width, height, kRGB_565_SkColorType,
+-                                         kOpaque_SkAlphaType);
+-        } else if ((width & 1) == 0 && format == GL_RGBA &&
+-                   type == GL_UNSIGNED_SHORT_4_4_4_4) {
+-          image_info = SkImageInfo::Make(width, height, kARGB_4444_SkColorType,
+-                                         kUnpremul_SkAlphaType);
+-        }
+-        if (image_info.has_value()) {
+-          const size_t min_bytes = image_info->computeMinByteSize();
+-          if (!SkImageInfo::ByteSizeOverflowed(min_bytes) &&
+-              buffer_size.ValueOrDie() >= min_bytes) {
+-            StaticBitmapImage::ShuffleSubchannelColorData(data, *image_info, x, y);
+-          }
+-        }
+-      }
++    if (!ReadFingerprintPixels(framebuffer, x, y, width, height, format, type,
++                               data, buffer_size.ValueOrDie())) {
++      ContextGL()->ReadPixels(x, y, width, height, format, type, data);
+     }
+   }
+ }
+diff --git a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
+--- a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
+@@ -904,13 +904,20 @@
+ 
+   ClearIfComposited(kClearCallerOther);
+ 
++  if (isContextLost() || !GetDrawingBuffer())
++    return;
++
+   {
+     ScopedDrawingBufferBinder binder(GetDrawingBuffer(), framebuffer);
+     if (!binder.Succeeded()) {
+       return;
+     }
+-    ContextGL()->ReadPixels(x, y, width, height, format, type,
+-                            reinterpret_cast<void*>(offset));
++    if (!ReadFingerprintPixels(framebuffer, x, y, width, height, format, type,
++                               nullptr, static_cast<size_t>(size),
++                               buffer->Object(), offset)) {
++      ContextGL()->ReadPixels(x, y, width, height, format, type,
++                              reinterpret_cast<void*>(offset));
++    }
+   }
+ }
+ 

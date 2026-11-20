@@ -4,12 +4,15 @@ from urllib.parse import quote, unquote, urlparse
 def normalize_proxy(proxy_str: str) -> str:
     """Rewrite the provider format host:port:user:pass as user:pass@host:port.
 
-    Anything else (including the URL form) is returned unchanged.
+    Other values keep their contents; URL schemes are normalized to lowercase.
     Passwords may contain '@' or ':'; they are percent-encoded so urlparse
     can decode them correctly.
     """
     proxy_str = proxy_str.strip()
     scheme, sep, rest = proxy_str.rpartition("://")
+    if sep:
+        scheme = scheme.lower()
+        proxy_str = f"{scheme}{sep}{rest}"
     parts = rest.split(":", 3)
     # Detect host:port:user:pass: exactly 4 non-empty parts, port is all digits,
     # and no '@' in the host (first) part.  Check this BEFORE the '@'-in-rest
@@ -50,3 +53,17 @@ def mask_proxy(proxy_str: str | None) -> str:
     """Proxy as scheme://host:port, without credentials, for display."""
     cfg = parse_proxy(proxy_str or "")
     return cfg["server"] if cfg else ""
+
+
+def require_proxy(proxy_str: str | None) -> dict | None:
+    """Parse a network-bound proxy; malformed nonempty input must never mean direct."""
+    if proxy_str in (None, "", "None"):
+        return None
+    from .validation import validate_proxy_format
+
+    if not isinstance(proxy_str, str) or not validate_proxy_format(proxy_str)[0]:
+        raise ValueError("Invalid proxy configuration; refusing direct connection")
+    config = parse_proxy(proxy_str)
+    if config is None:
+        raise ValueError("Invalid proxy configuration; refusing direct connection")
+    return config

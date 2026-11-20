@@ -48,3 +48,9 @@ def get_warming_scheduler(
     container: Container = Depends(_container),
 ):
     return container.warming_scheduler
+
+
+def get_extension_service(
+    container: Container = Depends(_container),
+):
+    return container.extension_service

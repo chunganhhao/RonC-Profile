@@ -16,7 +16,7 @@ def _store_conflict(on_save):
     def guarded(*args, **kwargs):
         try:
             return on_save(*args, **kwargs)
-        except (ProfileStoreChangedError, OSError) as exc:
+        except (ProfileStoreChangedError, OSError, ValueError) as exc:
             return str(exc) or "Profile/store is busy; refresh and retry"
 
     return guarded

@@ -102,9 +102,13 @@ async def main():
         await page.wait_for_selector(".card.running", state="detached", timeout=30_000)
         print("stopped from panel: ok")
 
+        await page.click("#prefs-btn")
+        await page.click("#lang-select-btn")
         await page.click("[data-lang='en']")
         print("english title:", await page.text_content("main h2"))
+        await page.click("#lang-select-btn")
         await page.click("[data-lang='vi']")
+        await page.click("#prefs-btn")
 
 
 asyncio.run(main())

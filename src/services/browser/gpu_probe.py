@@ -49,7 +49,8 @@ def install_headless_gpu_probe() -> bool:
             or importlib.metadata.version("playwright") != "1.62.0"
             or subprocess.check_output(
                 ["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"], timeout=2
-            ).strip() != b"Apple M4"
+            ).strip()
+            != b"Apple M4"
         ):
             return False
     except (OSError, subprocess.SubprocessError, importlib.metadata.PackageNotFoundError):

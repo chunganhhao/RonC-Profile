@@ -21,19 +21,23 @@ from .components import (
 )
 from .components.profile_card import build_header_row
 from .components.sidebar import build_filter_buttons
+from .dialogs.appearance import open_appearance_dialog
 from .dialogs.cores import open_core_manager
+from .dialogs.extensions import open_extensions_dialog
 from .dialogs.mcp_guide import open_mcp_guide
 from .dialogs.proxy_pool import open_proxy_pool_dialog
 from .dialogs.warming import open_warming_dialog
 from .handlers import AppHandlers
 from .refs import UIRefs
-from .state import ITEMS_PER_PAGE, AppState
+from .state import ITEMS_PER_PAGE, PAGE_SIZE_OPTIONS, AppState
 from .theme import (
     COLORS,
     apply_page_theme,
     configure_page,
+    current_accent_color,
     current_theme_mode,
     refresh_styles,
+    set_accent_color,
     set_theme_mode,
 )
 from .theme.colors import FONT_DATA, FONT_SEMIBOLD
@@ -49,6 +53,7 @@ class App:
         self.bl: IBrowserLauncher = c.browser_launcher
         self.ps: IProxyService = c.proxy_service
         self.proxy_pool = c.proxy_pool
+        self.extensions = c.extension_service
         self.warming = c.warming_scheduler
         self.state = AppState()
         self.page: ft.Page | None = None
@@ -56,6 +61,10 @@ class App:
         self.refs: UIRefs | None = None
         self.filter = "all"
         self._live_since: dict[str, str] = {}
+        self._feedback_until: dict[tuple[str, str], float] = {}
+        self._toast_until: float = 0.0
+        self._toast_text = ft.Text("", size=12, font_family=FONT_SEMIBOLD)
+        self._toast_banner = ft.Container(visible=False)
         self._filter_column = ft.Column(spacing=2)
         self._header_slot = ft.Container()
         self._total_count_text = ft.Text("", size=12, font_family=FONT_SEMIBOLD)
@@ -107,6 +116,10 @@ class App:
             on_change_page=self._change_page,
             file_picker=self._file_picker,
             on_search=self._on_search,
+            on_go_page=self._go_to_page,
+            on_change_page_size=self._on_change_page_size,
+            on_toggle_running_filter=self._toggle_running_filter,
+            initial_page_size=self.state.items_per_page,
         )
         self._filter_column = ft.Column(spacing=2)
         self._header_slot = ft.Container()
@@ -127,6 +140,29 @@ class App:
             size=11.5,
             font_family=FONT_DATA,
             color=COLORS["text_sub"],
+        )
+        self._toast_text = ft.Text(
+            self._toast_text.value or "",
+            size=12,
+            font_family=FONT_SEMIBOLD,
+            color=COLORS["live_ink"],
+        )
+        self._toast_banner = ft.Container(
+            key="action_toast_banner",
+            visible=time.monotonic() < self._toast_until and bool(self._toast_text.value),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=6),
+            border_radius=8,
+            bgcolor=COLORS["live_tint"],
+            border=ft.Border.all(1, COLORS["live"]),
+            content=ft.Row(
+                tight=True,
+                spacing=6,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED, size=15, color=COLORS["live"]),
+                    self._toast_text,
+                ],
+            ),
         )
         self.page.title = get_string("window_title")
         self.page.controls.clear()
@@ -161,6 +197,39 @@ class App:
         set_theme_mode(mode)
         self._build_ui()
 
+    def _set_accent(self, preset: str) -> None:
+        if preset == current_accent_color():
+            return
+        set_accent_color(preset)
+        self._build_ui()
+
+    def _open_appearance(self, _: object = None) -> None:
+        if not self.page:
+            return
+        open_appearance_dialog(
+            self.page,
+            on_language=self._set_language,
+            on_theme=self._set_theme,
+            on_accent=self._set_accent,
+        )
+
+    def _trigger_feedback(self, name: str, key: str, toast_msg: str) -> None:
+        now = time.monotonic()
+        self._feedback_until[(name, key)] = now + 2.0
+        self._toast_until = now + 2.4
+        self._toast_text.value = toast_msg
+        self._toast_text.color = COLORS["live_ink"]
+        self._toast_banner.visible = True
+        self._log(toast_msg)
+        self._refresh_profiles()
+
+    def _active_feedback_for(self, name: str, now: float) -> set[str]:
+        return {
+            key
+            for (prof_name, key), until in self._feedback_until.items()
+            if prof_name == name and until > now
+        }
+
     def _open_proxy_pool(self, _: object = None) -> None:
         if not self.page:
             return
@@ -189,6 +258,18 @@ class App:
             refresh_fn=self._refresh_profiles,
         )
 
+    def _open_extensions(self, _: object = None) -> None:
+        if not self.page:
+            return
+        open_extensions_dialog(
+            self.page,
+            self.extensions,
+            self.pm,
+            file_picker=getattr(self, "_file_picker", None),
+            log_fn=self._log,
+            refresh_fn=self._refresh_profiles,
+        )
+
     def _build_root_layout(self, r: UIRefs) -> ft.Row:
         sidebar = build_sidebar(
             r.stats_text,
@@ -207,9 +288,11 @@ class App:
             language=current_language(),
             on_language=self._set_language,
             on_open_proxy_pool=self._open_proxy_pool,
+            on_open_extensions=self._open_extensions,
             on_open_warming=self._open_warming,
             on_toggle_theme=self._set_theme,
             proxy_pool_count=len(self.proxy_pool.list_entries()),
+            extension_count=len(self.extensions.list_entries()),
             warming_task_count=len(self.warming.list_tasks()),
         )
         content = build_content_area(
@@ -227,9 +310,15 @@ class App:
             on_export=lambda _: self.h.on_export_open(),
             on_refresh=lambda _: self._refresh_profiles(),
             on_toggle_theme=self._set_theme,
+            on_open_appearance=self._open_appearance,
+            toast_banner=self._toast_banner,
             total_count_text=self._total_count_text,
             footer_proxy_text=self._footer_proxy_text,
             footer_warming_text=self._footer_warming_text,
+            first_btn=r.first_btn,
+            last_btn=r.last_btn,
+            page_size_dropdown=r.page_size_dropdown,
+            running_filter_btn=r.running_filter_btn,
         )
         return ft.Row(
             expand=True,
@@ -248,6 +337,21 @@ class App:
     def _on_filter(self, fid: str) -> None:
         self.filter = fid
         self.state.current_page = 1
+        self._refresh_profiles()
+
+    def _toggle_running_filter(self) -> None:
+        self._on_filter("all" if self.filter == "running" else "running")
+
+    def _on_change_page_size(self, size: int) -> None:
+        if size not in PAGE_SIZE_OPTIONS or size == self.state.items_per_page:
+            return
+        self.state.items_per_page = size
+        self.state.current_page = 1
+        self._refresh_profiles()
+
+    def _go_to_page(self, target: str) -> None:
+        _, _, total = self._get_page_profiles()
+        self.state.current_page = 1 if target == "first" else total
         self._refresh_profiles()
 
     def _filter_tests(self) -> dict:
@@ -279,12 +383,14 @@ class App:
                 or q in (p.proxy or "").lower()
                 or any(q in tag.lower() for tag in (p.tags or ([p.group] if p.group else [])))
                 or q in (p.account_uid or "").lower()
+                or q in p.effective_recovery_email.lower()
                 or q in (p.notes or "").lower()
             ]
-        total = max(1, (len(all_profiles) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
-        self.state.current_page = min(self.state.current_page, total)
-        start = (self.state.current_page - 1) * ITEMS_PER_PAGE
-        return all_profiles, all_profiles[start : start + ITEMS_PER_PAGE], total
+        page_size = max(1, int(getattr(self.state, "items_per_page", ITEMS_PER_PAGE)))
+        total = max(1, (len(all_profiles) + page_size - 1) // page_size)
+        self.state.current_page = max(1, min(self.state.current_page, total))
+        start = (self.state.current_page - 1) * page_size
+        return all_profiles, all_profiles[start : start + page_size], total
 
     def _on_edit_field(self, name: str, field: str, row_index: int = 1) -> None:
         from ..services.profile.manager import ProfileStoreChangedError
@@ -315,8 +421,41 @@ class App:
                 return str(exc) or get_string("update_failed")
             if not ok:
                 return get_string("update_failed")
-            self._refresh_profiles()
+            target_name = str(value) if field == "name" else name
+            field_label_key = {
+                "display_order": "col_id",
+                "name": "col_profile",
+                "tags": "col_group",
+                "proxy": "col_proxy",
+                "recovery_email": "recovery_email_label",
+                "backup_codes": "backup_codes_label",
+                "notes": "notes_label",
+            }.get(field, "col_profile")
+            self._trigger_feedback(
+                target_name,
+                f"edit_{field}",
+                get_string(
+                    "field_saved_toast",
+                    field=get_string(field_label_key),
+                    name=target_name,
+                ),
+            )
             return None
+
+        def copy_code(text: str) -> None:
+            if not text or not self.page:
+                return
+
+            async def _copy() -> None:
+                await self.clipboard.set(text)
+
+            self.page.run_task(_copy)
+            # Never log or toast raw single backup codes: logger persists to daily log files.
+            self._trigger_feedback(
+                name,
+                "copy_backup_codes",
+                get_string("copied_backup_codes_toast", name=name),
+            )
 
         open_profile_field_dialog(
             self.page,
@@ -331,6 +470,7 @@ class App:
                     for tag in (p.tags or ([p.group] if p.group else []))
                 }
             ),
+            on_copy_code=copy_code,
         )
 
     def _on_copy_user(self, name: str) -> None:
@@ -341,9 +481,29 @@ class App:
 
         async def copy() -> None:
             await self.clipboard.set(uid)
-            self._log(get_string("copied_user"))
 
         self.page.run_task(copy)
+        self._trigger_feedback(
+            name,
+            "copy_user",
+            get_string("copied_user_toast", name=name, uid=uid),
+        )
+
+    def _on_copy_recovery(self, name: str) -> None:
+        profile = self.pm.profiles.get(name)
+        if not profile or not profile.effective_recovery_email or not self.page:
+            return
+        email = profile.effective_recovery_email
+
+        async def copy() -> None:
+            await self.clipboard.set(email)
+
+        self.page.run_task(copy)
+        self._trigger_feedback(
+            name,
+            "copy_recovery",
+            get_string("copied_recovery_toast", name=name, email=email),
+        )
 
     def _on_copy_pass(self, name: str) -> None:
         profile = self.pm.profiles.get(name)
@@ -355,7 +515,11 @@ class App:
             await self.clipboard.set(pw)
 
         self.page.run_task(_copy)
-        self._log(get_string("copied_password", name=name))
+        self._trigger_feedback(
+            name,
+            "copy_pass",
+            get_string("copied_password", name=name),
+        )
 
     def _on_copy_2fa(self, name: str) -> None:
         profile = self.pm.profiles.get(name)
@@ -370,7 +534,11 @@ class App:
             await self.clipboard.set(code)
 
         self.page.run_task(_copy)
-        self._log(get_string("copied_2fa", name=name, code=code, rem=rem))
+        self._trigger_feedback(
+            name,
+            "copy_2fa",
+            get_string("copied_2fa", name=name, code=code, rem=rem),
+        )
 
     def _refresh_profiles(self) -> None:
         r = self.refs
@@ -378,7 +546,8 @@ class App:
         self._update_stats()
         self._flush_log()
         all_profiles, page_profiles, total_pages = self._get_page_profiles()
-        start_offset = (self.state.current_page - 1) * ITEMS_PER_PAGE
+        page_size = max(1, int(getattr(self.state, "items_per_page", ITEMS_PER_PAGE)))
+        start_offset = (self.state.current_page - 1) * page_size
 
         all_names = set(self.pm.profiles)
         for stale in self.state.selected_names() - all_names:
@@ -417,6 +586,8 @@ class App:
             else None
         )
 
+        now = time.monotonic()
+        self._toast_banner.visible = now < self._toast_until and bool(self._toast_text.value)
         r.profile_list_area.controls = (
             [
                 build_profile_card(
@@ -430,6 +601,7 @@ class App:
                     on_select=self.h.on_toggle_select,
                     on_cookies=self.h.on_cookies,
                     on_copy_user=self._on_copy_user,
+                    on_copy_recovery=self._on_copy_recovery,
                     on_edit_field=self._on_edit_field,
                     on_copy_pass=self._on_copy_pass,
                     on_copy_2fa=self._on_copy_2fa,
@@ -437,6 +609,7 @@ class App:
                     since=self._live_since.get(p.name, ""),
                     failed=p.name in self.state.failed,
                     row_index=start_offset + idx + 1,
+                    active_feedback=self._active_feedback_for(p.name, now),
                 )
                 for idx, p in enumerate(page_profiles)
             ]
@@ -469,8 +642,38 @@ class App:
             current=self.state.current_page,
             total=total_pages,
         )
-        r.prev_btn.disabled = self.state.current_page <= 1
-        r.next_btn.disabled = self.state.current_page >= total_pages
+        at_first = self.state.current_page <= 1
+        at_last = self.state.current_page >= total_pages
+        r.prev_btn.disabled = at_first
+        r.next_btn.disabled = at_last
+        if r.first_btn is not None:
+            r.first_btn.disabled = at_first
+        if r.last_btn is not None:
+            r.last_btn.disabled = at_last
+        if r.page_size_dropdown is not None:
+            r.page_size_dropdown.value = str(page_size)
+        if r.running_filter_btn is not None:
+            is_run_active = self.filter == "running"
+            r.running_filter_btn.content = ft.Text(
+                get_string("toolbar_running_filter", count=len(running)),
+                size=13,
+                font_family=FONT_SEMIBOLD if is_run_active else None,
+                color=COLORS["live_ink"] if is_run_active else COLORS["text_main"],
+            )
+            r.running_filter_btn.icon = (
+                ft.Icons.PLAY_CIRCLE_FILL_ROUNDED
+                if is_run_active or running
+                else ft.Icons.PLAY_CIRCLE_OUTLINE_ROUNDED
+            )
+            r.running_filter_btn.icon_color = (
+                COLORS["live"] if is_run_active or running else COLORS["text_sub"]
+            )
+            r.running_filter_btn.style = ft.ButtonStyle(
+                shape=ft.RoundedRectangleBorder(radius=8),
+                side=ft.BorderSide(1, COLORS["live"] if is_run_active else COLORS["rule_strong"]),
+                bgcolor=COLORS["live_tint"] if is_run_active else COLORS["card_bg"],
+                color=COLORS["live_ink"] if is_run_active else COLORS["text_main"],
+            )
         self._safe_update()
 
     @staticmethod
@@ -548,6 +751,21 @@ class App:
 
     def _log(self, message: str) -> None:
         logger.info(message)
+        if self.refs is not None:
+            self._toast_until = time.monotonic() + 2.4
+            self._toast_text.value = message
+            self._toast_text.color = COLORS["live_ink"]
+            self._toast_banner.visible = True
+            for prefix in ("Updated:", "Đã cập nhật:", "Updated profile:", "Đã cập nhật hồ sơ:"):
+                if message.startswith(prefix):
+                    if "->" in message:
+                        target = message.split("->")[-1].strip()
+                    elif "→" in message:
+                        target = message.split("→")[-1].strip()
+                    else:
+                        target = message[len(prefix) :].strip()
+                    if target:
+                        self._feedback_until[(target, "edit_profile")] = time.monotonic() + 2.0
         if self.state.add_log(message):
             self.state.schedule_refresh()
 
@@ -572,11 +790,18 @@ class App:
     async def _ui_reconcile_loop(self) -> None:
         while self.page:
             try:
+                now = time.monotonic()
+                expired_keys = [k for k, until in self._feedback_until.items() if until <= now]
+                for k in expired_keys:
+                    del self._feedback_until[k]
+                toast_expired = self._toast_banner.visible and now >= self._toast_until
+                if toast_expired:
+                    self._toast_banner.visible = False
                 running_now = self.bl.running_profile_names()
                 changed = running_now != self.state._last_running_snapshot
                 if changed:
                     self.state._last_running_snapshot = running_now
-                if changed or self.state.consume_refresh():
+                if changed or expired_keys or toast_expired or self.state.consume_refresh():
                     self._refresh_profiles()
             except Exception as e:
                 logger.error("Error in UI reconcile loop: %s", e)

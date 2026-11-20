@@ -16,6 +16,7 @@ from .auth import require_token
 from .guard import LocalOnlyGuard
 from .routes import (
     browser_router,
+    extensions_router,
     mcp_setup_router,
     page_router,
     profiles_router,
@@ -93,6 +94,7 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
     app.include_router(browser_router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(page_router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(proxy_router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(extensions_router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(warming_router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(mcp_setup_router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(cores_router, prefix=API_PREFIX, dependencies=protected)
@@ -129,6 +131,10 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
     @app.get("/assets/icon.png", include_in_schema=False)
     def brand_icon() -> FileResponse:
         return FileResponse(_FONTS.parent / "icon.png", media_type="image/png")
+
+    @app.get("/assets/logo.png", include_in_schema=False)
+    def brand_logo() -> FileResponse:
+        return FileResponse(_FONTS.parent / "logo.png", media_type="image/png")
 
     @app.get("/assets/logo-light.png", include_in_schema=False)
     def brand_logo_light() -> FileResponse:

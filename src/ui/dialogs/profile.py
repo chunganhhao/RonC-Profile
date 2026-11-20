@@ -10,9 +10,15 @@ import flet as ft
 from ...core.config import DATA_DIR
 from ...core.strings import get_string
 from ...interfaces.protocols import IProxyService
-from ...models.profile import DEFAULT_GROUPS, Profile
+from ...models.profile import (
+    DEFAULT_GROUPS,
+    Profile,
+    normalize_backup_codes,
+    split_recovery_and_notes,
+)
 from ...services.browser import fingerprint as fp_service
-from ...services.proxy.geo_check import GeoCheckResult, check_geo
+from ...services.browser.extensions import ExtensionService
+from ...services.proxy.geo_check import GeoCheckResult, check_geo, compare
 from ...utils.totp import clean_totp_secret, generate_totp, parse_account_line
 from ...utils.validation import (
     normalize_start_url,
@@ -25,6 +31,7 @@ from ...utils.validation import (
 from ..theme.colors import COLORS, FONT_BOLD, FONT_DATA, FONT_SEMIBOLD
 from ..theme.page import build_engine_dropdown, build_os_dropdown
 from ..theme.styles import ACCENT_STYLE, DLG_FIELD_KWARGS, OUTLINE_STYLE
+from .responsive import bind_responsive_dialog
 
 _DATA = ft.TextStyle(font_family=FONT_DATA, size=12.5)
 _WARN_TINT = COLORS["warn_tint"]
@@ -102,18 +109,31 @@ def open_profile_dialog(
     save_icon = ft.Icons.SAVE if is_edit else ft.Icons.ADD
 
     initial_os = profile.os_type if profile is not None else "macos"
+    bound_core = getattr(profile, "core_version", None)
 
     # Load existing saved fingerprint if editing, otherwise generate a fresh coherent one immediately
     current_fp: dict[str, Any] = {}
+    current_chrome_persona: dict[str, Any] = {}
+    has_saved_fp = False
     if profile is not None:
-        saved = fp_service.load_saved_fingerprint(os.path.join(DATA_DIR, profile.name))
+        prof_dir = os.path.join(DATA_DIR, profile.name)
+        saved = fp_service.load_saved_fingerprint(prof_dir)
         if saved and saved[0] == initial_os:
             current_fp = saved[1]
+            has_saved_fp = True
+        saved_chrome = fp_service.load_saved_chrome_persona(prof_dir)
+        if saved_chrome and saved_chrome.get("platform") == initial_os:
+            current_chrome_persona = saved_chrome
     if not current_fp:
         with contextlib.suppress(Exception):
             current_fp = fp_service.generate_coherent_fingerprint(initial_os)
+    if not current_chrome_persona:
+        current_chrome_persona = fp_service.generate_chrome_persona(
+            initial_os, core_version=bound_core
+        )
 
     fp_state: dict[str, Any] = {"fp": current_fp}
+    chrome_state: dict[str, Any] = {"persona": current_chrome_persona}
 
     # --- Left Column: Identity, Proxy & Account/2FA ---
     name_field = ft.TextField(
@@ -172,13 +192,13 @@ def open_profile_dialog(
 
     timezone_field = ft.TextField(
         value=(profile.timezone or "") if profile is not None else "",
-        hint_text="Asia/Ho_Chi_Minh",
+        hint_text=get_string("timezone_hint"),
         text_style=_DATA,
         **DLG_FIELD_KWARGS,
     )
     locale_field = ft.TextField(
         value=(profile.locale or "") if profile is not None else "",
-        hint_text="vi-VN",
+        hint_text=get_string("locale_hint"),
         text_style=_DATA,
         **DLG_FIELD_KWARGS,
     )
@@ -221,9 +241,28 @@ def open_profile_dialog(
         font_family=FONT_DATA,
         color=COLORS["sidebar"],
     )
+    recovery_email_field = ft.TextField(
+        value=profile.effective_recovery_email if profile is not None else "",
+        hint_text=get_string("recovery_email_hint"),
+        text_style=_DATA,
+        **DLG_FIELD_KWARGS,
+    )
+    initial_backup_codes = (
+        normalize_backup_codes(profile.backup_codes) if profile is not None else ""
+    )
+    backup_codes_field = ft.TextField(
+        key="dialog_backup_codes_field",
+        value=initial_backup_codes,
+        hint_text=get_string("backup_codes_placeholder"),
+        multiline=True,
+        min_lines=3,
+        max_lines=5,
+        text_style=_DATA,
+        **DLG_FIELD_KWARGS,
+    )
     notes_field = ft.TextField(
-        value=(profile.notes or "") if profile is not None else "",
-        hint_text="Recovery mail / cookie note...",
+        value=profile.effective_notes if profile is not None else "",
+        hint_text=get_string("notes_hint"),
         **DLG_FIELD_KWARGS,
     )
 
@@ -295,10 +334,14 @@ def open_profile_dialog(
             name_field.value = parsed["account_uid"].split("@")[0][:40]
         pass_field.value = parsed["account_password"]
         two_fa_field.value = parsed["two_fa_secret"]
-        notes_field.value = parsed["notes"]
+        rec_mail, clean_note = split_recovery_and_notes(recovery_email_field.value, parsed["notes"])
+        if rec_mail:
+            recovery_email_field.value = rec_mail
+        notes_field.value = clean_note
         quick_paste_field.value = ""
         _update_totp_preview()
 
+    quick_paste_field.on_submit = _on_quick_paste
     quick_paste_btn = ft.OutlinedButton(
         get_string("quick_paste_btn"),
         icon=ft.Icons.BOLT,
@@ -323,13 +366,19 @@ def open_profile_dialog(
 
     def _gpu_options_for_os(os_name: str) -> list[ft.dropdown.Option]:
         gpus = fp_service.available_gpus(os_name)
-        return [
-            ft.dropdown.Option(_gpu_key(v, r), _short_gpu_label(v, r)) for v, r in gpus
-        ] or [ft.dropdown.Option("auto", "Auto")]
+        return [ft.dropdown.Option(_gpu_key(v, r), _short_gpu_label(v, r)) for v, r in gpus] or [
+            ft.dropdown.Option("auto", "Auto")
+        ]
 
     def _core_options_for(os_name: str, renderer: str) -> list[ft.dropdown.Option]:
-        cores = fp_service.available_cores(os_name, renderer)
-        return [ft.dropdown.Option(str(c), f"{c} Cores") for c in cores]
+        cores = set(fp_service.available_cores(os_name, renderer))
+        if engine_dropdown.value == "chrome":
+            from chrome_engine.persona import _CORES
+
+            cores.update(c for c, _ in _CORES.get(os_name, []))
+        if init_cores and init_cores.isdigit():
+            cores.add(int(init_cores))
+        return [ft.dropdown.Option(str(c), f"{c} Cores") for c in sorted(cores)]
 
     init_screen = details.get("screen") or "auto"
     screen_dropdown = _build_dropdown(
@@ -344,7 +393,14 @@ def open_profile_dialog(
         init_gpu_key = gpu_opts[0].key or "auto"
     gpu_dropdown = _build_dropdown(gpu_opts, init_gpu_key)
 
-    init_cores = str(details.get("hardware_concurrency") or 8)
+    init_cores = str(
+        (
+            chrome_state["persona"].get("hardware_concurrency")
+            if (profile is not None and profile.engine == "chrome")
+            else details.get("hardware_concurrency")
+        )
+        or 8
+    )
     core_opts = _core_options_for(initial_os, details.get("gpu_renderer") or "")
     if init_cores not in {opt.key for opt in core_opts} and core_opts:
         init_cores = core_opts[0].key or "8"
@@ -370,12 +426,14 @@ def open_profile_dialog(
 
     def _render_fp_summary() -> None:
         os_val = os_dropdown.value or "windows"
-        info = fp_service.extract_details(fp_state["fp"], os_val)
+        is_chrome_mode = engine_dropdown.value == "chrome"
+        info = (
+            fp_service.extract_chrome_details(chrome_state["persona"], os_val)
+            if is_chrome_mode
+            else fp_service.extract_details(fp_state["fp"], os_val)
+        )
         ua = info.get("user_agent") or "Mozilla/5.0 (Firefox/158.0)"
-        if len(ua) > 62:
-            ua_short = ua[:59] + "..."
-        else:
-            ua_short = ua
+        ua_short = ua[:59] + "..." if len(ua) > 62 else ua
 
         def _kv(k: str, v: str) -> ft.Row:
             return ft.Row(
@@ -392,14 +450,12 @@ def open_profile_dialog(
                 ],
             )
 
-        is_chrome_mode = engine_dropdown.value == "chrome"
         status_text = (
-            get_string("fp_chrome_mode_note")
-            if is_chrome_mode
-            else get_string("fp_coherence_ok")
+            get_string("fp_chrome_mode_note") if is_chrome_mode else get_string("fp_coherence_ok")
         )
-        status_color = COLORS["text_sub"] if is_chrome_mode else COLORS["success"]
+        status_color = COLORS["success"]
 
+        trait_sig = f"{info.get('trait_hash') or '#--------'} · Win {info.get('window_inner') or info.get('screen') or 'Auto'}"
         fp_summary_col.controls = [
             _kv("OS / Platform", f"{info['os'].upper()} · {info['platform']}"),
             _kv(
@@ -413,6 +469,7 @@ def open_profile_dialog(
                 "Audio / Fonts",
                 f"{info['audio_sample_rate']} Hz · {info['fonts_count']} OS Fonts",
             ),
+            _kv(get_string("fp_trait_hash_label"), trait_sig),
             ft.Text(
                 ua_short,
                 size=10.5,
@@ -433,8 +490,15 @@ def open_profile_dialog(
             ),
         ]
 
+    hw_changed = {"value": False}
+    chrome_rolled = {"value": not is_edit}
+
     def _rebuild_fp(roll_new: bool = False, os_changed: bool = False) -> None:
+        hw_changed["value"] = True
+        if roll_new or os_changed:
+            chrome_rolled["value"] = True
         os_val = os_dropdown.value or "windows"
+        is_chrome_mode = engine_dropdown.value == "chrome"
         if os_changed:
             new_gpu_opts = _gpu_options_for_os(os_val)
             gpu_dropdown.options = new_gpu_opts
@@ -444,7 +508,7 @@ def open_profile_dialog(
             screen_dropdown.value = "auto"
 
         gpu_pair = None if (roll_new or os_changed) else _parse_gpu_key(gpu_dropdown.value)
-        renderer_hint = gpu_pair[1] if gpu_pair else ""
+        renderer_hint = "" if is_chrome_mode else (gpu_pair[1] if gpu_pair else "")
         new_core_opts = _core_options_for(os_val, renderer_hint)
         cores_dropdown.options = new_core_opts
         valid_core_strs = {opt.key for opt in new_core_opts}
@@ -478,11 +542,29 @@ def open_profile_dialog(
             g_key = _gpu_key(info.get("gpu_vendor") or "", info.get("gpu_renderer") or "")
             if g_key in {opt.key for opt in gpu_dropdown.options}:
                 gpu_dropdown.value = g_key
-            new_core_opts = _core_options_for(os_val, info.get("gpu_renderer") or "")
-            cores_dropdown.options = new_core_opts
-            c_str = str(info.get("hardware_concurrency") or 8)
-            if c_str in {opt.key for opt in new_core_opts}:
-                cores_dropdown.value = c_str
+            if not is_chrome_mode:
+                new_core_opts = _core_options_for(os_val, info.get("gpu_renderer") or "")
+                cores_dropdown.options = new_core_opts
+                c_str = str(info.get("hardware_concurrency") or 8)
+                if c_str in {opt.key for opt in new_core_opts}:
+                    cores_dropdown.value = c_str
+
+        with contextlib.suppress(Exception):
+            keep_seed = None if (roll_new or os_changed) else chrome_state["persona"].get("seed")
+            base_persona = None if (roll_new or os_changed) else chrome_state.get("persona")
+            chrome_cpu = cpu_int if is_chrome_mode else None
+            chrome_state["persona"] = fp_service.generate_chrome_persona(
+                os_val,
+                hardware_concurrency=chrome_cpu,
+                seed=int(keep_seed) if isinstance(keep_seed, int) else None,
+                base_persona=base_persona,
+                roll_new=roll_new,
+                core_version=bound_core,
+            )
+            if is_chrome_mode:
+                c_str = str(chrome_state["persona"].get("hardware_concurrency") or 8)
+                if c_str in {opt.key for opt in cores_dropdown.options}:
+                    cores_dropdown.value = c_str
 
         _render_fp_summary()
         with contextlib.suppress(Exception):
@@ -503,15 +585,14 @@ def open_profile_dialog(
 
     def _sync_hardware_controls_for_engine() -> None:
         is_chrome = engine_dropdown.value == "chrome"
-        for ctrl in (
-            screen_dropdown,
-            cores_dropdown,
-            gpu_dropdown,
-            webrtc_dropdown,
-            canvas_dropdown,
-            roll_btn,
-        ):
+        for ctrl in (screen_dropdown, gpu_dropdown, canvas_dropdown):
             ctrl.disabled = is_chrome
+        for ctrl in (cores_dropdown, webrtc_dropdown, roll_btn):
+            ctrl.disabled = False
+        if is_chrome:
+            c_str = str(chrome_state["persona"].get("hardware_concurrency") or 8)
+            if c_str in {opt.key for opt in cores_dropdown.options}:
+                cores_dropdown.value = c_str
 
     _sync_hardware_controls_for_engine()
     _render_fp_summary()
@@ -525,7 +606,7 @@ def open_profile_dialog(
     engine_dropdown.on_select = on_engine_change
 
     geo_error = ft.Text("", size=12, color=COLORS["error"], visible=False)
-    geo_result = ft.Column(spacing=4, visible=False, scroll=ft.ScrollMode.AUTO)
+    geo_result = ft.Column(spacing=5, tight=True, visible=False)
     name_error = ft.Text("", size=12, color=COLORS["error"], visible=False)
     proxy_error = ft.Text("", size=12, color=COLORS["error"], visible=False)
 
@@ -586,6 +667,71 @@ def open_profile_dialog(
         page, proxy_field, proxy_error, check_btn, proxy_service
     )
 
+    ext_service = ExtensionService()
+    selected_ext_ids: set[str] = set(profile.extension_ids if profile is not None else [])
+    ext_checks_col = ft.Column(spacing=2, tight=True)
+
+    def _rebuild_ext_checks() -> None:
+        entries = ext_service.list_entries()
+        if not entries:
+            ext_checks_col.controls = [
+                ft.Text(
+                    get_string("ext_empty_hint"),
+                    size=11.5,
+                    color=COLORS["text_dim"],
+                )
+            ]
+            return
+        rows: list[ft.Control] = []
+        for e in entries:
+            is_global = bool(e.apply_to_all_chrome)
+            is_checked = is_global or (e.id in selected_ext_ids)
+
+            def _on_chk(ev: ft.ControlEvent, eid: str = e.id) -> None:
+                if ev.control.value:
+                    selected_ext_ids.add(eid)
+                else:
+                    selected_ext_ids.discard(eid)
+
+            pin_lbl = (
+                " · 📌"
+                if e.pin_mode == "force_pinned"
+                else (" · 🚫" if e.pin_mode == "force_unpinned" else "")
+            )
+            global_lbl = f" · {get_string('ext_apply_all_chrome')}" if is_global else ""
+            rows.append(
+                ft.Checkbox(
+                    value=is_checked,
+                    disabled=is_global,
+                    label=f"{e.name} (v{e.version}){pin_lbl}{global_lbl}",
+                    fill_color=COLORS["accent"],
+                    on_change=_on_chk,
+                )
+            )
+        ext_checks_col.controls = rows
+
+    _rebuild_ext_checks()
+
+    def _open_ext_manager(_: ft.ControlEvent) -> None:
+        from ...services.profile.manager import ProfileManager
+        from .extensions import open_extensions_dialog
+
+        pm_inst = profile_manager if profile_manager is not None else ProfileManager()
+        open_extensions_dialog(
+            page,
+            ext_service,
+            pm_inst,
+            refresh_fn=lambda: (_rebuild_ext_checks(), page.update()),
+        )
+
+    manage_ext_btn = ft.OutlinedButton(
+        get_string("ext_manage_btn"),
+        icon=ft.Icons.EXTENSION_OUTLINED,
+        height=30,
+        style=OUTLINE_STYLE,
+        on_click=_open_ext_manager,
+    )
+
     def on_submit(_: ft.ControlEvent) -> None:
         name = (name_field.value or "").strip()
         proxy = (proxy_field.value or "").strip()
@@ -634,20 +780,43 @@ def open_profile_dialog(
             page.update()
             return
 
+        try:
+            cleaned_backup_codes = normalize_backup_codes(backup_codes_field.value or "")
+        except ValueError as exc:
+            name_error.value = str(exc)
+            name_error.visible = True
+            page.update()
+            return
+
         is_chrome = engine == "chrome"
-        default_webrtc = profile.webrtc_mode if profile is not None else "proxy"
         default_canvas = profile.canvas_mode if profile is not None else "auto"
+        if is_edit and not hw_changed["value"] and (is_chrome or has_saved_fp):
+            initial_fp: dict[str, Any] | None = None
+        elif is_chrome and not chrome_rolled["value"]:
+            raw_cores = cores_dropdown.value or ""
+            initial_fp = {
+                "platform": os_type,
+                "hardware_concurrency": int(raw_cores) if raw_cores.isdigit() else None,
+            }
+        else:
+            initial_fp = chrome_state["persona"] if is_chrome else fp_state["fp"]
         extra_kwargs = {
             "group": (group_dropdown.value or "").strip(),
             "account_uid": (uid_field.value or "").strip(),
             "account_password": pass_field.value or "",
             "two_fa_secret": cleaned_2fa,
+            "recovery_email": (recovery_email_field.value or "").strip(),
             "notes": (notes_field.value or "").strip(),
             "start_url": normalize_start_url(raw_start_url),
-            "webrtc_mode": default_webrtc if is_chrome else (webrtc_dropdown.value or "proxy"),
+            "webrtc_mode": webrtc_dropdown.value or "proxy",
             "canvas_mode": default_canvas if is_chrome else (canvas_dropdown.value or "auto"),
-            "initial_fingerprint": None if is_chrome else fp_state["fp"],
+            "initial_fingerprint": initial_fp,
+            "extension_ids": sorted(selected_ext_ids),
         }
+        if (not is_edit and cleaned_backup_codes) or (
+            is_edit and cleaned_backup_codes != initial_backup_codes
+        ):
+            extra_kwargs["backup_codes"] = cleaned_backup_codes
 
         sig = inspect.signature(on_save)
         accepts_kwargs = any(
@@ -705,7 +874,9 @@ def open_profile_dialog(
             ),
             engine_note,
             _field(get_string("proxy_optional"), proxy_field, get_string("proxy_format_hint")),
-            ft.Row(spacing=8, controls=[check_btn, ip_btn, pick_pool_btn]),
+            ft.Row(
+                spacing=8, run_spacing=8, wrap=True, controls=[check_btn, ip_btn, pick_pool_btn]
+            ),
             proxy_error,
             ft.Row(
                 spacing=10,
@@ -760,7 +931,24 @@ def open_profile_dialog(
                 ],
             ),
             totp_preview_text,
-            _field(get_string("notes_label"), notes_field),
+            ft.Row(
+                spacing=10,
+                controls=[
+                    ft.Container(
+                        expand=1,
+                        content=_field(get_string("recovery_email_label"), recovery_email_field),
+                    ),
+                    ft.Container(
+                        expand=1,
+                        content=_field(get_string("notes_label"), notes_field),
+                    ),
+                ],
+            ),
+            _field(
+                get_string("backup_codes_label"),
+                backup_codes_field,
+                get_string("backup_codes_hint"),
+            ),
         ],
     )
 
@@ -770,6 +958,7 @@ def open_profile_dialog(
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         controls=[
             ft.Row(
+                spacing=8,
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 controls=[
@@ -778,6 +967,10 @@ def open_profile_dialog(
                         size=13.5,
                         font_family=FONT_BOLD,
                         color=COLORS["text_main"],
+                        expand=True,
+                        no_wrap=True,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                        tooltip=get_string("hw_section_title"),
                     ),
                     roll_btn,
                 ],
@@ -829,6 +1022,9 @@ def open_profile_dialog(
                                     size=12.5,
                                     font_family=FONT_BOLD,
                                     color=COLORS["text_main"],
+                                    expand=True,
+                                    no_wrap=True,
+                                    overflow=ft.TextOverflow.ELLIPSIS,
                                 ),
                             ],
                         ),
@@ -836,8 +1032,80 @@ def open_profile_dialog(
                     ],
                 ),
             ),
+            ft.Divider(height=12, color=COLORS["card_border"]),
+            ft.Row(
+                spacing=8,
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Text(
+                        get_string("ext_section_title"),
+                        size=13,
+                        font_family=FONT_BOLD,
+                        color=COLORS["text_main"],
+                        expand=True,
+                        no_wrap=True,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                    manage_ext_btn,
+                ],
+            ),
+            ft.Text(
+                get_string("ext_section_hint"),
+                size=11.5,
+                color=COLORS["text_dim"],
+            ),
+            ft.Container(
+                padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+                border_radius=8,
+                bgcolor=COLORS["bg"],
+                border=ft.Border.all(1, COLORS["card_border"]),
+                content=ext_checks_col,
+            ),
         ],
     )
+
+    columns_host = ft.Column(
+        scroll=ft.ScrollMode.AUTO,
+        expand=True,
+        controls=[
+            ft.Row(
+                spacing=20,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+                controls=[
+                    ft.Container(expand=11, content=left_column),
+                    ft.Container(width=1, bgcolor=COLORS["card_border"]),
+                    ft.Container(expand=10, content=right_column),
+                ],
+            )
+        ],
+    )
+
+    body_container = ft.Container(
+        width=940,
+        height=660,
+        content=columns_host,
+    )
+
+    def _on_dialog_resize(target_w: int, _target_h: int) -> None:
+        if target_w < 740:
+            columns_host.controls = [
+                left_column,
+                ft.Divider(height=16, color=COLORS["card_border"]),
+                right_column,
+            ]
+        else:
+            columns_host.controls = [
+                ft.Row(
+                    spacing=20,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                    controls=[
+                        ft.Container(expand=11, content=left_column),
+                        ft.Container(width=1, bgcolor=COLORS["card_border"]),
+                        ft.Container(expand=10, content=right_column),
+                    ],
+                )
+            ]
 
     def _close_dialog(_: object = None) -> None:
         _stop_totp_timer()
@@ -859,25 +1127,7 @@ def open_profile_dialog(
                 ft.Text(subtitle, size=13, color=COLORS["text_sub"]),
             ],
         ),
-        content=ft.Container(
-            width=880,
-            height=610,
-            content=ft.Column(
-                scroll=ft.ScrollMode.AUTO,
-                expand=True,
-                controls=[
-                    ft.Row(
-                        spacing=22,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                        controls=[
-                            ft.Container(expand=11, content=left_column),
-                            ft.Container(width=1, bgcolor=COLORS["card_border"]),
-                            ft.Container(expand=10, content=right_column),
-                        ],
-                    )
-                ],
-            ),
-        ),
+        content=body_container,
         actions=[
             ft.TextButton(
                 get_string("cancel"),
@@ -891,6 +1141,20 @@ def open_profile_dialog(
                 on_click=on_submit,
             ),
         ],
+    )
+    bind_responsive_dialog(
+        page,
+        dlg,
+        body_container,
+        base_width=940,
+        base_height=660,
+        width_ratio=0.90,
+        height_ratio=0.84,
+        min_width=520,
+        max_width=1120,
+        min_height=420,
+        max_height=860,
+        on_resize_extra=_on_dialog_resize,
     )
     page.show_dialog(dlg)
 
@@ -947,6 +1211,18 @@ def _do_proxy_check(
     threading.Thread(target=do_check, daemon=True).start()
 
 
+def _resolve_ip_timezone(result: GeoCheckResult) -> str | None:
+    """Return the best validated IANA timezone detected for the exit IP."""
+    for s in result.sources:
+        if not s.error and s.timezone and validate_timezone(s.timezone)[0]:
+            return s.timezone
+    if result.auto_timezone and validate_timezone(result.auto_timezone)[0]:
+        return result.auto_timezone
+    if result.timezone and validate_timezone(result.timezone)[0]:
+        return result.timezone
+    return None
+
+
 def _do_ip_check(
     page: ft.Page,
     proxy_field: ft.TextField,
@@ -975,15 +1251,75 @@ def _do_ip_check(
     geo_result.visible = False
     page.update()
 
+    state_holder: dict[str, GeoCheckResult | None] = {"res": None}
+
+    def _rerender_geo() -> None:
+        res = state_holder["res"]
+        if res is None:
+            return
+        cur_tz = (timezone_field.value or "").strip()
+        cur_loc = (locale_field.value or "").strip()
+        eff_tz = cur_tz or res.auto_timezone
+        eff_loc = cur_loc or res.locale
+        updated_warnings = compare(
+            res.exit_ip,
+            res.country,
+            eff_tz,
+            eff_loc,
+            bool(cur_loc),
+            res.sources,
+        )
+        updated = GeoCheckResult(
+            exit_ip=res.exit_ip,
+            country=res.country,
+            auto_timezone=res.auto_timezone,
+            suggested_locale=res.suggested_locale,
+            timezone=eff_tz,
+            timezone_pinned=bool(cur_tz),
+            locale=eff_loc,
+            locale_pinned=bool(cur_loc),
+            sources=res.sources,
+            warnings=updated_warnings,
+            error=res.error,
+        )
+        geo_result.controls = _geo_lines(
+            updated,
+            use_locale,
+            use_timezone=use_timezone,
+            use_both=use_both,
+            current_tz=cur_tz,
+            current_locale=cur_loc,
+        )
+        with contextlib.suppress(Exception):
+            page.update()
+
     def use_locale(value: str) -> None:
         locale_field.value = value
-        page.update()
+        _rerender_geo()
+
+    def use_timezone(value: str) -> None:
+        timezone_field.value = value
+        _rerender_geo()
+
+    def use_both(tz_val: str, loc_val: str) -> None:
+        timezone_field.value = tz_val
+        locale_field.value = loc_val
+        _rerender_geo()
 
     def do_check() -> None:
         try:
             result = check_geo(proxy or None, timezone or None, locale or None)
-            geo_result.controls = _geo_lines(result, use_locale)
-            geo_result.height = min(140, 22 * len(geo_result.controls))
+            state_holder["res"] = result
+            cur_tz = (timezone_field.value or "").strip()
+            cur_loc = (locale_field.value or "").strip()
+            geo_result.controls = _geo_lines(
+                result,
+                use_locale,
+                use_timezone=use_timezone,
+                use_both=use_both,
+                current_tz=cur_tz,
+                current_locale=cur_loc,
+            )
         except Exception as e:
             geo_result.controls = [
                 ft.Text(get_string("geo_check_failed", error=e), size=12, color=COLORS["error"])
@@ -997,12 +1333,24 @@ def _do_ip_check(
     threading.Thread(target=do_check, daemon=True).start()
 
 
-def _geo_lines(result: GeoCheckResult, use_locale: Callable[[str], None]) -> list[ft.Control]:
+def _geo_lines(
+    result: GeoCheckResult,
+    use_locale: Callable[[str], None],
+    use_timezone: Callable[[str], None] | None = None,
+    use_both: Callable[[str, str], None] | None = None,
+    current_tz: str = "",
+    current_locale: str = "",
+) -> list[ft.Control]:
     def line(text: str, color: str = COLORS["text_sub"]) -> ft.Text:
         return ft.Text(text, size=12, color=color, selectable=True)
 
     if result.exit_ip is None:
         return [line(get_string("geo_check_failed", error=result.error), COLORS["error"])]
+
+    ip_tz = _resolve_ip_timezone(result)
+    ip_loc = result.suggested_locale
+    tz_needs_sync = bool(ip_tz and current_tz.strip() != ip_tz)
+    loc_needs_sync = bool(ip_loc and current_locale.strip().lower() != ip_loc.lower())
 
     mode = {True: get_string("geo_pinned"), False: get_string("geo_auto")}
     lines: list[ft.Control] = [
@@ -1051,13 +1399,55 @@ def _geo_lines(result: GeoCheckResult, use_locale: Callable[[str], None]) -> lis
         lines.append(line(result.error, COLORS["error"]))
     for w in result.warnings:
         lines.append(line(f"\u26a0 {w.message}", COLORS["warning"]))
-    if not result.warnings and not result.error:
-        lines.append(line(f"\u2713 {get_string('geo_all_good')}", COLORS["success"]))
-    if result.suggested_locale and not result.locale_pinned:
+
+    if tz_needs_sync or loc_needs_sync:
         lines.append(
-            ft.TextButton(
-                get_string("geo_use_suggested", value=result.suggested_locale),
-                on_click=lambda _, v=result.suggested_locale: use_locale(v),
+            line(
+                f"\u26a0 {get_string('geo_warn_setting_mismatch', country=result.country or '?', tz=ip_tz or '?', loc=ip_loc or '?')}",
+                COLORS["warning"],
+            )
+        )
+    elif not result.warnings and not result.error:
+        lines.append(line(f"\u2713 {get_string('geo_all_good')}", COLORS["success"]))
+
+    action_btns: list[ft.Control] = []
+    if tz_needs_sync and ip_tz and use_timezone is not None:
+        action_btns.append(
+            ft.OutlinedButton(
+                get_string("geo_use_timezone", value=ip_tz),
+                icon=ft.Icons.SCHEDULE_OUTLINED,
+                height=32,
+                style=OUTLINE_STYLE,
+                on_click=lambda _, v=ip_tz: use_timezone(v),
+            )
+        )
+    if loc_needs_sync and ip_loc:
+        action_btns.append(
+            ft.OutlinedButton(
+                get_string("geo_use_suggested", value=ip_loc),
+                icon=ft.Icons.LANGUAGE_OUTLINED,
+                height=32,
+                style=OUTLINE_STYLE,
+                on_click=lambda _, v=ip_loc: use_locale(v),
+            )
+        )
+    if tz_needs_sync and loc_needs_sync and ip_tz and ip_loc and use_both is not None:
+        action_btns.append(
+            ft.Button(
+                get_string("geo_use_both", tz=ip_tz, loc=ip_loc),
+                icon=ft.Icons.AUTO_FIX_HIGH_OUTLINED,
+                height=32,
+                style=ACCENT_STYLE,
+                on_click=lambda _, t_v=ip_tz, l_v=ip_loc: use_both(t_v, l_v),
+            )
+        )
+    if action_btns:
+        lines.append(
+            ft.Row(
+                spacing=8,
+                run_spacing=6,
+                wrap=True,
+                controls=action_btns,
             )
         )
     return lines

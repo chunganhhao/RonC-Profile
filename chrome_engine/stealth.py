@@ -26,64 +26,78 @@ control actions:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import math
 import secrets
 from random import Random
 from typing import Any
 
-from .persona import Persona
+from .persona import Persona, align_seed_for_device_memory
 
 # Expected WebGPU adapter metadata per persona platform so cross-OS personas
 # never expose a contradicting host GPU adapter (e.g. Apple Metal on Windows).
-_WEBGPU_PROFILES: dict[str, dict[str, str]] = {
-    "windows": {
-        "vendor": "intel",
-        "architecture": "gen-12lp",
-        "device": "uhd-graphics",
-        "description": "Intel(R) UHD Graphics",
-    },
-    "macos": {
-        "vendor": "apple",
-        "architecture": "metal-3",
-        "device": "apple-m2",
-        "description": "Apple M2",
-    },
-    "linux": {
-        "vendor": "intel",
-        "architecture": "gen-12lp",
-        "device": "mesa-intel",
-        "description": "Mesa Intel(R) UHD Graphics",
-    },
+_LINUX_WEBGPU_PROFILE: dict[str, str] = {
+    "vendor": "intel",
+    "architecture": "gen-12lp",
+    "device": "mesa-intel",
+    "description": "Mesa Intel(R) UHD Graphics",
 }
+
+_WIN_WEBGPU_TABLE: tuple[tuple[str, str, str, str], ...] = (
+    ("intel", "gen-12lp", "uhd-graphics-770", "Intel(R) Iris(R) Xe Graphics"),
+    ("intel", "gen-12lp", "uhd-graphics-770", "Intel(R) Iris(R) Xe Graphics"),
+    ("nvidia", "ampere", "rtx-3060", "NVIDIA GeForce RTX 3060 Laptop GPU"),
+    ("intel", "gen-12lp", "uhd-graphics-770", "Intel(R) Iris(R) Xe Graphics"),
+    ("intel", "gen-12lp", "uhd-graphics-770", "Intel(R) Iris(R) Xe Graphics"),
+    ("amd", "gcn-5", "radeon-graphics", "AMD Radeon(TM) Graphics"),
+    ("intel", "gen-9", "uhd-graphics", "Intel(R) UHD Graphics"),
+    ("intel", "gen-12lp", "uhd-graphics-770", "Intel(R) Iris(R) Xe Graphics"),
+    ("intel", "xe-lpg", "arc-graphics", "Intel(R) Arc(TM) Graphics"),
+    ("intel", "gen-12lp", "uhd-graphics-770", "Intel(R) Iris(R) Xe Graphics"),
+    ("intel", "gen-9", "uhd-graphics-620", "Intel(R) UHD Graphics 620"),
+    ("nvidia", "lovelace", "rtx-4060", "NVIDIA GeForce RTX 4060 Laptop GPU"),
+    ("intel", "gen-12lp", "uhd-graphics", "Intel(R) UHD Graphics"),
+)
+
+
+_MACOS_WEBGPU_TABLE: tuple[tuple[str, str, str, str], ...] = (
+    ("apple", "metal-3", "apple-m4", "Apple M4"),
+    ("apple", "metal-3", "apple-m2", "Apple M2"),
+    ("apple", "metal-3", "apple-m1", "Apple M1"),
+    ("apple", "metal-3", "apple-m3", "Apple M3"),
+    ("apple", "metal-3", "apple-m1-pro", "Apple M1 Pro"),
+    ("apple", "metal-3", "apple-m2-pro", "Apple M2 Pro"),
+    ("apple", "metal-3", "apple-m3-pro", "Apple M3 Pro"),
+    ("apple", "metal-3", "apple-m4-pro", "Apple M4 Pro"),
+    ("apple", "metal-3", "apple-m1-max", "Apple M1 Max"),
+    ("apple", "metal-3", "apple-m2-max", "Apple M2 Max"),
+    ("apple", "metal-3", "apple-m3-max", "Apple M3 Max"),
+    ("apple", "metal-3", "apple-m4-max", "Apple M4 Max"),
+    ("apple", "metal-3", "apple-m2", "Apple M2"),
+)
 
 
 def webgpu_profile_for(platform: str, seed: int = 3) -> dict[str, str]:
-    """Deterministic, platform-coherent WebGPU adapter info for `platform`."""
-    rng = Random(f"webgpu:{platform}:{seed}")
+    """Deterministic, platform-coherent WebGPU adapter info matching C++ webgl_config_data.h."""
+    aligned = align_seed_for_device_memory(seed)
     if platform == "macos":
-        chip = rng.choice(("Apple M1", "Apple M2", "Apple M3", "Apple M4"))
-        return {
-            "vendor": "apple",
-            "architecture": "metal-3",
-            "device": chip.lower().replace(" ", "-"),
-            "description": chip,
-        }
-    if platform == "windows":
-        choice = rng.choice(
-            (
-                ("intel", "gen-12lp", "uhd-graphics-770", "Intel(R) Iris(R) Xe Graphics"),
-                ("nvidia", "ampere", "rtx-3060", "NVIDIA GeForce RTX 3060"),
-                ("amd", "rdna-2", "rx-6600", "AMD Radeon RX 6600"),
-            )
-        )
+        choice = _MACOS_WEBGPU_TABLE[aligned % len(_MACOS_WEBGPU_TABLE)]
         return {
             "vendor": choice[0],
             "architecture": choice[1],
             "device": choice[2],
             "description": choice[3],
         }
-    return dict(_WEBGPU_PROFILES["linux"])
+    if platform == "windows":
+        choice = _WIN_WEBGPU_TABLE[aligned % len(_WIN_WEBGPU_TABLE)]
+        return {
+            "vendor": choice[0],
+            "architecture": choice[1],
+            "device": choice[2],
+            "description": choice[3],
+        }
+    return dict(_LINUX_WEBGPU_PROFILE)
 
 
 def build_anti_cdp_init_script(persona: Persona) -> str:
@@ -1070,18 +1084,8 @@ def bezier_curve(
         # Ease-in-out timing parameter (smoothstep)
         u = t * t * (3.0 - 2.0 * t)
         inv = 1.0 - u
-        px = (
-            (inv**3) * x0
-            + 3.0 * (inv**2) * u * c1x
-            + 3.0 * inv * (u**2) * c2x
-            + (u**3) * x3
-        )
-        py = (
-            (inv**3) * y0
-            + 3.0 * (inv**2) * u * c1y
-            + 3.0 * inv * (u**2) * c2y
-            + (u**3) * y3
-        )
+        px = (inv**3) * x0 + 3.0 * (inv**2) * u * c1x + 3.0 * inv * (u**2) * c2x + (u**3) * x3
+        py = (inv**3) * y0 + 3.0 * (inv**2) * u * c1y + 3.0 * inv * (u**2) * c2y + (u**3) * y3
         points.append((round(px, 2), round(py, 2)))
     points[-1] = (round(x3, 2), round(y3, 2))
     return points
@@ -1127,10 +1131,8 @@ async def human_click_at(
         for px, py in bezier_curve(origin, (x, y), steps=steps):
             await move_fn(px, py)
             await asyncio.sleep(0.004)
-        try:
-            setattr(page, "_last_mouse_pos", (float(x), float(y)))
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            page._last_mouse_pos = (float(x), float(y))
     await mouse.click(x, y)
 
 

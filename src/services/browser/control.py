@@ -190,9 +190,7 @@ class PageController:
             if callable(wheel_fn):
                 await wheel_fn(float(delta_x), float(delta_y))
             else:
-                await page.evaluate(
-                    f"window.scrollBy({float(delta_x)}, {float(delta_y)}); true;"
-                )
+                await page.evaluate(f"window.scrollBy({float(delta_x)}, {float(delta_y)}); true;")
         return await self._describe(page)
 
     async def wait_for(self, selector: str, timeout: int = 15_000) -> dict[str, Any]:
