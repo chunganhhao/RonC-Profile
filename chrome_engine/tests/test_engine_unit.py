@@ -445,3 +445,219 @@ def test_chrome_engine_hashes_verified_bundle_once_per_launch(tmp_path, monkeypa
     eng2 = ChromeEngine(prof, platform="macos", executable=exe)
     _start_until_browser(eng2, monkeypatch)
     assert hash_calls == 2
+
+
+def test_runtime_cdp_locale_override_lifecycle_and_027_retirement(tmp_path, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+
+    import playwright.async_api as pw
+
+    from chrome_engine import persona as personas
+    from chrome_engine import search
+    from chrome_engine.native_bundle import bundle_sha256
+
+    monkeypatch.setattr(engine_mod, "host_os", lambda: "macos")
+    app = tmp_path / "Chromium.app"
+    exe = app / "Contents/MacOS/Chromium"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"026-binary")
+    bin_sha = hashlib.sha256(b"026-binary").hexdigest()
+    b_sha = bundle_sha256(app)
+    monkeypatch.setattr(engine_mod, "NATIVE_REALM_BUNDLES", {b_sha})
+    monkeypatch.setattr(engine_mod, "APPLE_SILICON_COHERENCE_BUNDLES", {b_sha})
+    manifest = {
+        "binary_sha256": bin_sha,
+        "bundle_sha256": b_sha,
+        "acceptance": "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL",
+        "cases": {
+            "macos:2": {},
+            "macos:3": {},
+            "apple_silicon_m3_laptop": {},
+            "apple_silicon_m2_max_desktop": {},
+            "locale_speech_font_de": {},
+        },
+    }
+    (tmp_path / "native-acceptance.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    cdp_calls = []
+    detached = []
+    page_listeners = {}
+    owner_page = [None]
+    retry_remaining = [0]
+    on_popup_terminal_detach = [None]
+
+    class FakePage:
+        def __init__(self, name):
+            self.name = name
+            self.closed = False
+            self.main_frame = f"{name}-main"
+
+        def is_closed(self):
+            return self.closed
+
+        def on(self, event, cb):
+            page_listeners.setdefault(self.name, {}).setdefault(event, []).append(cb)
+
+    class FakeCdp:
+        def __init__(self, page):
+            self.page = page
+
+        async def send(self, method, params=None):
+            if owner_page[0] is not None and owner_page[0] is not self.page:
+                raise RuntimeError(
+                    "CDPSession.send: Protocol error (Emulation.setLocaleOverride): "
+                    "Another locale override is already in effect"
+                )
+            if retry_remaining[0] > 0:
+                retry_remaining[0] -= 1
+                raise RuntimeError(
+                    "CDPSession.send: Protocol error (Emulation.setLocaleOverride): "
+                    "Another locale override is already in effect"
+                )
+            if owner_page[0] is None:
+                owner_page[0] = self.page
+            cdp_calls.append((self.page.name, method, params))
+
+        async def detach(self):
+            detached.append(self.page.name)
+            if owner_page[0] is self.page:
+                owner_page[0] = None
+            if self.page is popup_tab and on_popup_terminal_detach[0] is not None:
+                cb = on_popup_terminal_detach[0]
+                on_popup_terminal_detach[0] = None
+                cb()
+
+    initial_page = FakePage("p1")
+    new_tab = FakePage("p2")
+    popup_tab = FakePage("popup")
+    ctx_listeners = {}
+
+    class FakeContext:
+        pages = [initial_page]
+
+        def on(self, event, cb):
+            ctx_listeners.setdefault(event, []).append(cb)
+
+        async def new_cdp_session(self, page):
+            return FakeCdp(page)
+
+        async def close(self):
+            pass
+
+    class FakePlaywright:
+        chromium = SimpleNamespace(launch_persistent_context=lambda *a, **kw: _ret_ctx())
+
+        async def stop(self):
+            pass
+
+    async def _ret_ctx():
+        return FakeContext()
+
+    class FakeStarter:
+        async def start(self):
+            return FakePlaywright()
+
+    monkeypatch.setattr(pw, "async_playwright", lambda: FakeStarter())
+
+    async def no_search(_ctx):
+        pass
+
+    monkeypatch.setattr(search, "initialize_search", no_search)
+    prof = tmp_path / "prof"
+    personas.save(prof, personas.generate("macos", seed=3, locale="de-DE"))
+
+    async def run_pre_027():
+        eng = ChromeEngine(prof, platform="macos", executable=exe, geoip=False)
+        await eng.start()
+        assert cdp_calls == [("p1", "Emulation.setLocaleOverride", {"locale": "de-DE"})]
+
+        # Same-origin popup is rejected while opener p1 holds the renderer lock.
+        # Even if p1 closes DURING popup's terminal detach() while popup is still
+        # marked pending, _locale_reschedule must preserve the handoff and recover
+        # across 2 consecutive transient lock rejections.
+        p1_cdp = eng._locale_sessions[initial_page]
+
+        def close_opener_during_terminal_detach():
+            assert popup_tab in eng._locale_pending
+            FakeContext.pages.remove(initial_page)
+            initial_page.closed = True
+            owner_page[0] = None
+            retry_remaining[0] = 2
+            page_listeners["p1"]["close"][0]()
+            assert popup_tab in eng._locale_reschedule
+
+        on_popup_terminal_detach[0] = close_opener_during_terminal_detach
+        FakeContext.pages.append(popup_tab)
+        ctx_listeners["page"][0](popup_tab)
+        while eng._locale_tasks:
+            await asyncio.gather(*list(eng._locale_tasks))
+        assert "popup" in detached
+        assert popup_tab in eng._locale_sessions
+        assert initial_page not in eng._locale_sessions
+        assert eng._locale_pending == set()
+        assert eng._locale_reschedule == set()
+        await p1_cdp.detach()
+
+        # Cross-origin new tab succeeds directly; stop detaches surviving sessions cleanly.
+        owner_page[0] = None
+        FakeContext.pages.append(new_tab)
+        ctx_listeners["page"][0](new_tab)
+        await asyncio.sleep(0)
+        assert new_tab in eng._locale_sessions
+        owner_page[0] = popup_tab
+        await eng.stop()
+        assert eng._locale_sessions == {}
+        assert eng._locale_pending == set()
+        assert eng._locale_reschedule == set()
+
+        # Events firing after stop clears _cdp_locale_override must not queue tasks.
+        before = len(cdp_calls)
+        ctx_listeners["page"][0](FakePage("late"))
+        assert eng._locale_tasks == set()
+        assert len(cdp_calls) == before
+
+    asyncio.run(run_pre_027())
+
+    # GeoIP-resolved locale (when persona.locale is initially None) is also picked up.
+    cdp_calls.clear()
+    owner_page[0] = None
+    FakeContext.pages = [initial_page]
+    initial_page.closed = False
+    geo_prof = tmp_path / "geo_prof"
+    personas.save(geo_prof, personas.generate("macos", seed=7))
+    eng_geo = ChromeEngine(geo_prof, platform="macos", executable=exe, geoip=True)
+
+    async def fake_lookup():
+        return engine_mod.ExitGeo(
+            ip="198.51.100.9", country="FR", timezone="Europe/Paris", locale="fr-FR"
+        )
+
+    monkeypatch.setattr(eng_geo, "_lookup_geo", fake_lookup)
+
+    class NoOpBridge:
+        url = "http://127.0.0.1:9999"
+
+        def __init__(self, *_a):
+            pass
+
+        async def start(self):
+            return self
+
+        async def stop(self):
+            pass
+
+    monkeypatch.setattr(engine_mod, "ProxyBridge", NoOpBridge)
+    eng_geo._proxy = "http://127.0.0.1:8888"
+    asyncio.run(eng_geo.start())
+    assert cdp_calls == [("p1", "Emulation.setLocaleOverride", {"locale": "fr-FR"})]
+    asyncio.run(eng_geo.stop())
+
+    # Once a verified 027 bundle is pinned, CDP locale override automatically retires.
+    cdp_calls.clear()
+    monkeypatch.setattr(engine_mod, "LOCALE_SPEECH_FONT_027_BUNDLES", {b_sha})
+    eng_027 = ChromeEngine(prof, platform="macos", executable=exe, geoip=False)
+    asyncio.run(eng_027.start())
+    assert eng_027._cdp_locale_override is None
+    assert cdp_calls == []
+    asyncio.run(eng_027.stop())

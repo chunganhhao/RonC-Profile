@@ -1,0 +1,341 @@
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index 72e1e42..6f49f9f 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -3640,9 +3640,17 @@ void RenderProcessHostImpl::AppendRendererCommandLine(
+       *base::CommandLine::ForCurrentProcess();
+   PropagateBrowserCommandLineToRenderer(browser_command_line, command_line);
+ 
+-  // Pass on the browser locale.
+-  const std::string locale =
++  // Pass on the browser locale, preserving explicit --lang when fingerprinting.
++  std::string locale =
+       GetContentClient()->browser()->GetApplicationLocale();
++  if (browser_command_line.HasSwitch(switches::kFingerprint) &&
++      browser_command_line.HasSwitch(switches::kLang)) {
++    const std::string requested_lang =
++        browser_command_line.GetSwitchValueASCII(switches::kLang);
++    if (!requested_lang.empty()) {
++      locale = requested_lang;
++    }
++  }
+   command_line->AppendSwitchASCII(switches::kLang, locale);
+ 
+   // A non-empty RendererCmdPrefix implies that Zygote is disabled.
+diff --git a/third_party/blink/renderer/core/core_initializer.cc b/third_party/blink/renderer/core/core_initializer.cc
+index 948451b..2ee00f9 100644
+--- a/third_party/blink/renderer/core/core_initializer.cc
++++ b/third_party/blink/renderer/core/core_initializer.cc
+@@ -49,6 +49,7 @@
+ #include "third_party/blink/renderer/core/html_names.h"
+ #include "third_party/blink/renderer/core/html_tokenizer_names.h"
+ #include "third_party/blink/renderer/core/input_type_names.h"
++#include "third_party/blink/renderer/core/inspector/locale_controller.h"
+ #include "third_party/blink/renderer/core/keywords.h"
+ #include "third_party/blink/renderer/core/lcp_critical_path_predictor/element_locator.h"
+ #include "third_party/blink/renderer/core/mathml_names.h"
+@@ -173,6 +174,7 @@ void CoreInitializer::Initialize() {
+   ScriptStateImpl::Init();
+ 
+   TimeZoneController::Init();
++  LocaleController::Init();
+ 
+   FontGlobalContext::Init();
+ 
+diff --git a/third_party/blink/renderer/core/inspector/locale_controller.h b/third_party/blink/renderer/core/inspector/locale_controller.h
+index 168cdbb..a674f0e 100644
+--- a/third_party/blink/renderer/core/inspector/locale_controller.h
++++ b/third_party/blink/renderer/core/inspector/locale_controller.h
+@@ -13,6 +13,7 @@ namespace blink {
+ class LocaleController {
+  public:
+   static LocaleController& instance();
++  static void Init();
+ 
+   LocaleController(const LocaleController&) = delete;
+   LocaleController& operator=(const LocaleController&) = delete;
+@@ -23,6 +24,7 @@ class LocaleController {
+   LocaleController();
+   ~LocaleController() = default;
+ 
++  void SetEmbedderLocale(const String& locale);
+   void UpdateLocale(const String& locale);
+ 
+   base::Lock lock_;
+diff --git a/third_party/blink/renderer/core/inspector/locale_controller.cc b/third_party/blink/renderer/core/inspector/locale_controller.cc
+index c9e4363..cb76a2e 100644
+--- a/third_party/blink/renderer/core/inspector/locale_controller.cc
++++ b/third_party/blink/renderer/core/inspector/locale_controller.cc
+@@ -4,7 +4,9 @@
+ 
+ #include "third_party/blink/renderer/core/inspector/locale_controller.h"
+ 
++#include "base/command_line.h"
+ #include "base/i18n/rtl.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "third_party/blink/renderer/core/workers/worker_or_worklet_global_scope.h"
+ #include "third_party/blink/renderer/core/workers/worker_thread.h"
+ #include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
+@@ -41,6 +43,39 @@ void NotifyLocaleChangeOnWorkerThread(WorkerThread* worker_thread) {
+ LocaleController::LocaleController()
+     : embedder_locale_(String(icu::Locale::getDefault().getName())) {}
+ 
++// static
++void LocaleController::Init() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (!command_line->HasSwitch(switches::kFingerprint)) {
++    return;
++  }
++  if (command_line->HasSwitch(switches::kDisableSpoofing) &&
++      command_line->GetSwitchValueASCII(switches::kDisableSpoofing)
++              .find("locale") != std::string::npos) {
++    return;
++  }
++  const std::string requested = command_line->GetSwitchValueASCII("lang");
++  if (requested.empty()) {
++    return;
++  }
++  String locale_str = String::FromUtf8(requested);
++  icu::Locale locale_object(locale_str.Ascii().data());
++  const char* lang = locale_object.getLanguage();
++  if (!lang || *lang == '\0') {
++    return;
++  }
++  instance().SetEmbedderLocale(locale_str);
++}
++
++void LocaleController::SetEmbedderLocale(const String& locale) {
++  base::AutoLock locker(lock_);
++  embedder_locale_ = locale;
++  if (locale_override_.empty()) {
++    UpdateLocale(locale);
++  }
++}
++
+ String LocaleController::SetLocaleOverride(const String& locale,
+                                            bool is_claiming_override) {
+   base::AutoLock locker(lock_);
+diff --git a/third_party/blink/renderer/platform/fonts/font_cache.h b/third_party/blink/renderer/platform/fonts/font_cache.h
+index a68b577..6ed2f0d 100644
+--- a/third_party/blink/renderer/platform/fonts/font_cache.h
++++ b/third_party/blink/renderer/platform/fonts/font_cache.h
+@@ -149,6 +149,7 @@ class PLATFORM_EXPORT FontCache final {
+ #endif
+ 
+   static void MaybePreloadSystemFonts();
++  static bool IsFontFamilyHiddenByFingerprint(const String& family);
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+   // These are needed for calling QueryRenderStyleForStrike, since
+diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
+index dea8c20..aef4da8 100644
+--- a/third_party/blink/renderer/platform/fonts/font_cache.cc
++++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
+@@ -41,6 +41,7 @@
+ #include "base/notreached.h"
+ #include "base/strings/escape.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
+ #include "base/system/sys_info.h"
+ #include "base/timer/elapsed_timer.h"
+ #include "base/trace_event/process_memory_dump.h"
+@@ -239,9 +240,83 @@ static bool IsBasicFont(const std::string& font_family) {
+     "BlinkMacSystemFont"
+   };
+ 
+-  return basic_fonts.count(font_family) > 0;
++  return std::any_of(basic_fonts.begin(), basic_fonts.end(),
++                     [&](const std::string& basic) {
++                       return base::EqualsCaseInsensitiveASCII(basic,
++                                                               font_family);
++                     });
+ }
+ 
++struct FingerprintFontDecision {
++  bool hide = false;
++  std::string substitute_family;
++};
++
++static const char* CurrentFingerprintOs() {
++#if BUILDFLAG(IS_WIN)
++  return "windows";
++#elif BUILDFLAG(IS_MAC)
++  return "macos";
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++  return "linux";
++#else
++  return "linux";
++#endif
++}
++
++static FingerprintFontDecision EvaluateFingerprintFont(
++    const std::string& requested_family) {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (!command_line->HasSwitch(switches::kFingerprint) ||
++      (command_line->HasSwitch(switches::kDisableSpoofing) &&
++       command_line->GetSwitchValueASCII(switches::kDisableSpoofing)
++               .find("font") != std::string::npos) ||
++      IsBasicFont(requested_family)) {
++    return {};
++  }
++
++  const char* current_os = CurrentFingerprintOs();
++  std::string spoofed_platform = base::ToLowerASCII(
++      command_line->GetSwitchValueASCII(switches::kFingerprintPlatform));
++  if (spoofed_platform.empty()) {
++    spoofed_platform = current_os;
++  }
++
++  const std::string canonical_family = base::ToLowerASCII(requested_family);
++  const std::string fingerprint =
++      command_line->GetSwitchValueASCII(switches::kFingerprint);
++  const uint32_t hash = static_cast<uint32_t>(
++      std::hash<std::string>{}(fingerprint + canonical_family));
++  const float probability =
++      static_cast<float>(hash) /
++      static_cast<float>(std::numeric_limits<uint32_t>::max());
++
++  if (spoofed_platform != current_os) {
++    const std::vector<std::string> platform_fonts =
++        GetPlatformFonts(spoofed_platform);
++    const bool is_platform_font = std::any_of(
++        platform_fonts.begin(), platform_fonts.end(),
++        [&](const std::string& pf) {
++          return base::EqualsCaseInsensitiveASCII(pf, canonical_family);
++        });
++    if (is_platform_font) {
++      const std::vector<std::string> current_os_fonts =
++          GetPlatformFonts(current_os);
++      if (!current_os_fonts.empty()) {
++        return {false, current_os_fonts[hash % current_os_fonts.size()]};
++      }
++      return {};
++    }
++    return {probability < 0.95, {}};
++  }
++  return {probability < 0.02, {}};
++}
++
++// static
++bool FontCache::IsFontFamilyHiddenByFingerprint(const String& family) {
++  return EvaluateFingerprintFont(family.Utf8()).hide;
++}
+ 
+ const FontPlatformData* FontCache::GetFontPlatformData(
+     const FontDescription& font_description,
+@@ -261,74 +336,21 @@ const FontPlatformData* FontCache::GetFontPlatformData(
+   }
+ #endif
+ 
+-  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-  // 字体指纹处理逻辑 - 不应用于最后手段字体
+-  if (command_line->HasSwitch(switches::kFingerprint) &&
+-      (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+-       command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("font") == std::string::npos) &&
+-      creation_params.CreationType() == kCreateFontByFamily &&
++  if (creation_params.CreationType() == kCreateFontByFamily &&
+       alternate_font_name != AlternateFontName::kLastResort) {
+-
+-    const std::string requested_family = creation_params.Family().Utf8();
+-
+-    // 基础字体直接返回，不进行任何处理
+-    if (IsBasicFont(requested_family)) {
+-      return font_platform_data_cache_.GetOrCreateFontPlatformData(
+-          this, font_description, creation_params, alternate_font_name);
++    const FingerprintFontDecision decision =
++        EvaluateFingerprintFont(creation_params.Family().Utf8());
++    if (decision.hide) {
++      return nullptr;
+     }
+-
+-    // 检测当前操作系统
+-    const char* current_os =
+-#if BUILDFLAG(IS_WIN)
+-      "windows";
+-#elif BUILDFLAG(IS_MAC)
+-      "macos";
+-#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+-      "linux";
+-#else
+-      "linux";  // 默认
+-#endif
+-
+-
+-    std::string spoofed_platform = command_line->GetSwitchValueASCII(switches::kFingerprintPlatform);
+-    if (spoofed_platform.empty()) {
+-      spoofed_platform = current_os;
+-    }
+-
+-    std::vector<std::string> current_os_fonts = GetPlatformFonts(current_os);
+-    std::vector<std::string> platform_fonts = GetPlatformFonts(spoofed_platform);
+-
+-    std::string fingerprint = command_line->GetSwitchValueASCII(switches::kFingerprint);
+-    uint32_t hash = std::hash<std::string>{}(fingerprint + requested_family);
+-
+-    if (spoofed_platform != current_os) {
+-      // 获取伪装平台的字体列表
+-      bool is_platform_font = std::find(platform_fonts.begin(), platform_fonts.end(),
+-                                        requested_family) != platform_fonts.end();
+-      if (is_platform_font) {
+-        // 伪装平台的字体，用当前系统的字体替代
+-        size_t index = hash % current_os_fonts.size();
+-        FontFaceCreationParams substitute_params(AtomicString(current_os_fonts[index].c_str()));
+-        return font_platform_data_cache_.GetOrCreateFontPlatformData(
+-            this, font_description, substitute_params, alternate_font_name);
+-      } else {
+-        // 非平台字体处理：95%概率隐藏
+-        float probability = static_cast<float>(hash) / static_cast<float>(std::numeric_limits<uint32_t>::max());
+-        if (probability < 0.95) {
+-          return nullptr;
+-        }
+-        // 5%概率显示，继续默认流程
+-      }
+-    } else {
+-      // 系统相同，随机隐藏2%的字体以生成指纹
+-      float probability = static_cast<float>(hash) / static_cast<float>(std::numeric_limits<uint32_t>::max());
+-      if (probability < 0.02) {
+-        return nullptr;
+-      }
++    if (!decision.substitute_family.empty()) {
++      FontFaceCreationParams substitute_params(
++          AtomicString(decision.substitute_family.c_str()));
++      return font_platform_data_cache_.GetOrCreateFontPlatformData(
++          this, font_description, substitute_params, alternate_font_name);
+     }
+   }
+ 
+-
+   return font_platform_data_cache_.GetOrCreateFontPlatformData(
+       this, font_description, creation_params, alternate_font_name);
+ }
+diff --git a/third_party/blink/renderer/modules/font_access/font_access.cc b/third_party/blink/renderer/modules/font_access/font_access.cc
+index f066f20..4d089f0 100644
+--- a/third_party/blink/renderer/modules/font_access/font_access.cc
++++ b/third_party/blink/renderer/modules/font_access/font_access.cc
+@@ -22,6 +22,7 @@
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/modules/font_access/font_metadata.h"
+ #include "third_party/blink/renderer/platform/bindings/script_state.h"
++#include "third_party/blink/renderer/platform/fonts/font_cache.h"
+ 
+ namespace blink {
+ 
+@@ -161,10 +162,15 @@ void FontAccess::DidGetEnumerationResponse(
+       continue;
+     }
+ 
++    String family = String::FromUtf8(element.family());
++    if (FontCache::IsFontFamilyHiddenByFingerprint(family)) {
++      continue;
++    }
++
+     auto entry = FontEnumerationEntry{
+         .postscript_name = String::FromUtf8(element.postscript_name()),
+         .full_name = String::FromUtf8(element.full_name()),
+-        .family = String::FromUtf8(element.family()),
++        .family = std::move(family),
+         .style = String::FromUtf8(element.style()),
+     };
+     entries.push_back(FontMetadata::Create(std::move(entry)));

@@ -79,6 +79,8 @@ APPLE_SILICON_COHERENCE_BUNDLES: frozenset[str] = frozenset(
         "f3b0f3218788c444c0ce9665cbc438cce904a763211542b6eac3f534bac34862",
     }
 )
+# Verified Chromium bundles containing 027 native locale, speech voices, and font-access filtering.
+LOCALE_SPEECH_FONT_027_BUNDLES: frozenset[str] = frozenset()
 
 _FEATURES_BLOCK = re.compile(r"disabledFeatures = \[(.*?)\]\.filter\(Boolean\)", re.S)
 
@@ -283,6 +285,25 @@ def _has_verified_apple_silicon_026(
     )
 
 
+def _has_verified_locale_speech_font_027(
+    executable: Path,
+    target: personas.Persona | str,
+    *,
+    cache: dict[tuple[Path, str | None], tuple[dict[str, Any], str] | None] | None = None,
+) -> bool:
+    """True when `executable` sits inside a pinned Chromium.app bundle verified for 027."""
+    platform_name = target if isinstance(target, str) else getattr(target, "platform", None)
+    verified = _read_verified_bundle_manifest(
+        executable, platform_name, require_bundle_field=True, cache=cache
+    )
+    if verified is None:
+        return False
+    manifest, actual_bundle = verified
+    return actual_bundle in LOCALE_SPEECH_FONT_027_BUNDLES and isinstance(
+        manifest["cases"].get("locale_speech_font_de"), dict
+    )
+
+
 def build_args(
     persona: personas.Persona,
     proxy_url: str | None = None,
@@ -395,6 +416,11 @@ class ChromeEngine:
         self._verified_bundle_cache: dict[
             tuple[Path, str | None], tuple[dict[str, Any], str] | None
         ] = {}
+        self._cdp_locale_override: str | None = None
+        self._locale_sessions: dict[Any, Any] = {}
+        self._locale_pending: set[Any] = set()
+        self._locale_reschedule: set[Any] = set()
+        self._locale_tasks: set[asyncio.Task[Any]] = set()
 
     # --- lifecycle --------------------------------------------------------
 
@@ -435,6 +461,13 @@ class ChromeEngine:
                 if getattr(persona, "platform", None) == "macos"
                 else True
             )
+            native_027 = (
+                _has_verified_locale_speech_font_027(
+                    executable, persona, cache=self._verified_bundle_cache
+                )
+                if getattr(persona, "platform", None) == "macos"
+                else False
+            )
             if getattr(persona, "requires_apple_silicon_026", False) and not native_026:
                 msg = (
                     "macOS Apple Silicon device/display persona requires a verified 026+ "
@@ -457,6 +490,15 @@ class ChromeEngine:
                     self.geo = replace(self.geo, locale=locale)
                 persona = persona.with_geo(self.geo.timezone, self.geo.locale)
         self.persona = persona
+        self._cdp_locale_override = (
+            persona.locale
+            if (
+                getattr(persona, "platform", None) == "macos"
+                and getattr(persona, "locale", None)
+                and not native_027
+            )
+            else None
+        )
 
         self.args = build_args(
             persona,
@@ -512,11 +554,26 @@ class ChromeEngine:
                 {"latitude": self.geo.latitude, "longitude": self.geo.longitude, "accuracy": 50}
             )
         for page in self.context.pages:
-            self._watch(page)
+            self._watch(page, apply_locale=False)
+            if self._cdp_locale_override:
+                await self._apply_page_locale(page)
         self.context.on("page", self._watch)
         return self.context
 
     async def stop(self) -> None:
+        self._cdp_locale_override = None
+        self._locale_pending.clear()
+        self._locale_reschedule.clear()
+        for task in list(self._locale_tasks):
+            task.cancel()
+        for task in list(self._locale_tasks):
+            with contextlib.suppress(BaseException):
+                await task
+        self._locale_tasks.clear()
+        for cdp in list(self._locale_sessions.values()):
+            with contextlib.suppress(Exception):
+                await cdp.detach()
+        self._locale_sessions.clear()
         if self.context is not None:
             with contextlib.suppress(Exception):
                 await self.context.close()
@@ -626,5 +683,114 @@ class ChromeEngine:
             )
         return ignored
 
-    def _watch(self, page: Any) -> None:
+    def _spawn_locale_task(self, coro: Any) -> None:
+        try:
+            task = asyncio.create_task(coro)
+        except RuntimeError:
+            coro.close()
+            return
+        self._locale_tasks.add(task)
+        task.add_done_callback(self._locale_tasks.discard)
+
+    def _schedule_page_locale(self, page: Any) -> None:
+        if (
+            not self._cdp_locale_override
+            or page in self._locale_sessions
+            or (hasattr(page, "is_closed") and page.is_closed())
+        ):
+            return
+        if page in self._locale_pending:
+            self._locale_reschedule.add(page)
+            return
+        self._spawn_locale_task(self._apply_page_locale(page))
+
+    async def _refresh_locale_session(self, page: Any, cdp: Any) -> None:
+        locale = self._cdp_locale_override
+        if not locale or (hasattr(page, "is_closed") and page.is_closed()):
+            return
+        with contextlib.suppress(Exception):
+            await cdp.send("Emulation.setLocaleOverride", {"locale": locale})
+
+    def _reconcile_page_locales(self) -> None:
+        if not self._cdp_locale_override or self.context is None:
+            return
+        for p in list(getattr(self.context, "pages", ())):
+            self._schedule_page_locale(p)
+        for p, cdp in list(self._locale_sessions.items()):
+            self._spawn_locale_task(self._refresh_locale_session(p, cdp))
+
+    def _on_page_closed(self, page: Any) -> None:
+        self._locale_sessions.pop(page, None)
+        self._locale_pending.discard(page)
+        self._locale_reschedule.discard(page)
+        self._reconcile_page_locales()
+
+    def _on_frame_navigated(self, page: Any, frame: Any) -> None:
+        if not hasattr(page, "main_frame") or frame == page.main_frame:
+            self._reconcile_page_locales()
+
+    async def _apply_page_locale(self, page: Any) -> None:
+        # shortcut: pre-027 CDP Emulation.setLocaleOverride gives eventual recovery (~5-20ms en-US window on renderer-singleton owner swap or cross-origin noopener boot); native 027 LocaleController::Init() gives continuous zero-gap locale and retires this path via LOCALE_SPEECH_FONT_027_BUNDLES.
+        locale = self._cdp_locale_override
+        if (
+            not locale
+            or page in self._locale_sessions
+            or page in self._locale_pending
+            or self.context is None
+            or not hasattr(self.context, "new_cdp_session")
+            or (hasattr(page, "is_closed") and page.is_closed())
+        ):
+            return
+        self._locale_pending.add(page)
+        self._locale_reschedule.discard(page)
+        try:
+            with contextlib.suppress(Exception):
+                cdp = await self.context.new_cdp_session(page)
+                retry_delays = (0.01, 0.025, 0.05, 0.1)
+                for attempt in range(len(retry_delays) + 1):
+                    try:
+                        await cdp.send("Emulation.setLocaleOverride", {"locale": locale})
+                        break
+                    except Exception as exc:
+                        # Sibling close/navigation may still be tearing down Mojo ownership in the same renderer.
+                        if attempt < len(retry_delays) and "Another locale override" in str(exc):
+                            await asyncio.sleep(retry_delays[attempt])
+                            if self._cdp_locale_override and not (
+                                hasattr(page, "is_closed") and page.is_closed()
+                            ):
+                                continue
+                        with contextlib.suppress(Exception):
+                            await cdp.detach()
+                        return
+                    except BaseException:
+                        with contextlib.suppress(Exception):
+                            await cdp.detach()
+                        raise
+                if not self._cdp_locale_override or (
+                    hasattr(page, "is_closed") and page.is_closed()
+                ):
+                    with contextlib.suppress(Exception):
+                        await cdp.detach()
+                    return
+                self._locale_sessions[page] = cdp
+                if page in self._locale_reschedule:
+                    self._locale_reschedule.discard(page)
+                    self._spawn_locale_task(self._refresh_locale_session(page, cdp))
+        finally:
+            self._locale_pending.discard(page)
+            if (
+                page in self._locale_reschedule
+                and page not in self._locale_sessions
+                and self._cdp_locale_override
+                and not (hasattr(page, "is_closed") and page.is_closed())
+            ):
+                self._locale_reschedule.discard(page)
+                self._schedule_page_locale(page)
+
+    def _watch(self, page: Any, *, apply_locale: bool = True) -> None:
         page.on("crash", lambda p: self.crashes.append(p.url))
+        if self._cdp_locale_override and hasattr(page, "on"):
+            page.on("close", lambda *_: self._on_page_closed(page))
+            page.on("framenavigated", lambda frame: self._on_frame_navigated(page, frame))
+        if apply_locale:
+            self._schedule_page_locale(page)

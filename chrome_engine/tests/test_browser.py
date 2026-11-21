@@ -468,3 +468,206 @@ def test_parallel_profiles_are_isolated(chrome_exe, tmp_path):
         assert cookie == f"who={i}"
         assert fp["main"]["hardwareConcurrency"] == 4 * (i + 1)
     assert len({fp["canvasHash"] for _, fp, _ in results}) == 3
+
+
+def test_runtime_locale_coherent_across_realms_and_origins(chrome_exe, tmp_path):
+    """Runtime CDP locale bridge aligns Window/Worker/SharedWorker Intl without clobbering Accept-Language."""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    worker_js = (
+        "self.onmessage=()=>self.postMessage({"
+        "lang:navigator.language,"
+        "langs:Array.from(navigator.languages||[]),"
+        "dtf:Intl.DateTimeFormat().resolvedOptions().locale,"
+        "nf:Intl.NumberFormat().resolvedOptions().locale,"
+        "num:(123456.789).toLocaleString()"
+        "});"
+    )
+    shared_js = (
+        "onconnect=e=>{const p=e.ports[0];p.onmessage=()=>p.postMessage({"
+        "dtf:Intl.DateTimeFormat().resolvedOptions().locale,"
+        "nf:Intl.NumberFormat().resolvedOptions().locale,"
+        "num:(123456.789).toLocaleString()"
+        "});p.start();};"
+    )
+    html = """<!doctype html><script>
+window.__firstInline = {
+  lang: navigator.language,
+  langs: Array.from(navigator.languages || []),
+  dtf: Intl.DateTimeFormat().resolvedOptions().locale,
+  nf: Intl.NumberFormat().resolvedOptions().locale,
+  num: (123456.789).toLocaleString(),
+};
+window.__seenLocales = [window.__firstInline.dtf];
+setInterval(() => {
+  const cur = Intl.DateTimeFormat().resolvedOptions().locale;
+  if (window.__seenLocales[window.__seenLocales.length - 1] !== cur) {
+    window.__seenLocales.push(cur);
+  }
+}, 1);
+window.checkLocale = async () => {
+  const h = await (await fetch('/h')).json();
+  const w = new Worker('/w.js');
+  const worker = await new Promise((res, rej) => {
+    w.onmessage = e => res(e.data);
+    w.onerror = e => rej(new Error(e.message));
+    w.postMessage(1);
+  });
+  w.terminate();
+  const sh = new SharedWorker('/sh.js');
+  const shared = await new Promise((res, rej) => {
+    sh.port.onmessage = e => res(e.data);
+    sh.port.onerror = e => rej(new Error(e.message));
+    sh.port.start();
+    sh.port.postMessage(1);
+  });
+  sh.port.close();
+  return {
+    win: {
+      lang: navigator.language,
+      langs: Array.from(navigator.languages || []),
+      dtf: Intl.DateTimeFormat().resolvedOptions().locale,
+      nf: Intl.NumberFormat().resolvedOptions().locale,
+      num: (123456.789).toLocaleString(),
+    },
+    worker,
+    shared,
+    acceptLang: h['accept-language'],
+    firstInline: window.__firstInline,
+    seenLocales: window.__seenLocales.slice(),
+  };
+};
+</script>"""
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            if self.path == "/h":
+                body = json.dumps({k.lower(): v for k, v in self.headers.items()}).encode()
+                ctype = "application/json"
+            elif self.path == "/w.js":
+                body, ctype = worker_js.encode(), "text/javascript"
+            elif self.path == "/sh.js":
+                body, ctype = shared_js.encode(), "text/javascript"
+            else:
+                body, ctype = html.encode(), "text/html"
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.end_headers()
+            self.wfile.write(body)
+
+    async def go():
+        srv_a = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        srv_b = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv_a.serve_forever, daemon=True).start()
+        threading.Thread(target=srv_b.serve_forever, daemon=True).start()
+        try:
+            eng = ChromeEngine(
+                tmp_path / "prof",
+                executable=chrome_exe,
+                persona=persona(seed=3003, locale="de-DE", timezone="Europe/Berlin"),
+                headless=True,
+                geoip=False,
+            )
+            ctx = await eng.start()
+            uses_cdp_bridge = eng._cdp_locale_override is not None
+            try:
+                p1 = ctx.pages[0]
+                await p1.goto(f"http://127.0.0.1:{srv_a.server_port}/")
+                same_origin = await p1.evaluate("window.checkLocale()")
+
+                # Same-origin popup shares p1's renderer initially, then must recover to de-DE when p1 navigates cross-origin.
+                async with ctx.expect_page() as pop1_info:
+                    await p1.evaluate("window.open('/popup1')")
+                pop1 = await pop1_info.value
+                await pop1.wait_for_load_state()
+                await p1.goto(f"http://localhost:{srv_b.server_port}/")
+                cross_origin = await p1.evaluate("window.checkLocale()")
+                await pop1.evaluate("new Promise(r => setTimeout(r, 50))")
+                await pop1.wait_for_function(
+                    "() => Intl.DateTimeFormat().resolvedOptions().locale === 'de-DE'",
+                    timeout=3000,
+                )
+                popup_after_cross_nav = await pop1.evaluate("window.checkLocale()")
+                await pop1.close()
+
+                # Fresh cross-origin rel=noopener popup (p1 is currently on localhost:srv_b).
+                async with ctx.expect_page() as pop_no_info:
+                    await p1.evaluate(
+                        f"window.open('http://127.0.0.1:{srv_a.server_port}/noopener', '_blank', 'noopener')"
+                    )
+                pop_no = await pop_no_info.value
+                await pop_no.wait_for_load_state()
+                await pop_no.wait_for_function(
+                    "() => Intl.DateTimeFormat().resolvedOptions().locale === 'de-DE'",
+                    timeout=3000,
+                )
+                cross_origin_noopener = await pop_no.evaluate("window.checkLocale()")
+                await pop_no.close()
+
+                # Separate tab opens its own same-origin popup, then closes directly without cross-nav.
+                p2 = await ctx.new_page()
+                await p2.goto(f"http://127.0.0.1:{srv_a.server_port}/")
+                second_tab = await p2.evaluate("window.checkLocale()")
+                async with ctx.expect_page() as pop2_info:
+                    await p2.evaluate("window.open('/popup2')")
+                pop2 = await pop2_info.value
+                await pop2.wait_for_load_state()
+                assert (
+                    await pop2.evaluate(
+                        "Boolean(window.opener && window.opener.location.origin === location.origin)"
+                    )
+                    is True
+                )
+                await p2.close()
+                await pop2.evaluate("new Promise(r => setTimeout(r, 50))")
+                await pop2.wait_for_function(
+                    "() => Intl.DateTimeFormat().resolvedOptions().locale === 'de-DE'",
+                    timeout=3000,
+                )
+                assert await pop2.evaluate("window.opener === null || window.opener.closed") is True
+                popup_after_opener_close = await pop2.evaluate("window.checkLocale()")
+                await pop2.close()
+                return uses_cdp_bridge, {
+                    "same_origin": same_origin,
+                    "cross_origin": cross_origin,
+                    "popup_after_cross_nav": popup_after_cross_nav,
+                    "cross_origin_noopener": cross_origin_noopener,
+                    "second_tab": second_tab,
+                    "popup_after_opener_close": popup_after_opener_close,
+                }
+            finally:
+                await eng.stop()
+        finally:
+            srv_a.shutdown()
+            srv_a.server_close()
+            srv_b.shutdown()
+            srv_b.server_close()
+
+    uses_cdp_bridge, samples = run(go(), timeout=120)
+    expected_langs = ["de-DE", "de", "en-US", "en"]
+    for name, sample in samples.items():
+        assert sample["acceptLang"] == "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7", name
+        assert sample["firstInline"]["lang"] == "de-DE", name
+        assert sample["firstInline"]["langs"] == expected_langs, name
+        assert sample["win"] == {
+            "lang": "de-DE",
+            "langs": expected_langs,
+            "dtf": "de-DE",
+            "nf": "de-DE",
+            "num": "123.456,789",
+        }, name
+        assert sample["worker"] == sample["win"], name
+        assert sample["shared"] == {"dtf": "de-DE", "nf": "de-DE", "num": "123.456,789"}, name
+        assert sample["seenLocales"][-1] == "de-DE", (name, sample["seenLocales"])
+        if name in ("popup_after_cross_nav", "popup_after_opener_close"):
+            assert sample["firstInline"]["dtf"] == "de-DE", (name, sample["firstInline"])
+        if uses_cdp_bridge:
+            assert set(sample["seenLocales"]) <= {"de-DE", "en-US"}, (name, sample["seenLocales"])
+        else:
+            assert sample["firstInline"]["dtf"] == "de-DE", (name, sample["firstInline"])
+            assert sample["seenLocales"] == ["de-DE"], (name, sample["seenLocales"])
