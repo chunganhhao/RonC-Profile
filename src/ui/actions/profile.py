@@ -22,6 +22,19 @@ def _store_conflict(on_save):
     return guarded
 
 
+def _delete_profile(
+    name: str,
+    pm: IProfileManager,
+    log: Callable[[str], None],
+) -> None:
+    try:
+        pm.delete_profile(name)
+    except (ProfileStoreChangedError, OSError) as exc:
+        log(str(exc) or "Profile/store is busy; refresh and retry")
+        return
+    log(get_string("deleted_profile", name=name))
+
+
 def delete_profile(
     page: ft.Page,
     name: str,
@@ -30,13 +43,7 @@ def delete_profile(
     refresh: Callable[[], None],
 ) -> None:
     def do_delete() -> None:
-        try:
-            pm.delete_profile(name)
-        except (ProfileStoreChangedError, OSError) as exc:
-            log(str(exc) or "Profile/store is busy; refresh and retry")
-            refresh()
-            return
-        log(get_string("deleted_profile", name=name))
+        _delete_profile(name, pm, log)
         refresh()
 
     open_confirm_dialog(page, name, do_delete)

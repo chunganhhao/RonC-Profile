@@ -7,6 +7,7 @@ from ...interfaces.protocols import IBrowserLauncher, IProfileManager
 from ..dialogs import open_confirm_dialog
 from ..state import AppState
 from .browser import launch_or_stop
+from .profile import _delete_profile
 
 
 def bulk_delete_profiles(
@@ -22,8 +23,7 @@ def bulk_delete_profiles(
 
     def do_bulk_delete() -> None:
         for name in names:
-            pm.delete_profile(name)
-            log(get_string("deleted_profile", name=name))
+            _delete_profile(name, pm, log)
         on_done()
         refresh()
 
