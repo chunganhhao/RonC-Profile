@@ -249,6 +249,7 @@ def test_legacy_ninja_log_mtime_repair_and_migration_compatibility(tmp_path):
     new_ctx["source"]["webgl_readback_patch_sha256"] = "new-024"
     new_ctx["source"]["audio_clientrects_patch_sha256"] = "new-025"
     new_ctx["source"]["apple_silicon_coherence_patch_sha256"] = "new-026"
+    new_ctx["source"]["locale_speech_font_patch_sha256"] = "new-027"
     new_ctx["kit"]["build.sh"] = "updated"
     new_ctx["kit"]["checkpoint.py"] = "updated"
     new_ctx["kit"]["prepare.py"] = "updated"
@@ -326,6 +327,7 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     checkpoint.pack(source, ckpt25, post025_saved)
     post026_ctx = json.loads(json.dumps(post025_saved))
     post026_ctx["source"]["apple_silicon_coherence_patch_sha256"] = "new-026"
+    post026_ctx["source"]["locale_speech_font_patch_sha256"] = "new-027"
     post026_ctx["kit"]["prepare.py"] = "new-026"
     root2 = tmp_path / "root2"
     root2.mkdir()
@@ -336,6 +338,24 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     assert checkpoint.main() == 0
     patch_hook2.assert_called_once_with(root2 / "build/src")
     assert json.loads((root2 / "native-ready.json").read_text()) == post026_ctx
+
+    # Post-026 checkpoint (has 023..026, lacks 027) must also migrate cleanly and apply 027.
+    post026_saved = json.loads(json.dumps(post025_saved))
+    post026_saved["source"]["apple_silicon_coherence_patch_sha256"] = "old-026"
+    ckpt26 = tmp_path / "ckpt26"
+    checkpoint.pack(source, ckpt26, post026_saved)
+    post027_ctx = json.loads(json.dumps(post026_saved))
+    post027_ctx["source"]["locale_speech_font_patch_sha256"] = "new-027"
+    post027_ctx["kit"]["prepare.py"] = "new-027"
+    root3 = tmp_path / "root3"
+    root3.mkdir()
+    monkeypatch.setattr(checkpoint, "identity", lambda _: post027_ctx)
+    patch_hook3 = Mock(return_value=True)
+    monkeypatch.setattr(checkpoint, "_apply_incremental_patches", patch_hook3)
+    monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root3), str(ckpt26)])
+    assert checkpoint.main() == 0
+    patch_hook3.assert_called_once_with(root3 / "build/src")
+    assert json.loads((root3 / "native-ready.json").read_text()) == post027_ctx
 
 
 def test_mtime_manifest_rejects_tampering(tmp_path):

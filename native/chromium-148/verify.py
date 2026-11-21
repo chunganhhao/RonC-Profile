@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import math
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -747,8 +748,39 @@ class Handler(BaseHTTPRequestHandler):
             + "let connections=0;self.onconnect=e=>{const connection=++connections;"
             "const p=e.ports[0];p.onmessage=async()=>p.postMessage({connection,sample:await sample()});p.start()};",
             "/sw.js": SAMPLE + "self.onmessage=async e=>e.ports[0].postMessage(await sample());",
+            "/locale-worker.js": "self.onmessage=()=>self.postMessage({"
+            "dtf:Intl.DateTimeFormat().resolvedOptions().locale,"
+            "nf:Intl.NumberFormat().resolvedOptions().locale,"
+            "num:(123456.789).toLocaleString(),"
+            "langs:Array.from(navigator.languages||[])});",
+            "/locale-shared.js": "self.onconnect=e=>{const p=e.ports[0];p.onmessage=()=>p.postMessage({"
+            "dtf:Intl.DateTimeFormat().resolvedOptions().locale,"
+            "nf:Intl.NumberFormat().resolvedOptions().locale,"
+            "num:(123456.789).toLocaleString(),"
+            "langs:Array.from(navigator.languages||[])});p.start();};",
+            "/locale-sw.js": "self.onmessage=e=>e.ports[0].postMessage({"
+            "dtf:Intl.DateTimeFormat().resolvedOptions().locale,"
+            "nf:Intl.NumberFormat().resolvedOptions().locale,"
+            "num:(123456.789).toLocaleString(),"
+            "langs:Array.from(navigator.languages||[])});",
         }
-        body = scripts.get(path, "<!doctype html><title>Native acceptance</title><body></body>")
+        if path == "/locale-popup":
+            body = (
+                "<!doctype html><head><script>"
+                "window.__firstInline={"
+                "lang:navigator.language,"
+                "langs:Array.from(navigator.languages||[]),"
+                "dtf:Intl.DateTimeFormat().resolvedOptions().locale,"
+                "nf:Intl.NumberFormat().resolvedOptions().locale,"
+                "num:(123456.789).toLocaleString()};"
+                "window.__seenLocales=[window.__firstInline.dtf];"
+                "setInterval(()=>{const c=Intl.DateTimeFormat().resolvedOptions().locale;"
+                "if(window.__seenLocales[window.__seenLocales.length-1]!==c)"
+                "window.__seenLocales.push(c);},1);"
+                "</script></head><body>ok</body>"
+            )
+        else:
+            body = scripts.get(path, "<!doctype html><title>Native acceptance</title><body></body>")
         self.send_response(200)
         self.send_header("Content-Type", "text/javascript" if path in scripts else "text/html")
         self.send_header("Cache-Control", "no-store")
@@ -1126,6 +1158,258 @@ async def verify(executable: Path, output: Path) -> None:
                 internal=0,
                 scheme="light",
             )
+
+            async def _verify_locale_speech_font_027(
+                seed: int, candidate_families: list[str] | tuple[str, ...] = ()
+            ) -> dict:
+                with tempfile.TemporaryDirectory(prefix="verify-027-") as tmp_profile_dir:
+                    context = await pw.chromium.launch_persistent_context(
+                        tmp_profile_dir,
+                        executable_path=str(executable),
+                        headless=True,
+                        color_scheme="null",
+                        no_viewport=True,
+                        ignore_default_args=[
+                            "--enable-automation",
+                            "--disable-extensions",
+                            "--disable-component-extensions-with-background-pages",
+                        ],
+                        args=[
+                            f"--fingerprint={seed}",
+                            "--fingerprint-platform=macos",
+                            "--fingerprint-brand=Chrome",
+                            "--lang=de-DE",
+                            "--accept-lang=de-DE,de,en-US,en",
+                            "--disable-background-networking",
+                        ],
+                    )
+                    try:
+                        allowed_origins = (
+                            f"http://127.0.0.1:{server.server_port}/",
+                            f"http://localhost:{server.server_port}/",
+                        )
+                        await context.route(
+                            "**/*",
+                            lambda route: (
+                                route.continue_()
+                                if route.request.url.startswith(allowed_origins)
+                                else route.abort()
+                            ),
+                        )
+                        if hasattr(context, "grant_permissions"):
+                            await context.grant_permissions(
+                                ["local-fonts"], origin=f"http://127.0.0.1:{server.server_port}"
+                            )
+                        page = (
+                            context.pages[0]
+                            if getattr(context, "pages", None)
+                            else await context.new_page()
+                        )
+                        await page.goto(f"http://127.0.0.1:{server.server_port}/")
+                        main_payload = await page.evaluate(
+                            """async (candidateFamilies) => {
+                        const timeout = (p) => Promise.race([
+                          p,
+                          new Promise((_, rej) => setTimeout(() => rej(new Error('027 timeout')), 10000)),
+                        ]);
+                        const w = new Worker('/locale-worker.js');
+                        const worker = await timeout(new Promise((res, rej) => {
+                          w.onmessage = e => res(e.data);
+                          w.onerror = e => rej(new Error(e.message));
+                          w.postMessage('go');
+                        }));
+                        w.terminate();
+                        const sh = new SharedWorker('/locale-shared.js');
+                        const shared = await timeout(new Promise((res, rej) => {
+                          sh.port.onmessage = e => res(e.data);
+                          sh.port.onerror = e => rej(new Error(e.message));
+                          sh.port.start();
+                          sh.port.postMessage('go');
+                        }));
+                        sh.port.close();
+                        const reg = await navigator.serviceWorker.register('/locale-sw.js');
+                        let service;
+                        try {
+                          await timeout(navigator.serviceWorker.ready);
+                          const ch = new MessageChannel();
+                          service = await timeout(new Promise((res) => {
+                            ch.port1.onmessage = e => res(e.data);
+                            reg.active.postMessage('go', [ch.port2]);
+                          }));
+                          ch.port1.close();
+                        } finally {
+                          await reg.unregister();
+                        }
+                        const voices = await new Promise((res) => {
+                          const init = speechSynthesis.getVoices();
+                          if (init.length > 0) return res(init);
+                          const done = () => res(speechSynthesis.getVoices());
+                          speechSynthesis.onvoiceschanged = done;
+                          setTimeout(done, 500);
+                        });
+                        const fonts = await window.queryLocalFonts();
+                        const families = Array.from(new Set(fonts.map(f => f.family))).sort();
+                        const visibleLower = new Set(families.map(f => f.toLowerCase()));
+                        const hiddenSample = (candidateFamilies || [])
+                          .filter(f => !visibleLower.has(f.toLowerCase()))
+                          .slice(0, 5);
+                        let caseRenderLeaks = 0;
+                        if (hiddenSample.length > 0) {
+                          const c = new OffscreenCanvas(400, 60);
+                          const g = c.getContext('2d');
+                          const sampleText = 'mmmmmmmmmmlliWW0123';
+                          g.font = '32px monospace';
+                          const wMono = g.measureText(sampleText).width;
+                          g.font = '32px serif';
+                          const wSerif = g.measureText(sampleText).width;
+                          for (const fam of hiddenSample) {
+                            for (const variant of [fam, fam.toLowerCase(), fam.toUpperCase()]) {
+                              g.font = '32px "' + variant + '", monospace';
+                              const mw = g.measureText(sampleText).width;
+                              g.font = '32px "' + variant + '", serif';
+                              const sw = g.measureText(sampleText).width;
+                              if (Math.abs(mw - wMono) > 0.01 || Math.abs(sw - wSerif) > 0.01) {
+                                caseRenderLeaks++;
+                              }
+                            }
+                          }
+                        }
+                        return {
+                          window: {
+                            dtf: Intl.DateTimeFormat().resolvedOptions().locale,
+                            nf: Intl.NumberFormat().resolvedOptions().locale,
+                            num: (123456.789).toLocaleString(),
+                            langs: Array.from(navigator.languages || []),
+                          },
+                          worker,
+                          shared,
+                          service,
+                          googleVoices: voices.filter(v => v.name.startsWith('Google')).map(v => v.name),
+                          localVoiceCount: voices.filter(v => !v.name.startsWith('Google') && v.localService).length,
+                          localFontFamilies: families,
+                          hiddenSampleCount: hiddenSample.length,
+                          caseRenderLeaks,
+                        };
+                    }""",
+                            list(candidate_families),
+                        )
+                        async with context.expect_page() as noopener_info:
+                            await page.evaluate(
+                                f"window.open('http://localhost:{server.server_port}/locale-popup?noopener=1', '_blank', 'noopener')"
+                            )
+                        noopener_page = await noopener_info.value
+                        await noopener_page.wait_for_load_state()
+                        noopener_popup = await noopener_page.evaluate(
+                            "() => ({first: window.__firstInline, seen: window.__seenLocales.slice()})"
+                        )
+                        await noopener_page.close()
+
+                        nav_opener = await context.new_page()
+                        await nav_opener.goto(f"http://127.0.0.1:{server.server_port}/")
+                        async with context.expect_page() as nav_pop_info:
+                            await nav_opener.evaluate("window.open('/locale-popup?same=crossnav')")
+                        nav_pop = await nav_pop_info.value
+                        await nav_pop.wait_for_load_state()
+                        nav_had_opener = await nav_pop.evaluate(
+                            "() => Boolean(window.opener && window.opener.location.origin === location.origin)"
+                        )
+                        await nav_opener.goto(f"http://localhost:{server.server_port}/")
+                        await nav_pop.evaluate("() => new Promise(r => setTimeout(r, 50))")
+                        same_origin_cross_nav_popup = await nav_pop.evaluate(
+                            "(hadOpener) => ({hadSameOriginOpener: hadOpener, first: window.__firstInline, seen: window.__seenLocales.slice()})",
+                            nav_had_opener,
+                        )
+                        await nav_pop.close()
+                        await nav_opener.close()
+
+                        close_opener = await context.new_page()
+                        await close_opener.goto(f"http://127.0.0.1:{server.server_port}/")
+                        async with context.expect_page() as close_pop_info:
+                            await close_opener.evaluate("window.open('/locale-popup?same=close')")
+                        close_pop = await close_pop_info.value
+                        await close_pop.wait_for_load_state()
+                        close_had_opener = await close_pop.evaluate(
+                            "() => Boolean(window.opener && window.opener.location.origin === location.origin)"
+                        )
+                        await close_opener.close()
+                        await close_pop.evaluate("() => new Promise(r => setTimeout(r, 50))")
+                        same_origin_close_popup = await close_pop.evaluate(
+                            "(hadOpener) => ({hadSameOriginOpener: hadOpener, openerClosed: window.opener === null || window.opener.closed, first: window.__firstInline, seen: window.__seenLocales.slice()})",
+                            close_had_opener,
+                        )
+                        await close_pop.close()
+
+                        main_payload["noopenerPopup"] = noopener_popup
+                        main_payload["sameOriginCrossNavPopup"] = same_origin_cross_nav_popup
+                        main_payload["sameOriginClosePopup"] = same_origin_close_popup
+                        return main_payload
+                    finally:
+                        await context.close()
+
+            r3006 = await _verify_locale_speech_font_027(3006)
+            r3003 = await _verify_locale_speech_font_027(
+                3003, candidate_families=r3006["localFontFamilies"]
+            )
+            expected_popup_first = {
+                "lang": "de-DE",
+                "langs": ["de-DE", "de", "en-US", "en"],
+                "dtf": "de-DE",
+                "nf": "de-DE",
+                "num": "123.456,789",
+            }
+            for label, payload in (("3003", r3003), ("3006", r3006)):
+                for realm in ("window", "worker", "shared", "service"):
+                    row = payload[realm]
+                    if (
+                        row.get("dtf") != "de-DE"
+                        or row.get("nf") != "de-DE"
+                        or row.get("num") != "123.456,789"
+                        or row.get("langs") != ["de-DE", "de", "en-US", "en"]
+                    ):
+                        raise ValueError(f"027 locale mismatch ({label}/{realm}): {row}")
+                for pkey in ("noopenerPopup", "sameOriginCrossNavPopup", "sameOriginClosePopup"):
+                    popup = payload.get(pkey) or {}
+                    require_same_opener = pkey != "noopenerPopup"
+                    require_closed = pkey == "sameOriginClosePopup"
+                    if (
+                        popup.get("first") != expected_popup_first
+                        or popup.get("seen") != ["de-DE"]
+                        or (require_same_opener and popup.get("hadSameOriginOpener") is not True)
+                        or (require_closed and popup.get("openerClosed") is not True)
+                    ):
+                        raise ValueError(
+                            f"027 popup locale continuity mismatch ({label}/{pkey}): {popup}"
+                        )
+                gvoices = payload.get("googleVoices", [])
+                if gvoices:
+                    raise ValueError(
+                        f"027 unexpected broken Google Network Speech voices ({label}): {gvoices}"
+                    )
+                if payload.get("localVoiceCount", 0) <= 0:
+                    raise ValueError(f"027 missing local system speech voices ({label})")
+                fams = payload.get("localFontFamilies", [])
+                if len(fams) <= 50 or "Arial" not in fams or "Helvetica" not in fams:
+                    raise ValueError(
+                        f"027 queryLocalFonts unexpected family set ({label}): {len(fams)}"
+                    )
+            if set(r3003["localFontFamilies"]) == set(r3006["localFontFamilies"]):
+                raise ValueError("027 queryLocalFonts did not reflect per-seed FontCache filtering")
+            if r3003.get("hiddenSampleCount", 0) <= 0 or r3003.get("caseRenderLeaks", 0) != 0:
+                raise ValueError(f"027 hidden font case-insensitivity check failed: {r3003}")
+            report["cases"]["locale_speech_font_de"] = {
+                "seed_3003_font_count": len(r3003["localFontFamilies"]),
+                "seed_3006_font_count": len(r3006["localFontFamilies"]),
+                "local_voice_count": r3003["localVoiceCount"],
+                "google_voice_count": 0,
+                "hidden_case_checked": r3003["hiddenSampleCount"],
+                "window": r3003["window"],
+                "worker": r3003["worker"],
+                "shared": r3003["shared"],
+                "service": r3003["service"],
+                "noopener_popup": r3003["noopenerPopup"],
+                "same_origin_cross_nav_popup": r3003["sameOriginCrossNavPopup"],
+                "same_origin_close_popup": r3003["sameOriginClosePopup"],
+            }
         report["acceptance"] = "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
     finally:
         server.shutdown()

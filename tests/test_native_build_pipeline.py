@@ -45,6 +45,7 @@ def test_prepare_applies_after_revision_checks_and_records_incomplete_acceptance
     assert proof["webgl_readback_patch_sha256"] == native.READBACK_PARITY_PATCH_SHA256
     assert proof["audio_clientrects_patch_sha256"] == native.AUDIO_CLIENTRECTS_PATCH_SHA256
     assert proof["apple_silicon_coherence_patch_sha256"] == native.APPLE_SILICON_PATCH_SHA256
+    assert proof["locale_speech_font_patch_sha256"] == native.LOCALE_SPEECH_FONT_PATCH_SHA256
     assert (
         (scaffold / "ungoogled-chromium/patches/series")
         .read_text()
@@ -58,6 +59,8 @@ def test_prepare_applies_after_revision_checks_and_records_incomplete_acceptance
             + native.AUDIO_CLIENTRECTS_SERIES_ENTRY
             + "\n"
             + native.APPLE_SILICON_SERIES_ENTRY
+            + "\n"
+            + native.LOCALE_SPEECH_FONT_SERIES_ENTRY
             + "\n"
         )
     )
@@ -76,6 +79,9 @@ def test_prepare_applies_after_revision_checks_and_records_incomplete_acceptance
     assert (
         scaffold / "ungoogled-chromium/patches" / native.APPLE_SILICON_SERIES_ENTRY
     ).read_bytes() == native.APPLE_SILICON_PATCH.read_bytes()
+    assert (
+        scaffold / "ungoogled-chromium/patches" / native.LOCALE_SPEECH_FONT_SERIES_ENTRY
+    ).read_bytes() == native.LOCALE_SPEECH_FONT_PATCH.read_bytes()
     assert len(proof["open_findings"]) == 2
     with pytest.raises(ValueError, match="fresh dedicated checkout"):
         native.prepare(scaffold)
@@ -282,6 +288,15 @@ def test_modified_apple_silicon_coherence_overlay_refused(scaffold, monkeypatch)
     native.subprocess.run.assert_not_called()
 
 
+def test_modified_locale_speech_font_overlay_refused(scaffold, monkeypatch):
+    bad = scaffold / "bad-027.patch"
+    bad.write_text("unreviewed 027 changes")
+    monkeypatch.setattr(native, "LOCALE_SPEECH_FONT_PATCH", bad)
+    with pytest.raises(ValueError, match="Locale/speech/font coherence patch checksum"):
+        native.prepare(scaffold)
+    native.subprocess.run.assert_not_called()
+
+
 def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkeypatch):
     import hashlib
 
@@ -291,10 +306,12 @@ def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkey
     target_b = src / "readback.txt"
     target_c = src / "audio.txt"
     target_d = src / "apple.txt"
+    target_e = src / "locale.txt"
     target_a.write_text("line1\nnew023\nline3\n")
     target_b.write_text("a\nold024\nc\n")
     target_c.write_text("x\nold025\nz\n")
     target_d.write_text("m1\nold026\nm3\n")
+    target_e.write_text("l1\nold027\nl3\n")
     patch_a = tmp_path / "023.patch"
     patch_a.write_text(
         "--- a/sample.txt\n+++ b/sample.txt\n@@ -1,3 +1,3 @@\n line1\n-old023\n+new023\n line3\n"
@@ -310,6 +327,10 @@ def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkey
     patch_d = tmp_path / "026.patch"
     patch_d.write_text(
         "--- a/apple.txt\n+++ b/apple.txt\n@@ -1,3 +1,3 @@\n m1\n-old026\n+new026\n m3\n"
+    )
+    patch_e = tmp_path / "027.patch"
+    patch_e.write_text(
+        "--- a/locale.txt\n+++ b/locale.txt\n@@ -1,3 +1,3 @@\n l1\n-old027\n+new027\n l3\n"
     )
     monkeypatch.setattr(native, "MACOS_ANTIDETECT_PATCH", patch_a)
     monkeypatch.setattr(
@@ -327,16 +348,23 @@ def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkey
     monkeypatch.setattr(
         native, "APPLE_SILICON_PATCH_SHA256", hashlib.sha256(patch_d.read_bytes()).hexdigest()
     )
+    monkeypatch.setattr(native, "LOCALE_SPEECH_FONT_PATCH", patch_e)
+    monkeypatch.setattr(
+        native,
+        "LOCALE_SPEECH_FONT_PATCH_SHA256",
+        hashlib.sha256(patch_e.read_bytes()).hexdigest(),
+    )
 
-    # Skips already-applied 023 and applies pending 024/025/026 cleanly.
+    # Skips already-applied 023 and applies pending 024/025/026/027 cleanly.
     assert native.apply_incremental_patches(src) is True
     assert target_a.read_text() == "line1\nnew023\nline3\n"
     assert target_b.read_text() == "a\nnew024\nc\n"
     assert target_c.read_text() == "x\nnew025\nz\n"
     assert target_d.read_text() == "m1\nnew026\nm3\n"
+    assert target_e.read_text() == "l1\nnew027\nl3\n"
     # Second invocation detects all patches already applied and makes no edits.
     assert native.apply_incremental_patches(src) is False
-    assert target_d.read_text() == "m1\nnew026\nm3\n"
+    assert target_e.read_text() == "l1\nnew027\nl3\n"
 
 
 def test_verify_matrix_targets_macos_only_and_covers_023_gates():
@@ -366,6 +394,9 @@ def test_verify_matrix_targets_macos_only_and_covers_023_gates():
         "PACK_ALIGNMENT",
         "gl.NO_ERROR",
         "htmlTextMetrics",
+        "noopenerPopup",
+        "sameOriginCrossNavPopup",
+        "sameOriginClosePopup",
     ):
         assert gate in verify_src
     assert (
@@ -397,13 +428,66 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     out = tmp_path / "report.json"
 
     launches: list[tuple[bool, list[str]]] = []
+    persistent_launches: list[dict] = []
     context_kwargs: list[dict] = []
+    close_popup_override: dict | None = None
 
     class FakePage:
         async def goto(self, url: str) -> None:
             self._url = url
 
+        async def wait_for_load_state(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
         async def evaluate(self, script: str, *args):
+            if "window.open(" in script or "setTimeout(r, 50)" in script:
+                return None
+            if "window.opener && window.opener.location.origin" in script:
+                return True
+            if "window.__firstInline" in script:
+                payload = {
+                    "first": {
+                        "lang": "de-DE",
+                        "langs": ["de-DE", "de", "en-US", "en"],
+                        "dtf": "de-DE",
+                        "nf": "de-DE",
+                        "num": "123.456,789",
+                    },
+                    "seen": ["de-DE"],
+                }
+                if args:
+                    payload["hadSameOriginOpener"] = args[0]
+                if "openerClosed" in script:
+                    payload["openerClosed"] = True
+                    if close_popup_override:
+                        payload.update(close_popup_override)
+                return payload
+            if "queryLocalFonts" in script:
+                seed_arg = next(a for a in launches[-1][1] if a.startswith("--fingerprint="))
+                is_3003 = seed_arg.endswith("=3003")
+                realm = {
+                    "dtf": "de-DE",
+                    "nf": "de-DE",
+                    "num": "123.456,789",
+                    "langs": ["de-DE", "de", "en-US", "en"],
+                }
+                base_fonts = [f"Font{i}" for i in range(60)] + ["Arial", "Helvetica"]
+                if not is_3003:
+                    base_fonts.append("Optima")
+                return {
+                    "window": dict(realm),
+                    "worker": dict(realm),
+                    "shared": dict(realm),
+                    "service": dict(realm),
+                    "googleVoices": [],
+                    "localVoiceCount": 42,
+                    "localFontFamilies": base_fonts,
+                    "hiddenSampleCount": 1 if is_3003 else 0,
+                    "caseRenderLeaks": 0,
+                }
             if args or "globalThis.sample=" in script or "globalThis.rAll=" in script:
                 return None
             if "WEBGL_debug_renderer_info" in script:
@@ -525,11 +609,33 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
             }
 
     class FakeContext:
+        def __init__(self):
+            self.pages = [FakePage()]
+
         async def route(self, *_):
+            pass
+
+        async def grant_permissions(self, *_a, **_kw):
             pass
 
         async def new_page(self):
             return FakePage()
+
+        def expect_page(self):
+            class _ExpectPage:
+                async def __aenter__(self):
+                    async def _page():
+                        return FakePage()
+
+                    return types.SimpleNamespace(value=_page())
+
+                async def __aexit__(self, *_):
+                    return False
+
+            return _ExpectPage()
+
+        async def close(self):
+            pass
 
     class FakeBrowser:
         version = "148.0.7778.215"
@@ -553,6 +659,17 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
             launches.append((self._state["open"], kwargs["args"]))
             return FakeBrowser()
 
+        async def launch_persistent_context(self, user_data_dir, **kwargs):
+            if not self._state["open"]:
+                raise RuntimeError(
+                    "BrowserType.launch_persistent_context: Target page, context or browser has been closed"
+                )
+            assert Path(user_data_dir).is_dir()
+            launches.append((self._state["open"], kwargs["args"]))
+            persistent_launches.append(dict(kwargs))
+            context_kwargs.append({"color_scheme": kwargs.get("color_scheme")})
+            return FakeContext()
+
     class FakePlaywrightCM:
         def __init__(self):
             self.state = {"open": False}
@@ -574,12 +691,26 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     asyncio.run(verify_mod.verify(exe, out))
     report = json.loads(out.read_text())
     assert report["acceptance"] == "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
-    assert len(launches) == 5
+    assert len(launches) == 7
+    assert len(persistent_launches) == 2
+    assert all(kw["no_viewport"] is True for kw in persistent_launches)
     assert all(is_open for is_open, _ in launches)
-    assert len(context_kwargs) == 5
+    assert len(context_kwargs) == 7
     assert all(kw == {"color_scheme": "null"} for kw in context_kwargs)
     assert "apple_silicon_m3_laptop" in report["cases"]
     assert "apple_silicon_m2_max_desktop" in report["cases"]
+    assert "locale_speech_font_de" in report["cases"]
+    locale_case = report["cases"]["locale_speech_font_de"]
+    assert locale_case["noopener_popup"]["first"]["dtf"] == "de-DE"
+    assert locale_case["same_origin_cross_nav_popup"]["hadSameOriginOpener"] is True
+    assert locale_case["same_origin_cross_nav_popup"]["seen"] == ["de-DE"]
+    assert locale_case["same_origin_close_popup"]["hadSameOriginOpener"] is True
+    assert locale_case["same_origin_close_popup"]["openerClosed"] is True
+    assert locale_case["same_origin_close_popup"]["seen"] == ["de-DE"]
+    for bad_close in ({"seen": ["de-DE", "en-US", "de-DE"]}, {"hadSameOriginOpener": False}):
+        close_popup_override = bad_close
+        with pytest.raises(ValueError, match="027 popup locale continuity mismatch"):
+            asyncio.run(verify_mod.verify(exe, out))
 
 
 def test_verify_026_recheck_exclusive_out_and_blank_api_token(tmp_path, monkeypatch, capsys):

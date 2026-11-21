@@ -860,3 +860,371 @@ int main() {{
     for mode in ("dark", "light", "unset"):
         env = dict(os.environ, FOXPROFILE_026_CASE=mode)
         subprocess.run([str(exe)], env=env, check=True, capture_output=True, timeout=10)
+
+
+def test_027_patch_applies_cleanly_and_compiles_under_strict_cpp20(tmp_path):
+    import hashlib
+
+    compiler = shutil.which("clang++") or shutil.which("c++")
+    if not compiler:
+        pytest.skip("C++ compiler required")
+
+    expected_shas = {
+        "022-native-gpu-realms.patch": "e197fd91382ccf39dd1f43b36b9b89042331f09021344ee7d661133e1bc3420c",
+        "023-macos-antidetect-complete.patch": "98e2131461e38c290d67f929e0729cc187c741b31838c3515da1194ddbd57e4d",
+        "024-webgl-readback-parity.patch": "78ff843b4586c5452b8987dc9ecea0b52b16e1ccbcdc5e472597dd77d36d21c3",
+        "025-audio-clientrects-parity.patch": "9a369414029f7b3b7811d01a31d8cbfb915b381ad08876e4b39e87cf7128f881",
+        "026-apple-silicon-device-coherence.patch": "558b84bbec096583a5253889a06b4c31f5c5efa31a79fde5d42e29fce908d75f",
+        "109-canvas-pixel-addressing.patch": "df190001a4ab19a97acad9758a0c0dd03a800584e9b96c81c33484a5bedd6ce2",
+    }
+    for name, expected in expected_shas.items():
+        assert hashlib.sha256((KIT / "patches" / name).read_bytes()).hexdigest() == expected
+
+    patch027 = (KIT / "patches/027-macos-locale-speech-font-coherence.patch").read_text()
+
+    def section(rel: str) -> str:
+        marker = f"+++ b/{rel}\n"
+        assert marker in patch027
+        return patch027.split(marker, 1)[1].split("\ndiff --git ", 1)[0]
+
+    def added_lines(sec: str) -> str:
+        return "\n".join(
+            line[1:]
+            for line in sec.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+
+    def post_hunk_lines(sec: str) -> str:
+        return "\n".join(
+            line[1:]
+            for line in sec.splitlines()
+            if line.startswith(("+", " ")) and not line.startswith("+++")
+        )
+
+    assert "component_loader.cc" not in patch027
+    rph_post = post_hunk_lines(section("content/browser/renderer_host/render_process_host_impl.cc"))
+    lc_added = added_lines(
+        section("third_party/blink/renderer/core/inspector/locale_controller.cc")
+    )
+    fc_added = added_lines(section("third_party/blink/renderer/platform/fonts/font_cache.cc"))
+    fa_added = added_lines(section("third_party/blink/renderer/modules/font_access/font_access.cc"))
+
+    assert "String::FromUtf8(requested)" in lc_added
+    assert "String::FromUtf8(element.family())" in fa_added
+    assert "FontCache::IsFontFamilyHiddenByFingerprint(family)" in fa_added
+    assert "base::EqualsCaseInsensitiveASCII" in fc_added
+    assert "base::ToLowerASCII(requested_family)" in fc_added
+    assert "LocaleController::Init();" in added_lines(
+        section("third_party/blink/renderer/core/core_initializer.cc")
+    )
+
+    # Extract IsBasicFont body, EvaluateFingerprintFont, and IsFontFamilyHiddenByFingerprint from font_cache.cc diff.
+    basic_return = (
+        "return std::any_of"
+        + fc_added.split("return std::any_of", 1)[1].split("struct FingerprintFontDecision", 1)[0]
+    )
+    fc_fn = (
+        "struct FingerprintFontDecision"
+        + fc_added.split("struct FingerprintFontDecision", 1)[1]
+        .split("const FingerprintFontDecision decision", 1)[0]
+        .rsplit("\n", 2)[0]
+    )
+    lc_fn = "void LocaleController::Init()" + lc_added.split("void LocaleController::Init()", 1)[1]
+    rph_start = rph_post.index("  std::string locale =")
+    rph_end_marker = "command_line->AppendSwitchASCII(switches::kLang, locale);"
+    rph_end = rph_post.index(rph_end_marker, rph_start) + len(rph_end_marker)
+    rph_block = rph_post[rph_start:rph_end]
+    fa_filter = "\n".join(
+        line
+        for line in fa_added.splitlines()
+        if "String family" in line
+        or "IsFontFamilyHiddenByFingerprint" in line
+        or line.strip() in ("continue;", "}")
+    )
+
+    cpp_src = r"""#include <algorithm>
+#include <cassert>
+#include <cctype>
+#include <cstdint>
+#include <limits>
+#include <map>
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#define IS_WIN 0
+#define IS_MAC 1
+#define IS_LINUX 0
+#define IS_CHROMEOS 0
+#define BUILDFLAG(X) X
+namespace base {
+struct CommandLine {
+  std::map<std::string, std::string> values;
+  static CommandLine* ForCurrentProcess() {
+    static CommandLine* c = new CommandLine();
+    return c;
+  }
+  bool HasSwitch(const char* k) const { return values.count(k) > 0; }
+  std::string GetSwitchValueASCII(const char* k) const {
+    auto it = values.find(k);
+    return it == values.end() ? std::string() : it->second;
+  }
+  void AppendSwitchASCII(const char* k, const std::string& v) { values[k] = v; }
+};
+inline std::string ToLowerASCII(std::string_view s) {
+  std::string out(s);
+  std::transform(out.begin(), out.end(), out.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return out;
+}
+inline bool EqualsCaseInsensitiveASCII(std::string_view a, std::string_view b) {
+  return ToLowerASCII(a) == ToLowerASCII(b);
+}
+struct __attribute__((capability("mutex"))) Lock {};
+struct __attribute__((scoped_lockable)) AutoLock {
+  explicit AutoLock(Lock& m) __attribute__((acquire_capability(m))) {}
+  ~AutoLock() __attribute__((release_capability())) {}
+};
+}  // namespace base
+
+namespace switches {
+inline constexpr char kFingerprint[] = "fingerprint";
+inline constexpr char kFingerprintPlatform[] = "fingerprint-platform";
+inline constexpr char kDisableSpoofing[] = "disable-spoofing";
+inline constexpr char kLang[] = "lang";
+}  // namespace switches
+
+struct AsciiWrap {
+  std::string v;
+  const char* data() const { return v.c_str(); }
+};
+struct String {
+  std::string s;
+  bool empty() const { return s.empty(); }
+  std::string Utf8() const { return s; }
+  AsciiWrap Ascii() const { return {s}; }
+  static String FromUtf8(const std::string& in) { return {in}; }
+  bool operator==(const String& o) const { return s == o.s; }
+};
+namespace icu {
+struct Locale {
+  std::string tag;
+  explicit Locale(const char* t) : tag(t ? t : "") {}
+  const char* getLanguage() const {
+    if (tag.empty() || !std::isalpha(static_cast<unsigned char>(tag[0]))) return "";
+    return tag.c_str();
+  }
+};
+}  // namespace icu
+
+static std::vector<std::string> GetPlatformFonts(const std::string& p) {
+  if (p == "windows") return {"Segoe UI Variable", "Calibri"};
+  if (p == "macos") return {"Menlo", "PingFang SC"};
+  return {"Ubuntu"};
+}
+static bool IsBasicFont(const std::string& font_family) {
+  static const std::set<std::string>& basic_fonts = *new std::set<std::string>{
+      "-webkit-standard", "system-ui", "Arial", "Helvetica", "Helvetica Neue", "BlinkMacSystemFont"
+  };
+__BASIC_RETURN__
+}
+
+struct FontCache {
+  static bool IsFontFamilyHiddenByFingerprint(const String& family);
+};
+__FC_FN__
+
+struct LocaleController {
+  base::Lock lock_;
+  String embedder_locale_{"en-US"};
+  String locale_override_ __attribute__((guarded_by(lock_)));
+  std::vector<std::string> updates;
+  void SetEmbedderLocale(const String& locale);
+  void UpdateLocale(const String& l) { updates.push_back(l.s); }
+  static LocaleController& instance() {
+    static LocaleController* inst = new LocaleController();
+    return *inst;
+  }
+  static void Init();
+  void Reset() {
+    base::AutoLock locker(lock_);
+    embedder_locale_ = {"en-US"};
+    locale_override_ = {};
+    updates.clear();
+  }
+  void SetOverrideForTest(const String& l) {
+    base::AutoLock locker(lock_);
+    locale_override_ = l;
+  }
+};
+__LC_FN__
+
+struct MockBrowserClient {
+  std::string GetApplicationLocale() const { return "en-US"; }
+};
+struct MockContentClient {
+  MockBrowserClient b;
+  const MockBrowserClient* browser() const { return &b; }
+};
+static MockContentClient* GetContentClient() {
+  static MockContentClient* c = new MockContentClient();
+  return c;
+}
+
+static std::string ResolveChildLang(const base::CommandLine& browser_command_line) {
+  base::CommandLine child;
+  base::CommandLine* command_line = &child;
+__RPH_BLOCK__
+  return child.GetSwitchValueASCII(switches::kLang);
+}
+
+struct ElementStub {
+  std::string fam;
+  const std::string& family() const { return fam; }
+};
+static std::vector<std::string> FilterFontAccessFamilies(
+    const std::vector<std::string>& raw_families) {
+  std::vector<std::string> kept;
+  for (const std::string& name : raw_families) {
+    ElementStub element{name};
+__FA_FILTER__
+    kept.push_back(family.Utf8());
+  }
+  return kept;
+}
+
+int main() {
+  auto* cmd = base::CommandLine::ForCurrentProcess();
+
+  // 1. RenderProcessHostImpl --lang propagation
+  assert(ResolveChildLang(*cmd) == "en-US");
+  cmd->values = {{"lang", "de-DE"}};
+  assert(ResolveChildLang(*cmd) == "en-US");
+  cmd->values = {{"fingerprint", "3"}, {"lang", "de-DE"}};
+  assert(ResolveChildLang(*cmd) == "de-DE");
+  cmd->values = {{"fingerprint", "3"}, {"lang", ""}};
+  assert(ResolveChildLang(*cmd) == "en-US");
+
+  // 2. LocaleController::Init + SetEmbedderLocale
+  auto& lc = LocaleController::instance();
+  lc.Reset();
+  cmd->values = {{"lang", "de-DE"}};
+  LocaleController::Init();
+  assert(lc.embedder_locale_.s == "en-US" && lc.updates.empty());
+
+  cmd->values = {{"fingerprint", "3"}, {"disable-spoofing", "locale"}, {"lang", "de-DE"}};
+  LocaleController::Init();
+  assert(lc.embedder_locale_.s == "en-US" && lc.updates.empty());
+
+  cmd->values = {{"fingerprint", "3"}, {"lang", "!!!"}};
+  LocaleController::Init();
+  assert(lc.embedder_locale_.s == "en-US" && lc.updates.empty());
+
+  cmd->values = {{"fingerprint", "3"}, {"lang", "de-DE"}};
+  LocaleController::Init();
+  assert(lc.embedder_locale_.s == "de-DE");
+  assert(lc.updates == std::vector<std::string>{"de-DE"});
+
+  // Active override stays protected while embedder_locale_ updates.
+  lc.Reset();
+  lc.SetOverrideForTest({"fr-FR"});
+  LocaleController::Init();
+  assert(lc.embedder_locale_.s == "de-DE" && lc.updates.empty());
+
+  // 3. FontCache::IsFontFamilyHiddenByFingerprint + case-insensitive canonicalization + FontAccess
+  cmd->values.clear();
+  assert(!FontCache::IsFontFamilyHiddenByFingerprint({"CustomFont1"}));
+  cmd->values = {{"fingerprint", "3003"}, {"disable-spoofing", "font"}};
+  assert(!FontCache::IsFontFamilyHiddenByFingerprint({"CustomFont1"}));
+
+  cmd->values = {{"fingerprint", "3003"}, {"fingerprint-platform", "macos"}};
+  assert(!FontCache::IsFontFamilyHiddenByFingerprint({"Arial"}));
+  assert(!FontCache::IsFontFamilyHiddenByFingerprint({"arial"}));
+  assert(!FontCache::IsFontFamilyHiddenByFingerprint({"ARIAL"}));
+  assert(!FontCache::IsFontFamilyHiddenByFingerprint({"Helvetica"}));
+  assert(!FontCache::IsFontFamilyHiddenByFingerprint({"helvetica"}));
+  assert(IsBasicFont("blinkmacsystemfont"));
+
+  assert(
+      FontCache::IsFontFamilyHiddenByFingerprint({"Avenir Next Condensed"}) ==
+      FontCache::IsFontFamilyHiddenByFingerprint({"avenir next condensed"}) &&
+      FontCache::IsFontFamilyHiddenByFingerprint({"Avenir Next Condensed"}) ==
+      FontCache::IsFontFamilyHiddenByFingerprint({"AVENIR NEXT CONDENSED"}));
+
+  int hidden_count = 0;
+  std::vector<bool> mask_a;
+  std::vector<std::string> raw_families = {"Arial", "Helvetica"};
+  for (int i = 0; i < 400; ++i) {
+    std::string mixed = "Family_" + std::to_string(i);
+    std::string lower = "family_" + std::to_string(i);
+    std::string upper = "FAMILY_" + std::to_string(i);
+    raw_families.push_back(mixed);
+    bool h = FontCache::IsFontFamilyHiddenByFingerprint({mixed});
+    assert(h == FontCache::IsFontFamilyHiddenByFingerprint({lower}));
+    assert(h == FontCache::IsFontFamilyHiddenByFingerprint({upper}));
+    if (h) hidden_count++;
+    mask_a.push_back(h);
+  }
+  assert(hidden_count > 0 && hidden_count < 40);
+  auto kept = FilterFontAccessFamilies(raw_families);
+  assert(kept.size() == raw_families.size() - static_cast<size_t>(hidden_count));
+  assert(std::find(kept.begin(), kept.end(), "Arial") != kept.end());
+
+  cmd->values = {{"fingerprint", "3006"}, {"fingerprint-platform", "macos"}};
+  std::vector<bool> mask_b;
+  for (int i = 0; i < 400; ++i) {
+    mask_b.push_back(FontCache::IsFontFamilyHiddenByFingerprint({"Family_" + std::to_string(i)}));
+  }
+  assert(mask_a != mask_b);
+
+  // Cross-OS Windows platform font substitutes case-insensitively rather than hiding, non-platform fonts ~95% hidden
+  cmd->values = {{"fingerprint", "3003"}, {"fingerprint-platform", "Windows"}};
+  auto win_dec = EvaluateFingerprintFont("Segoe UI Variable");
+  auto win_dec_lower = EvaluateFingerprintFont("segoe ui variable");
+  assert(!win_dec.hide && (win_dec.substitute_family == "Menlo" || win_dec.substitute_family == "PingFang SC"));
+  assert(!win_dec_lower.hide && win_dec_lower.substitute_family == win_dec.substitute_family);
+  int cross_hidden = 0;
+  for (int i = 0; i < 400; ++i) {
+    if (FontCache::IsFontFamilyHiddenByFingerprint({"CrossFamily_" + std::to_string(i)})) {
+      cross_hidden++;
+    }
+  }
+  assert(cross_hidden > 340);
+  return 0;
+}
+"""
+    cpp_src = (
+        cpp_src.replace("__BASIC_RETURN__", basic_return)
+        .replace("__FC_FN__", fc_fn)
+        .replace("__LC_FN__", lc_fn)
+        .replace("__RPH_BLOCK__", rph_block)
+        .replace("__FA_FILTER__", fa_filter)
+    )
+
+    test_cc = tmp_path / "test_027.cc"
+    test_cc.write_text(cpp_src)
+    exe = tmp_path / "test_027"
+    subprocess.run(
+        [
+            compiler,
+            "-std=c++20",
+            "-O2",
+            "-fno-threadsafe-statics",
+            "-Werror",
+            "-Wthread-safety",
+            "-Wexit-time-destructors",
+            "-Wglobal-constructors",
+            "-Wunsafe-buffer-usage",
+            "-Wsign-compare",
+            str(test_cc),
+            "-o",
+            str(exe),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    subprocess.run([str(exe)], check=True, capture_output=True, timeout=10)

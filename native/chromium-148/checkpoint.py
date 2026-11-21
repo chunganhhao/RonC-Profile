@@ -82,6 +82,7 @@ def compatible_identity(saved: dict, current: dict) -> bool:
         "webgl_readback_patch_sha256",
         "audio_clientrects_patch_sha256",
         "apple_silicon_coherence_patch_sha256",
+        "locale_speech_font_patch_sha256",
     ):
         if key not in saved_src and key in curr_src:
             curr_src.pop(key, None)
@@ -375,6 +376,7 @@ def main() -> int:
                 "webgl_readback_patch_sha256",
                 "audio_clientrects_patch_sha256",
                 "apple_silicon_coherence_patch_sha256",
+                "locale_speech_font_patch_sha256",
             )
         ):
             _apply_incremental_patches(root / "build/src")

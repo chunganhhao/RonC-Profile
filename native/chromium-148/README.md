@@ -214,3 +214,29 @@ small probe proves mechanics/access only, not large-file capacity or sub-six-hou
 completion. If disk, transfer or artifact quota fails, stop and inspect; never
 raise a paid quota automatically. An already-running old workflow cannot gain
 checkpoint steps from a later source push and is left alone.
+
+## Native locale and font-access coherence 027
+
+`patches/027-macos-locale-speech-font-coherence.patch` preserves explicit `--lang` across
+`RenderProcessHostImpl::AppendRendererCommandLine`, initializes Blink `LocaleController` at
+startup (`CoreInitializer::Initialize` -> `LocaleController::Init`) so `Intl` default locale
+agrees across Window and Worker threads without CDP overrides, and filters
+`FontAccess::DidGetEnumerationResponse` through the same case-insensitive
+`FontCache::IsFontFamilyHiddenByFingerprint` (`base::ToLowerASCII` /
+`base::EqualsCaseInsensitiveASCII`) rule as `FontCache::GetFontPlatformData`.
+
+Google Network Speech component extension (`ComponentLoader::AddNetworkSpeechSynthesisExtension`)
+is intentionally kept disabled: `ungoogled-chromium` domain substitution rewrites its endpoint to
+`.qjz9zk` and this build omits `google_api_key`, so advertising non-functional Google voices
+breaks `speechSynthesis.speak()` playback and leaks a `.qjz9zk` lookup.
+
+Because CI Run #21 (`44582421830`, commit `2c366eb`) completed in Chunk 1 without uploading a
+`native-checkpoint-*` archive (and `native-checkpoint-44542144017-2-1` belongs to Run #20 Attempt
+2 with superseded `026` SHA `f564b9f9...`, which `checkpoint.py` intentionally rejects), building
+`027` requires a fresh `prepare` + multi-chunk CI build (`resume_run_id=""`). No `027` binary is
+pinned yet: `ChromeEngine`'s pre-`027` per-page CDP `Emulation.setLocaleOverride` bridge provides
+best-effort eventual recovery (`~5-20ms` `en-US` window during renderer-singleton owner swaps and
+cross-origin `noopener` boot), whereas native `027` (`LocaleController::Init()`) provides continuous
+zero-gap locale across all realms and popups (enforced by `verify.py`'s `noopener_popup`,
+`same_origin_cross_nav_popup`, and `same_origin_close_popup` gates) and automatically retires the CDP
+bridge via `LOCALE_SPEECH_FONT_027_BUNDLES`.
