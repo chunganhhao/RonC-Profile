@@ -431,6 +431,16 @@ def open_profile_dialog(
             if is_chrome_mode
             else fp_service.extract_details(fp_state["fp"], os_val)
         )
+        # Chrome's native GPU follows its saved seed, not the Camoufox GPU catalog.
+        vendor, renderer = info.get("gpu_vendor") or "", info.get("gpu_renderer") or ""
+        gpu_key = _gpu_key(vendor, renderer)
+        gpu_dropdown.options = (
+            [ft.dropdown.Option(gpu_key, _short_gpu_label(vendor, renderer))]
+            if is_chrome_mode
+            else _gpu_options_for_os(os_val)
+        )
+        valid_keys = {option.key for option in gpu_dropdown.options}
+        gpu_dropdown.value = gpu_key if gpu_key in valid_keys else gpu_dropdown.options[0].key
         ua = info.get("user_agent") or "Mozilla/5.0 (Firefox/158.0)"
         ua_short = ua[:59] + "..." if len(ua) > 62 else ua
 

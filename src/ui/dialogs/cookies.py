@@ -61,7 +61,6 @@ def open_cookie_dialog(
         content=ft.Column(
             tight=True,
             spacing=12,
-            scroll=ft.ScrollMode.AUTO,
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             controls=[
                 ft.Text(
@@ -102,6 +101,7 @@ def open_cookie_dialog(
 
     dlg = ft.AlertDialog(
         modal=True,
+        scrollable=True,
         bgcolor=COLORS["card_bg"],
         shape=ft.RoundedRectangleBorder(radius=12),
         title=ft.Text(
