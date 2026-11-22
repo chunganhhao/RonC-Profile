@@ -38,6 +38,8 @@ def _build_container(count: int, cbs: BulkCallbacks) -> ft.Container:
         border=ft.Border.only(bottom=ft.BorderSide(1, COLORS["card_border"])),
         content=ft.Row(
             spacing=8,
+            wrap=True,
+            run_spacing=8,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 ft.Text(
@@ -50,7 +52,6 @@ def _build_container(count: int, cbs: BulkCallbacks) -> ft.Container:
                 btn(get_string("launch"), ft.Icons.PLAY_ARROW_ROUNDED, "launch", ACCENT_STYLE),
                 btn(get_string("stop"), ft.Icons.STOP_ROUNDED, "stop", OUTLINE_STYLE),
                 btn(get_string("delete"), ft.Icons.DELETE_OUTLINE, "delete", OUTLINE_STYLE),
-                ft.Container(expand=True),
                 ft.TextButton(
                     get_string("clear"),
                     on_click=lambda _: cbs["clear"](),

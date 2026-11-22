@@ -67,6 +67,7 @@ class App:
         self._toast_banner = ft.Container(visible=False)
         self._filter_column = ft.Column(spacing=2)
         self._header_slot = ft.Container()
+        self._profile_table_width: float | None = None
         self._total_count_text = ft.Text("", size=12, font_family=FONT_SEMIBOLD)
         self._footer_proxy_text = ft.Text("", size=11.5, font_family=FONT_DATA)
         self._footer_warming_text = ft.Text("", size=11.5, font_family=FONT_DATA)
@@ -143,6 +144,7 @@ class App:
         )
         self._toast_text = ft.Text(
             self._toast_text.value or "",
+            expand=True,
             size=12,
             font_family=FONT_SEMIBOLD,
             color=COLORS["live_ink"],
@@ -319,6 +321,8 @@ class App:
             last_btn=r.last_btn,
             page_size_dropdown=r.page_size_dropdown,
             running_filter_btn=r.running_filter_btn,
+            initial_table_width=self._profile_table_width,
+            on_table_resize=self._remember_table_width,
         )
         return ft.Row(
             expand=True,
@@ -328,6 +332,9 @@ class App:
                 content,
             ],
         )
+
+    def _remember_table_width(self, width: float) -> None:
+        self._profile_table_width = width
 
     def _on_search(self, query: str) -> None:
         self.state.search_query = query.strip().lower()
@@ -581,6 +588,7 @@ class App:
                 all_sel,
                 any_sel,
                 lambda select: self.h.on_select_all_page() if select else self.h.on_deselect_page(),
+                layout_width=self._profile_table_width,
             )
             if page_profiles
             else None
@@ -610,6 +618,7 @@ class App:
                     failed=p.name in self.state.failed,
                     row_index=start_offset + idx + 1,
                     active_feedback=self._active_feedback_for(p.name, now),
+                    layout_width=self._profile_table_width,
                 )
                 for idx, p in enumerate(page_profiles)
             ]

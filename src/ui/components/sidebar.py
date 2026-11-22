@@ -222,7 +222,7 @@ def build_sidebar(
 
     nav_scroll = ft.Column(
         spacing=2,
-        scroll=ft.ScrollMode.AUTO,
+        scroll=ft.ScrollMode.ALWAYS,
         expand=True,
         controls=[
             *(

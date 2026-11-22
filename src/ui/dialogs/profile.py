@@ -436,11 +436,15 @@ def open_profile_dialog(
 
         def _kv(k: str, v: str) -> ft.Row:
             return ft.Row(
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.START,
                 controls=[
-                    ft.Text(k, size=11.5, color=COLORS["text_dim"], font_family=FONT_SEMIBOLD),
+                    ft.Text(
+                        k, expand=4, size=11.5, color=COLORS["text_dim"], font_family=FONT_SEMIBOLD
+                    ),
                     ft.Text(
                         v,
+                        expand=7,
+                        text_align=ft.TextAlign.RIGHT,
                         size=11.5,
                         color=COLORS["text_main"],
                         font_family=FONT_DATA,
@@ -1087,7 +1091,7 @@ def open_profile_dialog(
     )
 
     def _on_dialog_resize(target_w: int, _target_h: int) -> None:
-        if target_w < 740:
+        if target_w < 900:
             columns_host.controls = [
                 left_column,
                 ft.Divider(height=16, color=COLORS["card_border"]),
