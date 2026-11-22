@@ -382,6 +382,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "warming_no_tasks": "No warming tasks yet. Create a quick run or daily schedule above.",
         "warming_started_msg": "[Warming] Started task '{name}' for {count} profile(s)",
         "warming_saved_msg": "[Warming] Saved schedule '{name}' ({sched})",
+        "warming_save_error_msg": "[Warming] Could not save task: {error}",
         "warming_invalid_msg": "Please enter a valid task name, HH:MM time (if scheduled), and target profiles.",
     },
     "vi": {
@@ -765,6 +766,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "warming_no_tasks": "Chưa có lịch ngâm nào. Hãy bấm Chạy ngâm ngay hoặc Lưu lịch hẹn ở trên.",
         "warming_started_msg": "[Ngâm TK] Đã bắt đầu chiến dịch '{name}' cho {count} hồ sơ",
         "warming_saved_msg": "[Ngâm TK] Đã lưu lịch hẹn '{name}' ({sched})",
+        "warming_save_error_msg": "[Ngâm TK] Không thể lưu tác vụ: {error}",
         "warming_invalid_msg": "Vui lòng kiểm tra tên tác vụ, định dạng giờ HH:MM và hồ sơ mục tiêu.",
     },
 }

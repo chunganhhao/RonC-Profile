@@ -226,7 +226,11 @@ class WarmingSchedulerService:
                 enabled=enabled,
             )
             self._tasks[tid] = task
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                del self._tasks[tid]
+                raise
             return task
 
     def delete_task(self, task_id: str) -> bool:
