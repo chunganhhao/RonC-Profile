@@ -1304,7 +1304,10 @@ async def verify(executable: Path, output: Path) -> None:
             )
 
             async def _verify_locale_speech_font_027(
-                seed: int, candidate_families: list[str] | tuple[str, ...] = ()
+                seed: int,
+                candidate_families: list[str] | tuple[str, ...] = (),
+                *,
+                unfiltered: bool = False,
             ) -> dict:
                 with tempfile.TemporaryDirectory(prefix="verify-027-") as tmp_profile_dir:
                     context = await pw.chromium.launch_persistent_context(
@@ -1325,6 +1328,7 @@ async def verify(executable: Path, output: Path) -> None:
                             "--lang=de-DE",
                             "--accept-lang=de-DE,de,en-US,en",
                             "--disable-background-networking",
+                            *(["--disable-spoofing=font"] if unfiltered else []),
                         ],
                     )
                     try:
@@ -1350,6 +1354,12 @@ async def verify(executable: Path, output: Path) -> None:
                             else await context.new_page()
                         )
                         await page.goto(f"http://127.0.0.1:{server.server_port}/")
+                        if unfiltered:
+                            families = await page.evaluate(
+                                """async () => Array.from(new Set(
+                                    (await window.queryLocalFonts()).map(f => f.family)))"""
+                            )
+                            return {"localFontFamilies": families}
                         main_payload = await page.evaluate(
                             """async (candidateFamilies) => {
                         const timeout = (p) => Promise.race([
@@ -1516,6 +1526,12 @@ async def verify(executable: Path, output: Path) -> None:
                         await context.close()
 
             protected_fonts = _protected_macos_fonts()
+            unfiltered_fonts = await _verify_locale_speech_font_027(3006, unfiltered=True)
+            installed_core_fonts = {
+                f.lower() for f in unfiltered_fonts["localFontFamilies"]
+            } & protected_fonts
+            if not installed_core_fonts:
+                raise ValueError("028 unfiltered protected macOS core font inventory empty")
             r3006 = await _verify_locale_speech_font_027(3006)
             supplemental_candidates = sorted(
                 f for f in r3006["localFontFamilies"] if f.lower() not in protected_fonts
@@ -1569,6 +1585,13 @@ async def verify(executable: Path, output: Path) -> None:
                     raise ValueError(f"028 protected macOS core font hidden ({label}): {payload}")
             core_3003 = {f.lower() for f in r3003["localFontFamilies"]} & protected_fonts
             core_3006 = {f.lower() for f in r3006["localFontFamilies"]} & protected_fonts
+            for seed, visible in ((3003, core_3003), (3006, core_3006)):
+                missing = installed_core_fonts - visible
+                if missing:
+                    raise ValueError(
+                        f"028 installed protected macOS core font hidden (seed {seed}): "
+                        f"{sorted(missing)}"
+                    )
             if core_3003 != core_3006:
                 raise ValueError(
                     "028 protected macOS system font varied across seeds: "
@@ -1588,6 +1611,7 @@ async def verify(executable: Path, output: Path) -> None:
                 "local_voice_count": r3003["localVoiceCount"],
                 "google_voice_count": 0,
                 "core_font_missing_count": r3003["coreFontMissingCount"],
+                "installed_protected_font_count": len(installed_core_fonts),
                 "hidden_case_checked": r3003["hiddenSampleCount"],
                 "window": r3003["window"],
                 "worker": r3003["worker"],

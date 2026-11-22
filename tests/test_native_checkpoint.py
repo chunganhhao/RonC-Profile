@@ -380,8 +380,18 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     assert json.loads((root4 / "native-ready.json").read_text()) == post028_ctx
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS BSD patch -C required")
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX patch required")
 def test_cli_restore_real_post_027_to_post_028_overlapping_patches(tmp_path, monkeypatch):
+    if sys.platform.startswith("linux"):
+        run = subprocess.run
+
+        def portable_patch(args, **kwargs):
+            if args[0] == "/usr/bin/patch":
+                args = ["--dry-run" if arg == "-C" else arg for arg in args]
+            return run(args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", portable_patch)
+
     prep_spec = importlib.util.spec_from_file_location("native_prepare", KIT / "prepare.py")
     assert prep_spec and prep_spec.loader
     native_prepare = importlib.util.module_from_spec(prep_spec)
@@ -471,8 +481,12 @@ def test_cli_restore_real_post_027_to_post_028_overlapping_patches(tmp_path, mon
         ).returncode
         == 0
     )
-    # Standalone re-run without saved_source detects 028 reverse passes despite overlapping 023/024/027.
-    assert checkpoint._apply_incremental_patches(restored) is False
+    assert checkpoint._apply_incremental_patches(restored, saved_ctx["source"]) is False
+    # The fixture contains only 028's three files, not a complete 023..028 tree.
+    with pytest.raises(
+        RuntimeError, match="Incremental patch 023 missing file:.*fingerprint_gpu.h"
+    ):
+        checkpoint._apply_incremental_patches(restored)
     assert json.loads((root / "native-ready.json").read_text()) == new_ctx
 
 

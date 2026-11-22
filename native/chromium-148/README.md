@@ -269,3 +269,15 @@ touching `BUILD.gn`:
   `checkpoint.py` (`compatible_identity`) and `prepare.py`
   (`apply_incremental_patches`), so post-`027` checkpoints such as Run `#22`
   (`44957399598`) can resume incrementally.
+
+Before skipping an already-applied patch prefix, `prepare.py` reverses that
+prefix in a disposable copy of the touched files, newest first. This restores
+overlapping contexts without treating repeatable insertion hunks as evidence of
+a missing patch; a missing or inconsistent file fails with its patch label and path.
+Validated checkpoint `saved_source` provenance continues to exempt recorded patches.
+
+The core-font acceptance gate also queries an isolated browser profile with
+`--disable-spoofing=font` to inventory installed protected families. Every family
+in that inventory must remain visible in both seeds 3003 and 3006, including
+families absent from the explicit rendering probes. It does not require all 196
+names to be installed, and rejects an empty protected-family inventory.
