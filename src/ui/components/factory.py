@@ -110,7 +110,7 @@ def build_ui_refs(
         page_size_dropdown=ft.Dropdown(
             key="page_size_dropdown",
             value=str(initial_page_size),
-            width=76,
+            width=100,
             dense=True,
             bgcolor=COLORS["paper_sunk"],
             color=COLORS["text_main"],
