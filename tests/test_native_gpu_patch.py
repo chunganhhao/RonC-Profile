@@ -7,6 +7,7 @@ import importlib.util
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -1206,6 +1207,912 @@ int main() {
     test_cc = tmp_path / "test_027.cc"
     test_cc.write_text(cpp_src)
     exe = tmp_path / "test_027"
+    subprocess.run(
+        [
+            compiler,
+            "-std=c++20",
+            "-O2",
+            "-fno-threadsafe-statics",
+            "-Werror",
+            "-Wthread-safety",
+            "-Wexit-time-destructors",
+            "-Wglobal-constructors",
+            "-Wunsafe-buffer-usage",
+            "-Wsign-compare",
+            str(test_cc),
+            "-o",
+            str(exe),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    subprocess.run([str(exe)], check=True, capture_output=True, timeout=10)
+
+
+def test_028_patch_applies_on_post_027_and_compiles_under_strict_cpp20(tmp_path):
+    import hashlib
+
+    compiler = shutil.which("clang++") or shutil.which("c++")
+    if not compiler:
+        pytest.skip("C++ compiler required")
+
+    expected_shas = {
+        "022-native-gpu-realms.patch": "e197fd91382ccf39dd1f43b36b9b89042331f09021344ee7d661133e1bc3420c",
+        "023-macos-antidetect-complete.patch": "98e2131461e38c290d67f929e0729cc187c741b31838c3515da1194ddbd57e4d",
+        "024-webgl-readback-parity.patch": "78ff843b4586c5452b8987dc9ecea0b52b16e1ccbcdc5e472597dd77d36d21c3",
+        "025-audio-clientrects-parity.patch": "9a369414029f7b3b7811d01a31d8cbfb915b381ad08876e4b39e87cf7128f881",
+        "026-apple-silicon-device-coherence.patch": "558b84bbec096583a5253889a06b4c31f5c5efa31a79fde5d42e29fce908d75f",
+        "027-macos-locale-speech-font-coherence.patch": "ec47709cbe9a96390cb78f76c329ec6d9e3636bf31f5a44812d1e0c69c2aa726",
+        "109-canvas-pixel-addressing.patch": "df190001a4ab19a97acad9758a0c0dd03a800584e9b96c81c33484a5bedd6ce2",
+    }
+    for name, expected in expected_shas.items():
+        assert hashlib.sha256((KIT / "patches" / name).read_bytes()).hexdigest() == expected
+
+    patch024 = (KIT / "patches/024-webgl-readback-parity.patch").read_text()
+    patch027 = (KIT / "patches/027-macos-locale-speech-font-coherence.patch").read_text()
+    patch028 = (KIT / "patches/028-pixelscan-noise-font-coherence.patch").read_text()
+    assert "BUILD.gn" not in patch028
+
+    def section(patch_text: str, rel: str) -> str:
+        marker = f"+++ b/{rel}\n"
+        assert marker in patch_text
+        return patch_text.split(marker, 1)[1].split("\ndiff --git ", 1)[0]
+
+    def apply_hunks(src: str, sec: str, *, skip_first_hunk: bool = False) -> str:
+        hunks = sec.split("\n@@ ")
+        out = src
+        cursor = 0
+        start_idx = 1 if skip_first_hunk else 0
+        for hunk in hunks[start_idx:]:
+            body = hunk.splitlines()[1:]
+            old_blk = "\n".join(line[1:] for line in body if line.startswith((" ", "-")))
+            new_blk = "\n".join(line[1:] for line in body if line.startswith((" ", "+")))
+            idx = out.find(old_blk, cursor)
+            assert idx != -1, f"Hunk mismatch after offset {cursor}:\n{old_blk[:240]}"
+            out = out[:idx] + new_blk + out[idx + len(old_blk) :]
+            cursor = idx + len(new_blk)
+        return out
+
+    # 1. Reconstruct post-028 font_cache.cc helpers from 027 + 028.
+    fc_027_added = "\n".join(
+        line[1:]
+        for line in section(
+            patch027, "third_party/blink/renderer/platform/fonts/font_cache.cc"
+        ).splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    fc_027_fn = (
+        "struct FingerprintFontDecision"
+        + fc_027_added.split("struct FingerprintFontDecision", 1)[1]
+        .split("const FingerprintFontDecision decision", 1)[0]
+        .rsplit("\n", 2)[0]
+    )
+    fc_028_sec = section(patch028, "third_party/blink/renderer/platform/fonts/font_cache.cc")
+    fc_028_fn = apply_hunks(fc_027_fn, fc_028_sec, skip_first_hunk=True)
+    fc_basic_ret = (
+        "return std::any_of"
+        + fc_027_added.split("return std::any_of", 1)[1].split("struct FingerprintFontDecision", 1)[
+            0
+        ]
+    )
+
+    protected_fonts = set(
+        re.findall(
+            r'\+\s+"([^"]+)"',
+            fc_028_sec.split("kProtectedMacOsCoreFonts", 1)[1].split(
+                "IsProtectedMacOsCoreFontsSorted", 1
+            )[0],
+        )
+    )
+    assert len(protected_fonts) == 196
+    supplemental_probes = [
+        "Academy Engraved LET",
+        "Galvji",
+        "Grantha Sangam MN",
+        "Noto Sans Batak",
+        "Noto Sans NKo",
+        "Noto Sans Syriac",
+        "Noto Sans Tagalog",
+        "Party LET",
+        "STIX Two Math",
+        "STIX Two Text",
+    ]
+    assert all(f.lower() not in protected_fonts for f in supplemental_probes)
+    if sys.platform == "darwin":
+        import ctypes
+        import ctypes.util
+
+        ct = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreText"))
+        cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
+        ct.CTFontManagerCreateFontDescriptorsFromURL.argtypes = [ctypes.c_void_p]
+        ct.CTFontManagerCreateFontDescriptorsFromURL.restype = ctypes.c_void_p
+        ct.CTFontDescriptorCopyAttribute.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        ct.CTFontDescriptorCopyAttribute.restype = ctypes.c_void_p
+        cf.CFArrayGetCount.argtypes = [ctypes.c_void_p]
+        cf.CFArrayGetCount.restype = ctypes.c_long
+        cf.CFArrayGetValueAtIndex.argtypes = [ctypes.c_void_p, ctypes.c_long]
+        cf.CFArrayGetValueAtIndex.restype = ctypes.c_void_p
+        cf.CFStringGetCString.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_long,
+            ctypes.c_uint32,
+        ]
+        cf.CFStringGetCString.restype = ctypes.c_bool
+        cf.CFStringCreateWithCString.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+        ]
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFURLCreateFromFileSystemRepresentation.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_long,
+            ctypes.c_bool,
+        ]
+        cf.CFURLCreateFromFileSystemRepresentation.restype = ctypes.c_void_p
+        k_fam_attr = cf.CFStringCreateWithCString(None, b"NSFontFamilyAttribute", 0x08000100)
+        root_sys_families: set[str] = set()
+        for scan_dir in (
+            Path("/System/Library/Fonts"),
+            Path("/System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved"),
+        ):
+            if not scan_dir.exists():
+                continue
+            for font_file in sorted(scan_dir.iterdir()):
+                if font_file.is_dir():
+                    continue
+                raw = str(font_file).encode("utf-8")
+                url = cf.CFURLCreateFromFileSystemRepresentation(None, raw, len(raw), False)
+                descs = ct.CTFontManagerCreateFontDescriptorsFromURL(url) if url else None
+                if not descs:
+                    continue
+                for idx in range(cf.CFArrayGetCount(descs)):
+                    fam_cf = ct.CTFontDescriptorCopyAttribute(
+                        cf.CFArrayGetValueAtIndex(descs, idx), k_fam_attr
+                    )
+                    buf = ctypes.create_string_buffer(1024)
+                    if fam_cf and cf.CFStringGetCString(fam_cf, buf, 1024, 0x08000100):
+                        fam = buf.value.decode("utf-8")
+                        if fam and not fam.startswith("."):
+                            root_sys_families.add(fam.lower())
+        assert root_sys_families
+        assert root_sys_families <= protected_fonts, sorted(root_sys_families - protected_fonts)
+        assert all(f.lower() not in root_sys_families for f in supplemental_probes)
+
+    # 2. Extract 028 HasMultipleValidColors & post-028 ShuffleSubchannelColorData (023 + 028).
+    sbi_028_sec = section(
+        patch028, "third_party/blink/renderer/platform/graphics/static_bitmap_image.cc"
+    )
+    sbi_028_added = "\n".join(
+        line[1:]
+        for line in sbi_028_sec.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    has_multi_fn = (
+        "static bool HasMultipleValidColors"
+        + sbi_028_added.split("static bool HasMultipleValidColors", 1)[1].split(
+            "  // Flat monochrome shapes", 1
+        )[0]
+    )
+    post027_shuffle = r"""void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkImageInfo& info, int srcX, int srcY) {
+  auto w = info.width(), h = info.height();
+
+  // skip null or tiny images; info.width()/height() can also be 0
+  if (!addr || (w < 8) || (h < 8)) {
+    return;
+  }
+
+  std::string seed_str = "0";
+  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kFingerprint) &&
+      (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+       command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") == std::string::npos)) {
+      seed_str = command_line->GetSwitchValueASCII(switches::kFingerprint);
+  }
+
+  auto colorType = info.colorType();
+  auto fRowBytes = info.minRowBytes(); // stride
+
+  DLOG(INFO) << "BRM: ShuffleSubchannelColorData() w=" << w << " h=" << h << " colorType=" << colorType << " fRowBytes=" << fRowBytes;
+
+  auto max_pixels = (w * h) / 128;
+  if (max_pixels > 10) {
+    max_pixels = 10;
+  } else if (max_pixels < 2) {
+    max_pixels = 2;
+  }
+
+  int modified_pixels = 0;
+  std::unordered_set<int> processed_rows;
+  std::unordered_set<int> processed_cols;
+
+  // 扫描所有像素，找出边缘像素并直接处理
+  for (int y = 0; y < h - 1 && modified_pixels < max_pixels; y++) {  // 排除最后一行
+    if (processed_rows.count(y)) continue;  // 跳过已处理的行
+    for (int x = 0; x < w - 1 && modified_pixels < max_pixels; x++) {  // 排除最后一列
+      if (processed_cols.count(x)) continue;  // 跳过已处理的列
+      bool isEdge = false;
+      bool isValidColor = false;
+
+      // 检查当前像素是否为边缘像素，并且不是纯黑或纯白
+      switch (colorType) {
+        case kRGBA_8888_SkColorType:
+        {
+          auto *current = writable_addr(uint32_t, addr, fRowBytes, x, y);
+          auto *right = writable_addr(uint32_t, addr, fRowBytes, x + 1, y);
+          auto *bottom = writable_addr(uint32_t, addr, fRowBytes, x, y + 1);
+
+          auto r = SkGetPackedR32(*current);
+          auto g = SkGetPackedG32(*current);
+          auto b = SkGetPackedB32(*current);
+
+          // 检查是否不是纯黑或纯白
+          isValidColor = !((r == 0 && g == 0 && b == 0) || (r == 255 && g == 255 && b == 255));
+
+          // 检查是否为边缘（与右侧或下侧像素不同）
+          if (isValidColor) {
+            isEdge = (*current != *right) || (*current != *bottom);
+          }
+
+          if (isEdge && isValidColor) {
+            // 直接处理这个像素
+            std::string pixel_key_base = seed_str + "_x" + std::to_string(x + srcX) + "_y" + std::to_string(y + srcY);
+            std::string pixel_key_r = pixel_key_base + "_r";
+            std::string pixel_key_g = pixel_key_base + "_g";
+            std::string pixel_key_b = pixel_key_base + "_b";
+
+            uint8_t shuffleR = std::hash<std::string>{}(pixel_key_r) & 1;
+            uint8_t shuffleG = std::hash<std::string>{}(pixel_key_g) & 1;
+            uint8_t shuffleB = std::hash<std::string>{}(pixel_key_b) & 1;
+
+            auto a = SkGetPackedA32(*current);
+            r = (r & ~0x1) | shuffleR;
+            g = (g & ~0x1) | shuffleG;
+            b = (b & ~0x1) | shuffleB;
+
+            *current = (a << SK_A32_SHIFT) | (r << SK_R32_SHIFT) |
+                      (g << SK_G32_SHIFT) | (b << SK_B32_SHIFT);
+            modified_pixels++;
+            processed_rows.insert(y);
+            processed_cols.insert(x);
+          }
+        }
+        break;
+
+        case kBGRA_8888_SkColorType:
+        {
+          auto *current = writable_addr(uint32_t, addr, fRowBytes, x, y);
+          auto *right = writable_addr(uint32_t, addr, fRowBytes, x + 1, y);
+          auto *bottom = writable_addr(uint32_t, addr, fRowBytes, x, y + 1);
+
+          auto b = SkGetPackedR32(*current);
+          auto g = SkGetPackedG32(*current);
+          auto r = SkGetPackedB32(*current);
+
+          // 检查是否不是纯黑或纯白
+          isValidColor = !((r == 0 && g == 0 && b == 0) || (r == 255 && g == 255 && b == 255));
+
+          // 检查是否为边缘（与右侧或下侧像素不同）
+          if (isValidColor) {
+            isEdge = (*current != *right) || (*current != *bottom);
+          }
+
+          if (isEdge && isValidColor) {
+            // 直接处理这个像素
+            std::string pixel_key_base = seed_str + "_x" + std::to_string(x + srcX) + "_y" + std::to_string(y + srcY);
+            std::string pixel_key_r = pixel_key_base + "_r";
+            std::string pixel_key_g = pixel_key_base + "_g";
+            std::string pixel_key_b = pixel_key_base + "_b";
+
+            uint8_t shuffleR = std::hash<std::string>{}(pixel_key_r) & 1;
+            uint8_t shuffleG = std::hash<std::string>{}(pixel_key_g) & 1;
+            uint8_t shuffleB = std::hash<std::string>{}(pixel_key_b) & 1;
+
+            auto a = SkGetPackedA32(*current);
+            r = (r & ~0x1) | shuffleR;
+            g = (g & ~0x1) | shuffleG;
+            b = (b & ~0x1) | shuffleB;
+
+            *current = (a << SK_BGRA_A32_SHIFT) | (r << SK_BGRA_R32_SHIFT) |
+                      (g << SK_BGRA_G32_SHIFT) | (b << SK_BGRA_B32_SHIFT);
+            modified_pixels++;
+            processed_rows.insert(y);
+            processed_cols.insert(x);
+          }
+        }
+        break;
+
+        case kGray_8_SkColorType:
+        {
+          auto *current = writable_addr(uint8_t, addr, fRowBytes, x, y);
+          auto *right = writable_addr(uint8_t, addr, fRowBytes, x + 1, y);
+          auto *bottom = writable_addr(uint8_t, addr, fRowBytes, x, y + 1);
+
+          isValidColor = (*current != 0 && *current != 255);
+          if (isValidColor) {
+            isEdge = (*current != *right) || (*current != *bottom);
+          }
+
+          if (isEdge && isValidColor) {
+            // 直接处理这个像素
+            std::string pixel_key_base = seed_str + "_x" + std::to_string(x + srcX) + "_y" + std::to_string(y + srcY);
+            std::string pixel_key_b = pixel_key_base + "_b";
+            uint8_t shuffleB = std::hash<std::string>{}(pixel_key_b) & 1;
+            *current = (*current & ~0x1) | shuffleB;
+            modified_pixels++;
+            processed_rows.insert(y);
+            processed_cols.insert(x);
+          }
+        }
+        break;
+
+        case kRGB_565_SkColorType:
+        {
+          auto *current = writable_addr(uint16_t, addr, fRowBytes, x, y);
+          auto *right = writable_addr(uint16_t, addr, fRowBytes, x + 1, y);
+          auto *bottom = writable_addr(uint16_t, addr, fRowBytes, x, y + 1);
+
+          unsigned r = SkPacked16ToR32(*current);
+          unsigned g = SkPacked16ToG32(*current);
+          unsigned b = SkPacked16ToB32(*current);
+
+          isValidColor = !((r == 0 && g == 0 && b == 0) || (r == 31 && g == 63 && b == 31));
+          if (isValidColor) {
+            isEdge = (*current != *right) || (*current != *bottom);
+          }
+
+          if (isEdge && isValidColor) {
+            // 直接处理这个像素
+            std::string pixel_key_base = seed_str + "_x" + std::to_string(x + srcX) + "_y" + std::to_string(y + srcY);
+            std::string pixel_key_r = pixel_key_base + "_r";
+            std::string pixel_key_g = pixel_key_base + "_g";
+            std::string pixel_key_b = pixel_key_base + "_b";
+
+            uint8_t shuffleR = std::hash<std::string>{}(pixel_key_r) & 1;
+            uint8_t shuffleG = std::hash<std::string>{}(pixel_key_g) & 1;
+            uint8_t shuffleB = std::hash<std::string>{}(pixel_key_b) & 1;
+
+            r = (r & ~0x1) | (shuffleR & 0x1);
+            g = (g & ~0x1) | (shuffleG & 0x1);
+            b = (b & ~0x1) | (shuffleB & 0x1);
+
+            unsigned r16 = (r & SK_R16_MASK) << SK_R16_SHIFT;
+            unsigned g16 = (g & SK_G16_MASK) << SK_G16_SHIFT;
+            unsigned b16 = (b & SK_B16_MASK) << SK_B16_SHIFT;
+
+            *current = r16 | g16 | b16;
+            modified_pixels++;
+            processed_rows.insert(y);
+            processed_cols.insert(x);
+          }
+        }
+        break;
+
+        case kARGB_4444_SkColorType:
+        {
+          auto *current = writable_addr(uint16_t, addr, fRowBytes, x, y);
+          auto *right = writable_addr(uint16_t, addr, fRowBytes, x + 1, y);
+          auto *bottom = writable_addr(uint16_t, addr, fRowBytes, x, y + 1);
+
+          auto r = SkGetPackedR4444(*current);
+          auto g = SkGetPackedG4444(*current);
+          auto b = SkGetPackedB4444(*current);
+
+          isValidColor = !((r == 0 && g == 0 && b == 0) || (r == 15 && g == 15 && b == 15));
+          if (isValidColor) {
+            isEdge = (*current != *right) || (*current != *bottom);
+          }
+
+          if (isEdge && isValidColor) {
+            // 直接处理这个像素
+            std::string pixel_key_base = seed_str + "_x" + std::to_string(x + srcX) + "_y" + std::to_string(y + srcY);
+            std::string pixel_key_r = pixel_key_base + "_r";
+            std::string pixel_key_g = pixel_key_base + "_g";
+            std::string pixel_key_b = pixel_key_base + "_b";
+
+            uint8_t shuffleR = std::hash<std::string>{}(pixel_key_r) & 1;
+            uint8_t shuffleG = std::hash<std::string>{}(pixel_key_g) & 1;
+            uint8_t shuffleB = std::hash<std::string>{}(pixel_key_b) & 1;
+
+            auto a = SkGetPackedA4444(*current);
+            r = (r & ~0x1) | (shuffleR & 0x1);
+            g = (g & ~0x1) | (shuffleG & 0x1);
+            b = (b & ~0x1) | (shuffleB & 0x1);
+
+            unsigned a4 = (a & 0xF) << SK_A4444_SHIFT;
+            unsigned r4 = (r & 0xF) << SK_R4444_SHIFT;
+            unsigned g4 = (g & 0xF) << SK_G4444_SHIFT;
+            unsigned b4 = (b & 0xF) << SK_B4444_SHIFT;
+
+            *current = r4 | b4 | g4 | a4;
+            modified_pixels++;
+            processed_rows.insert(y);
+            processed_cols.insert(x);
+          }
+        }
+        break;
+
+        default:
+          break;
+      }
+    }
+  }
+}"""
+    # Skip hunks[0] (includes) and hunks[1] (HasMultipleValidColors, already extracted above).
+    sbi_028_shuffle_hunks = "\n@@ ".join(sbi_028_sec.split("\n@@ ")[2:])
+    shuffle_fn = apply_hunks(post027_shuffle, sbi_028_shuffle_hunks)
+
+    # 3. Extract ShuffleExtendedWebGLPixels from 024 + apply 028 webgl hunks.
+    wgl_024_added = "\n".join(
+        line[1:]
+        for line in section(
+            patch024, "third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc"
+        ).splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    wgl_024_ext = wgl_024_added[
+        wgl_024_added.index("float HalfToFloat(") : wgl_024_added.index("\n}  // namespace")
+    ]
+    wgl_028_sec = section(
+        patch028, "third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc"
+    )
+    wgl_ext_fn = apply_hunks(wgl_024_ext, wgl_028_sec, skip_first_hunk=True)
+
+    cpp_src = r"""#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cctype>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+#define IS_WIN 0
+#define IS_MAC 1
+#define IS_LINUX 0
+#define IS_CHROMEOS 0
+#define BUILDFLAG(X) X
+#define UNSAFE_BUFFERS(...) \
+  _Pragma("clang unsafe_buffer_usage begin") __VA_ARGS__ _Pragma("clang unsafe_buffer_usage end")
+#define UNSAFE_TODO(...) UNSAFE_BUFFERS(__VA_ARGS__)
+struct NullLogStream {
+  template <typename T>
+  NullLogStream& operator<<(const T&) {
+    return *this;
+  }
+};
+#define DLOG(X) NullLogStream()
+
+namespace base {
+template <typename Dest, typename Source>
+Dest bit_cast(const Source& source) {
+  static_assert(sizeof(Dest) == sizeof(Source));
+  Dest dest;
+  UNSAFE_TODO(std::memcpy(&dest, &source, sizeof(Dest)));
+  return dest;
+}
+struct CommandLine {
+  std::map<std::string, std::string> values;
+  static CommandLine* ForCurrentProcess() {
+    static CommandLine* c = new CommandLine();
+    return c;
+  }
+  bool HasSwitch(const char* k) const { return values.count(k) > 0; }
+  std::string GetSwitchValueASCII(const char* k) const {
+    auto it = values.find(k);
+    return it == values.end() ? std::string() : it->second;
+  }
+};
+inline std::string ToLowerASCII(std::string_view s) {
+  std::string out(s);
+  std::transform(out.begin(), out.end(), out.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return out;
+}
+inline bool EqualsCaseInsensitiveASCII(std::string_view a, std::string_view b) {
+  return ToLowerASCII(a) == ToLowerASCII(b);
+}
+}  // namespace base
+
+namespace switches {
+inline constexpr char kFingerprint[] = "fingerprint";
+inline constexpr char kFingerprintPlatform[] = "fingerprint-platform";
+inline constexpr char kDisableSpoofing[] = "disable-spoofing";
+}  // namespace switches
+
+struct String {
+  std::string s;
+  std::string Utf8() const { return s; }
+};
+
+static std::vector<std::string> GetPlatformFonts(const std::string& p) {
+  if (p == "windows") return {"Segoe UI Variable", "Calibri"};
+  if (p == "macos") return {"Menlo", "PingFang SC"};
+  return {"Ubuntu"};
+}
+static bool IsBasicFont(const std::string& font_family) {
+  static const std::set<std::string>& basic_fonts = *new std::set<std::string>{
+      "-webkit-standard", "system-ui", "Arial", "Helvetica", "Helvetica Neue", "BlinkMacSystemFont"
+  };
+__BASIC_RETURN__
+}
+
+struct FontCache {
+  static bool IsFontFamilyHiddenByFingerprint(const String& family);
+};
+__FC_028__
+
+enum SkColorType {
+  kRGBA_8888_SkColorType,
+  kBGRA_8888_SkColorType,
+  kGray_8_SkColorType,
+  kRGB_565_SkColorType,
+  kARGB_4444_SkColorType,
+};
+
+struct SkImageInfo {
+  int w = 0;
+  int h = 0;
+  SkColorType ct = kRGBA_8888_SkColorType;
+  int width() const { return w; }
+  int height() const { return h; }
+  SkColorType colorType() const { return ct; }
+  size_t bytesPerPixel() const {
+    if (ct == kRGBA_8888_SkColorType || ct == kBGRA_8888_SkColorType) return 4;
+    if (ct == kRGB_565_SkColorType || ct == kARGB_4444_SkColorType) return 2;
+    return 1;
+  }
+  size_t minRowBytes() const { return static_cast<size_t>(w) * bytesPerPixel(); }
+};
+
+constexpr unsigned SK_R32_SHIFT = 0;
+constexpr unsigned SK_G32_SHIFT = 8;
+constexpr unsigned SK_B32_SHIFT = 16;
+constexpr unsigned SK_A32_SHIFT = 24;
+constexpr unsigned SK_BGRA_B32_SHIFT = 0;
+constexpr unsigned SK_BGRA_G32_SHIFT = 8;
+constexpr unsigned SK_BGRA_R32_SHIFT = 16;
+constexpr unsigned SK_BGRA_A32_SHIFT = 24;
+inline uint32_t SkGetPackedR32(uint32_t p) { return (p >> SK_R32_SHIFT) & 0xFFu; }
+inline uint32_t SkGetPackedG32(uint32_t p) { return (p >> SK_G32_SHIFT) & 0xFFu; }
+inline uint32_t SkGetPackedB32(uint32_t p) { return (p >> SK_B32_SHIFT) & 0xFFu; }
+inline uint32_t SkGetPackedA32(uint32_t p) { return (p >> SK_A32_SHIFT) & 0xFFu; }
+
+constexpr unsigned SK_R16_MASK = 0x1F;
+constexpr unsigned SK_G16_MASK = 0x3F;
+constexpr unsigned SK_B16_MASK = 0x1F;
+constexpr unsigned SK_R16_SHIFT = 11;
+constexpr unsigned SK_G16_SHIFT = 5;
+constexpr unsigned SK_B16_SHIFT = 0;
+inline unsigned SkGetPackedR16(uint16_t p) { return (p >> SK_R16_SHIFT) & SK_R16_MASK; }
+inline unsigned SkGetPackedG16(uint16_t p) { return (p >> SK_G16_SHIFT) & SK_G16_MASK; }
+inline unsigned SkGetPackedB16(uint16_t p) { return (p >> SK_B16_SHIFT) & SK_B16_MASK; }
+inline unsigned SkPacked16ToR32(uint16_t p) {
+  unsigned r = SkGetPackedR16(p);
+  return (r << 3) | (r >> 2);
+}
+inline unsigned SkPacked16ToG32(uint16_t p) {
+  unsigned g = SkGetPackedG16(p);
+  return (g << 2) | (g >> 4);
+}
+inline unsigned SkPacked16ToB32(uint16_t p) {
+  unsigned b = SkGetPackedB16(p);
+  return (b << 3) | (b >> 2);
+}
+
+constexpr unsigned SK_R4444_SHIFT = 12;
+constexpr unsigned SK_G4444_SHIFT = 8;
+constexpr unsigned SK_B4444_SHIFT = 4;
+constexpr unsigned SK_A4444_SHIFT = 0;
+inline unsigned SkGetPackedR4444(uint16_t p) { return (p >> SK_R4444_SHIFT) & 0xFu; }
+inline unsigned SkGetPackedG4444(uint16_t p) { return (p >> SK_G4444_SHIFT) & 0xFu; }
+inline unsigned SkGetPackedB4444(uint16_t p) { return (p >> SK_B4444_SHIFT) & 0xFu; }
+inline unsigned SkGetPackedA4444(uint16_t p) { return (p >> SK_A4444_SHIFT) & 0xFu; }
+
+__HAS_MULTI_FN__
+
+#define writable_addr(T, p, stride, x, y) \
+  UNSAFE_TODO(reinterpret_cast<T*>(const_cast<char*>(reinterpret_cast<const char*>(p)) + (y) * (stride) + (x) * sizeof(T)))
+
+struct StaticBitmapImage {
+  static void ShuffleSubchannelColorData(const void* addr, const SkImageInfo& info, int srcX, int srcY);
+};
+__SHUFFLE_FN__
+#undef writable_addr
+
+using GLenum = unsigned int;
+constexpr GLenum GL_UNSIGNED_SHORT_5_5_5_1 = 0x8034;
+constexpr GLenum GL_FLOAT = 0x1406;
+constexpr GLenum GL_HALF_FLOAT = 0x140B;
+__WGL_EXT_FN__
+
+static uint32_t PackRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+  return (static_cast<uint32_t>(a) << 24) | (static_cast<uint32_t>(b) << 16) |
+         (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(r);
+}
+
+int main() {
+  auto* cmd = base::CommandLine::ForCurrentProcess();
+
+  // 1. All 196 protected macOS core/system fonts stay visible across Pixelscan & verify seeds.
+  const std::vector<std::string> core_probes = {
+      "Euphemia UCAS", "euphemia ucas", "EUPHEMIA UCAS",
+      "Al Bayan", "Avenir Next", "Avenir Next Condensed",
+      "Courier", "Hiragino Kaku Gothic Pro", "Hiragino Kaku Gothic ProN",
+      "Hiragino Kaku Gothic Std", "Kohinoor Gujarati", "Menlo", "Monaco",
+      "Mukta Mahee", "Noto Sans Armenian", "Noto Sans Kannada",
+      "Noto Sans Myanmar", "Noto Sans Oriya", "Noto Sans Zawgyi",
+      "Noto Serif Myanmar", "Optima", "PingFang HK", "PingFang MO",
+      "PingFang SC", "PingFang TC", "System Font", "Times New Roman",
+      "Wingdings", "Wingdings 2", "Zapfino",
+  };
+  for (const std::string& seed : {"2044486887", "3003", "3006", "3", "9", "42"}) {
+    cmd->values = {{"fingerprint", seed}, {"fingerprint-platform", "macos"}};
+    for (const auto& entry : kProtectedMacOsCoreFonts) {
+      const auto d = EvaluateFingerprintFont(std::string(entry));
+      assert(!d.hide && d.substitute_family.empty());
+    }
+    for (const auto& probe : core_probes) {
+      assert(!FontCache::IsFontFamilyHiddenByFingerprint({probe}));
+    }
+  }
+
+  // 2. Non-core macOS supplemental fonts still vary per seed (3003 vs 3006) case-insensitively.
+  const std::vector<std::string> supplemental = {
+      "Academy Engraved LET", "Galvji", "Grantha Sangam MN",
+      "Noto Sans Batak", "Noto Sans NKo", "Noto Sans Syriac",
+      "Noto Sans Tagalog", "Party LET", "STIX Two Math", "STIX Two Text",
+  };
+  auto eval_mask = [&](const std::string& seed) {
+    cmd->values = {{"fingerprint", seed}, {"fingerprint-platform", "macos"}};
+    std::vector<bool> mask;
+    for (const auto& fam : supplemental) {
+      const bool h = FontCache::IsFontFamilyHiddenByFingerprint({fam});
+      assert(h == FontCache::IsFontFamilyHiddenByFingerprint({base::ToLowerASCII(fam)}));
+      std::string upper = fam;
+      std::transform(upper.begin(), upper.end(), upper.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+      assert(h == FontCache::IsFontFamilyHiddenByFingerprint({upper}));
+      mask.push_back(h);
+    }
+    return mask;
+  };
+  const auto m3003 = eval_mask("3003");
+  const auto m3006 = eval_mask("3006");
+  assert(std::count(m3003.begin(), m3003.end(), true) >= 1);
+  assert(std::count(m3006.begin(), m3006.end(), true) >= 1);
+  assert(m3003 != m3006);
+
+  // 3. Cross-OS spoofing (macOS host pretending Windows) remains unchanged (~95% non-Windows hidden).
+  cmd->values = {{"fingerprint", "3003"}, {"fingerprint-platform", "windows"}};
+  auto win_dec = EvaluateFingerprintFont("Segoe UI Variable");
+  assert(!win_dec.hide && (win_dec.substitute_family == "Menlo" || win_dec.substitute_family == "PingFang SC"));
+  int cross_hidden = 0;
+  for (int i = 0; i < 400; ++i) {
+    if (FontCache::IsFontFamilyHiddenByFingerprint({"CrossFamily_" + std::to_string(i)})) {
+      cross_hidden++;
+    }
+  }
+  assert(cross_hidden > 340);
+
+  // 4. Flat monochrome Pixelscan 256x24 red box (red over transparent), plus red over white/black, stay intact.
+  cmd->values = {{"fingerprint", "2044486887"}, {"fingerprint-platform", "macos"}};
+  auto test_flat_rgba = [&](uint32_t bg, uint32_t fg) {
+    std::vector<uint32_t> buf(256 * 24, bg);
+    for (int y = 3; y < 21; ++y) {
+      for (int x = 32; x < 224; ++x) {
+        buf[static_cast<size_t>(y) * 256 + static_cast<size_t>(x)] = fg;
+      }
+    }
+    const auto orig = buf;
+    StaticBitmapImage::ShuffleSubchannelColorData(
+        buf.data(), SkImageInfo{256, 24, kRGBA_8888_SkColorType}, 0, 0);
+    assert(buf == orig);
+  };
+  test_flat_rgba(PackRGBA(0, 0, 0, 0), PackRGBA(255, 0, 0, 255));
+  test_flat_rgba(PackRGBA(255, 255, 255, 255), PackRGBA(255, 0, 0, 255));
+  test_flat_rgba(PackRGBA(0, 0, 0, 255), PackRGBA(255, 0, 0, 255));
+  test_flat_rgba(PackRGBA(120, 45, 200, 0), PackRGBA(255, 0, 0, 255));  // transparent non-zero RGB
+  test_flat_rgba(PackRGBA(0, 0, 0, 0), PackRGBA(255, 0, 0, 128));      // flat translucent red
+
+  // Flat 16-bit 565 / 4444 / Gray8 stay untouched.
+  {
+    std::vector<uint8_t> g8(32 * 16, 0);
+    for (int y = 2; y < 14; ++y) {
+      for (int x = 4; x < 28; ++x) g8[static_cast<size_t>(y) * 32 + static_cast<size_t>(x)] = 128;
+    }
+    const auto g8_orig = g8;
+    StaticBitmapImage::ShuffleSubchannelColorData(g8.data(), SkImageInfo{32, 16, kGray_8_SkColorType}, 0, 0);
+    assert(g8 == g8_orig);
+
+    for (const std::string& seed : {"2044486887", "2"}) {
+      cmd->values["fingerprint"] = seed;
+      for (uint16_t bg565 : {uint16_t{0x0000}, uint16_t{0xFFFF}}) {
+        std::vector<uint16_t> p565(32 * 16, bg565);
+        for (int y = 2; y < 14; ++y) {
+          for (int x = 4; x < 28; ++x) p565[static_cast<size_t>(y) * 32 + static_cast<size_t>(x)] = 0xF800;
+        }
+        const auto p565_orig = p565;
+        StaticBitmapImage::ShuffleSubchannelColorData(p565.data(), SkImageInfo{32, 16, kRGB_565_SkColorType}, 0, 0);
+        assert(p565 == p565_orig);
+      }
+    }
+    auto run_mixed_565 = [&](const std::string& seed) {
+      cmd->values["fingerprint"] = seed;
+      std::vector<uint16_t> buf(32 * 16, 0xFFFF);
+      for (int y = 2; y < 14; ++y) {
+        for (int x = 4; x < 28; ++x) buf[static_cast<size_t>(y) * 32 + static_cast<size_t>(x)] = 0xF800;
+      }
+      for (int y = 5; y < 11; ++y) {
+        for (int x = 10; x < 22; ++x) buf[static_cast<size_t>(y) * 32 + static_cast<size_t>(x)] = 0x0410;
+      }
+      buf[0] = 0x0000;
+      const auto orig = buf;
+      StaticBitmapImage::ShuffleSubchannelColorData(buf.data(), SkImageInfo{32, 16, kRGB_565_SkColorType}, 0, 0);
+      assert(buf != orig);
+      for (size_t i = 0; i < buf.size(); ++i) {
+        if (orig[i] == 0xFFFF || orig[i] == 0x0000) {
+          assert(buf[i] == orig[i]);
+        } else if (buf[i] != orig[i]) {
+          const int dr = static_cast<int>(SkGetPackedR16(buf[i])) - static_cast<int>(SkGetPackedR16(orig[i]));
+          const int dg = static_cast<int>(SkGetPackedG16(buf[i])) - static_cast<int>(SkGetPackedG16(orig[i]));
+          const int db = static_cast<int>(SkGetPackedB16(buf[i])) - static_cast<int>(SkGetPackedB16(orig[i]));
+          assert(dr >= -1 && dr <= 1 && dg >= -1 && dg <= 1 && db >= -1 && db <= 1);
+        }
+      }
+      return buf;
+    };
+    assert(run_mixed_565("2") != run_mixed_565("3"));
+    cmd->values["fingerprint"] = "2044486887";
+
+    std::vector<uint16_t> p4444(32 * 16, 0x7320);  // alpha == 0 with non-zero RGB
+    for (int y = 2; y < 14; ++y) {
+      for (int x = 4; x < 28; ++x) p4444[static_cast<size_t>(y) * 32 + static_cast<size_t>(x)] = 0xF00F;
+    }
+    const auto p4444_orig = p4444;
+    StaticBitmapImage::ShuffleSubchannelColorData(p4444.data(), SkImageInfo{32, 16, kARGB_4444_SkColorType}, 0, 0);
+    assert(p4444 == p4444_orig);
+  }
+
+  // 5. Multi-color scenes (2+ valid colors) still get deterministic per-seed noise across seeds.
+  auto run_multicolor_rgba = [&](const std::string& seed) {
+    cmd->values["fingerprint"] = seed;
+    std::vector<uint32_t> buf(32 * 32, PackRGBA(76, 153, 230, 255));
+    for (int y = 0; y < 32; ++y) {
+      for (int x = 0; x < 16; ++x) buf[static_cast<size_t>(y) * 32 + static_cast<size_t>(x)] = PackRGBA(204, 51, 102, 255);
+    }
+    for (int y = 8; y < 24; ++y) {
+      for (int x = 8; x < 24; ++x) buf[static_cast<size_t>(y) * 32 + static_cast<size_t>(x)] = PackRGBA(51, 191, 115, 255);
+    }
+    const auto before = buf;
+    StaticBitmapImage::ShuffleSubchannelColorData(buf.data(), SkImageInfo{32, 32, kRGBA_8888_SkColorType}, 0, 0);
+    assert(buf != before);
+    return buf;
+  };
+  assert(run_multicolor_rgba("2") != run_multicolor_rgba("3"));
+
+  // 6. ShuffleExtendedWebGLPixels preserves flat 5551/FLOAT/HALF_FLOAT boxes while noising 2-color & gradients.
+  {
+    std::vector<uint16_t> flat5551(32 * 32, 0);
+    for (int y = 4; y < 24; ++y) {
+      for (int x = 4; x < 24; ++x) flat5551[static_cast<size_t>(y) * 32 + static_cast<size_t>(x)] = 0xF801;
+    }
+    const auto flat5551_orig = flat5551;
+    ShuffleExtendedWebGLPixels(reinterpret_cast<uint8_t*>(flat5551.data()), 32, 32, 64, 2, GL_UNSIGNED_SHORT_5_5_5_1, "2");
+    assert(flat5551 == flat5551_orig);
+
+    auto make_two_5551 = [&](const std::string& seed) {
+      std::vector<uint16_t> buf(32 * 32, 0x4221);
+      for (int y = 4; y < 24; ++y) {
+        for (int x = 4; x < 24; ++x) buf[static_cast<size_t>(y) * 32 + static_cast<size_t>(x)] = 0xC111;
+      }
+      const auto orig = buf;
+      ShuffleExtendedWebGLPixels(reinterpret_cast<uint8_t*>(buf.data()), 32, 32, 64, 2, GL_UNSIGNED_SHORT_5_5_5_1, seed);
+      assert(buf != orig);
+      return buf;
+    };
+    assert(make_two_5551("2") != make_two_5551("3"));
+
+    std::vector<float> flat_flt(32 * 32 * 4, 0.0f);
+    for (int y = 4; y < 24; ++y) {
+      for (int x = 4; x < 24; ++x) {
+        const size_t off = (static_cast<size_t>(y) * 32 + static_cast<size_t>(x)) * 4;
+        flat_flt[off] = 1.0f;
+        flat_flt[off + 3] = 1.0f;
+      }
+    }
+    const auto flat_flt_orig = flat_flt;
+    ShuffleExtendedWebGLPixels(reinterpret_cast<uint8_t*>(flat_flt.data()), 32, 32, 32 * 16, 16, GL_FLOAT, "2");
+    assert(flat_flt == flat_flt_orig);
+
+    auto make_grad_flt = [&](const std::string& seed) {
+      std::vector<float> buf(32 * 32 * 4, 0.0f);
+      for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+          const size_t off = (static_cast<size_t>(y) * 32 + static_cast<size_t>(x)) * 4;
+          buf[off] = 0.2f + 0.6f * static_cast<float>(x) / 31.0f;
+          buf[off + 1] = 0.3f + 0.5f * static_cast<float>(y) / 31.0f;
+          buf[off + 2] = 0.7f;
+          buf[off + 3] = 1.0f;
+        }
+      }
+      const auto orig = buf;
+      ShuffleExtendedWebGLPixels(reinterpret_cast<uint8_t*>(buf.data()), 32, 32, 32 * 16, 16, GL_FLOAT, seed);
+      assert(buf != orig);
+      return buf;
+    };
+    assert(make_grad_flt("2") != make_grad_flt("3"));
+
+    std::vector<uint16_t> flat_hf(32 * 32 * 4, 0);
+    for (int y = 4; y < 24; ++y) {
+      for (int x = 4; x < 24; ++x) {
+        const size_t off = (static_cast<size_t>(y) * 32 + static_cast<size_t>(x)) * 4;
+        flat_hf[off] = FloatToHalf(0.5f);
+        flat_hf[off + 3] = FloatToHalf(1.0f);
+      }
+    }
+    const auto flat_hf_orig = flat_hf;
+    ShuffleExtendedWebGLPixels(reinterpret_cast<uint8_t*>(flat_hf.data()), 32, 32, 32 * 8, 8, GL_HALF_FLOAT, "2");
+    assert(flat_hf == flat_hf_orig);
+
+    auto make_narrow_flt = [&](const std::string& seed) {
+      std::vector<float> buf(32 * 32 * 4, 0.0f);
+      for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+          const size_t off = (static_cast<size_t>(y) * 32 + static_cast<size_t>(x)) * 4;
+          buf[off] = ((x + y) & 1) ? 0.5f : 0.50048828125f;
+          buf[off + 3] = 1.0f;
+        }
+      }
+      const auto orig = buf;
+      ShuffleExtendedWebGLPixels(reinterpret_cast<uint8_t*>(buf.data()), 32, 32, 32 * 16, 16, GL_FLOAT, seed);
+      assert(buf != orig);
+      return buf;
+    };
+    assert(make_narrow_flt("2") != make_narrow_flt("3"));
+
+    auto make_narrow_hf = [&](const std::string& seed) {
+      std::vector<uint16_t> buf(32 * 32 * 4, 0);
+      for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+          const size_t off = (static_cast<size_t>(y) * 32 + static_cast<size_t>(x)) * 4;
+          buf[off] = FloatToHalf(((x + y) & 1) ? 0.5f : 0.50048828125f);
+          buf[off + 3] = FloatToHalf(1.0f);
+        }
+      }
+      const auto orig = buf;
+      ShuffleExtendedWebGLPixels(reinterpret_cast<uint8_t*>(buf.data()), 32, 32, 32 * 8, 8, GL_HALF_FLOAT, seed);
+      assert(buf != orig);
+      return buf;
+    };
+    assert(make_narrow_hf("2") != make_narrow_hf("3"));
+  }
+  return 0;
+}
+"""
+    cpp_src = (
+        cpp_src.replace("__BASIC_RETURN__", fc_basic_ret)
+        .replace("__FC_028__", fc_028_fn)
+        .replace("__HAS_MULTI_FN__", has_multi_fn)
+        .replace("__SHUFFLE_FN__", shuffle_fn)
+        .replace("__WGL_EXT_FN__", wgl_ext_fn)
+    )
+
+    test_cc = tmp_path / "test_028.cc"
+    test_cc.write_text(cpp_src)
+    exe = tmp_path / "test_028"
     subprocess.run(
         [
             compiler,

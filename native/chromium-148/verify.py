@@ -10,11 +10,26 @@ import hashlib
 import importlib.util
 import json
 import math
+import re
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
+
+
+def _protected_macos_fonts() -> frozenset[str]:
+    patch_text = (
+        Path(__file__).with_name("patches") / "028-pixelscan-noise-font-coherence.patch"
+    ).read_text(encoding="utf-8")
+    block = patch_text.split("kProtectedMacOsCoreFonts", 1)[1].split(
+        "IsProtectedMacOsCoreFontsSorted", 1
+    )[0]
+    fonts = frozenset(re.findall(r'\+\s+"([^"]+)"', block))
+    if len(fonts) != 196:
+        raise ValueError(f"Expected 196 protected macOS core fonts in 028, got {len(fonts)}")
+    return fonts
+
 
 SAMPLE = """async function sample() {
   const adapter = await navigator.gpu?.requestAdapter();
@@ -525,6 +540,27 @@ COLLECT = """async () => {
         gl2.readPixels(0, 0, 32, 32, gl2.RGBA, gl2.UNSIGNED_SHORT_5_5_5_1, solidA);
         const first5551 = solidA[0];
         if (!solidA.every(v => v === first5551)) extParityMismatch++;
+        gl2.clearColor(0.0, 0.0, 0.0, 0.0);
+        gl2.clear(gl2.COLOR_BUFFER_BIT);
+        gl2.enable(gl2.SCISSOR_TEST);
+        gl2.scissor(4, 4, 20, 20);
+        gl2.clearColor(1.0, 0.0, 0.0, 1.0);
+        gl2.clear(gl2.COLOR_BUFFER_BIT);
+        gl2.disable(gl2.SCISSOR_TEST);
+        const mono5551 = new Uint16Array(32 * 32);
+        gl2.readPixels(0, 0, 32, 32, gl2.RGBA, gl2.UNSIGNED_SHORT_5_5_5_1, mono5551);
+        for (let row = 0; row < 32; row++) {
+          for (let col = 0; col < 32; col++) {
+            const expected = (row >= 4 && row < 24 && col >= 4 && col < 24) ? 0xF801 : 0;
+            if (mono5551[row * 32 + col] !== expected) {
+              extParityMismatch++;
+              row = 32;
+              break;
+            }
+          }
+        }
+        gl2.clearColor(0.25, 0.5, 0.75, 1.0);
+        gl2.clear(gl2.COLOR_BUFFER_BIT);
         gl2.enable(gl2.SCISSOR_TEST);
         gl2.scissor(4, 4, 20, 20);
         gl2.clearColor(0.75, 0.25, 0.5, 1.0);
@@ -617,6 +653,27 @@ COLLECT = """async () => {
         if (hdr[0] !== -0.5 || hdr[1] !== 1.5 || hdr[(2 * 32 + 2) * 4] !== -0.25 || hdr[(2 * 32 + 2) * 4 + 1] !== 3.5) {
           extParityMismatch++;
         }
+        gl2.clearColor(0.0, 0.0, 0.0, 0.0);
+        gl2.clear(gl2.COLOR_BUFFER_BIT);
+        gl2.enable(gl2.SCISSOR_TEST);
+        gl2.scissor(4, 4, 20, 20);
+        gl2.clearColor(1.0, 0.0, 0.0, 1.0);
+        gl2.clear(gl2.COLOR_BUFFER_BIT);
+        gl2.disable(gl2.SCISSOR_TEST);
+        const monoF32 = new Float32Array(32 * 32 * 4);
+        gl2.readPixels(0, 0, 32, 32, gl2.RGBA, gl2.FLOAT, monoF32);
+        for (let row = 0; row < 32; row++) {
+          for (let col = 0; col < 32; col++) {
+            const inside = row >= 4 && row < 24 && col >= 4 && col < 24;
+            const idx = (row * 32 + col) * 4;
+            if (monoF32[idx] !== (inside ? 1 : 0) || monoF32[idx + 1] !== 0 ||
+                monoF32[idx + 2] !== 0 || monoF32[idx + 3] !== (inside ? 1 : 0)) {
+              extParityMismatch++;
+              row = 32;
+              break;
+            }
+          }
+        }
         gl2.bindFramebuffer(gl2.FRAMEBUFFER, dst16.f);
         const h16 = new Uint16Array(32 * 32 * 4);
         gl2.readPixels(0, 0, 32, 32, gl2.RGBA, gl2.HALF_FLOAT, h16);
@@ -641,6 +698,86 @@ COLLECT = """async () => {
   results.webgl5551Digest = digest5551;
   results.webglFloatDigest = digestFloat;
   results.webglHalfFloatDigest = digestHalfFloat;
+  {
+    const rc = document.createElement('canvas');
+    rc.width = 256;
+    rc.height = 24;
+    const rgl = rc.getContext('webgl', {preserveDrawingBuffer: true});
+    let redBoxDigest = '';
+    if (rgl) {
+      const idx = [3, 2, 1, 3, 1, 0];
+      const vb = rgl.createBuffer();
+      const ib = rgl.createBuffer();
+      const vs = rgl.createShader(rgl.VERTEX_SHADER);
+      const fs = rgl.createShader(rgl.FRAGMENT_SHADER);
+      const prog = rgl.createProgram();
+      try {
+        rgl.bindBuffer(rgl.ARRAY_BUFFER, vb);
+        rgl.bufferData(rgl.ARRAY_BUFFER, new Float32Array([-0.75, 0.75, 0, -0.75, -0.75, 0, 0.75, -0.75, 0, 0.75, 0.75, 0]), rgl.STATIC_DRAW);
+        rgl.bindBuffer(rgl.ARRAY_BUFFER, null);
+        rgl.bindBuffer(rgl.ELEMENT_ARRAY_BUFFER, ib);
+        rgl.bufferData(rgl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), rgl.STATIC_DRAW);
+        rgl.bindBuffer(rgl.ELEMENT_ARRAY_BUFFER, null);
+        rgl.shaderSource(vs, 'attribute vec3 coordinates;void main(void) { gl_Position = vec4(coordinates, 1.0);}');
+        rgl.compileShader(vs);
+        rgl.shaderSource(fs, 'void main(void) { gl_FragColor = vec4(255, 0, 0, 1);}');
+        rgl.compileShader(fs);
+        rgl.attachShader(prog, vs);
+        rgl.attachShader(prog, fs);
+        rgl.linkProgram(prog);
+        rgl.useProgram(prog);
+        rgl.bindBuffer(rgl.ARRAY_BUFFER, vb);
+        rgl.bindBuffer(rgl.ELEMENT_ARRAY_BUFFER, ib);
+        const loc = rgl.getAttribLocation(prog, 'coordinates');
+        rgl.vertexAttribPointer(loc, 3, rgl.FLOAT, false, 0, 0);
+        rgl.enableVertexAttribArray(loc);
+        rgl.clearColor(0, 0, 0, 0);
+        rgl.enable(rgl.DEPTH_TEST);
+        rgl.clear(rgl.COLOR_BUFFER_BIT);
+        rgl.viewport(0, 0, rc.width, rc.height);
+        rgl.drawElements(rgl.TRIANGLES, idx.length, rgl.UNSIGNED_SHORT, 0);
+        const pixels = new Uint8Array(rgl.drawingBufferWidth * rgl.drawingBufferHeight * 4);
+        rgl.readPixels(0, 0, rgl.drawingBufferWidth, rgl.drawingBufferHeight, rgl.RGBA, rgl.UNSIGNED_BYTE, pixels);
+        redBoxDigest = await sha256Hex(pixels);
+      } finally {
+        rgl.deleteBuffer(vb);
+        rgl.deleteBuffer(ib);
+        rgl.deleteProgram(prog);
+        rgl.deleteShader(vs);
+        rgl.deleteShader(fs);
+      }
+    }
+    results.webglRedBoxDigest = redBoxDigest;
+  }
+  {
+    const fc = document.createElement('canvas');
+    fc.width = 64;
+    fc.height = 24;
+    const fctx = fc.getContext('2d');
+    fctx.clearRect(0, 0, 64, 24);
+    fctx.fillStyle = 'rgb(255, 0, 0)';
+    fctx.fillRect(8, 3, 48, 18);
+    const raw = fctx.getImageData(0, 0, 64, 24).data;
+    const pngBin = atob(fc.toDataURL('image/png').split(',')[1]);
+    const pngBlob = new Blob([Uint8Array.from(pngBin, ch => ch.charCodeAt(0))], {type: 'image/png'});
+    const pngBmp = await createImageBitmap(pngBlob);
+    const decCtx = new OffscreenCanvas(64, 24).getContext('2d');
+    decCtx.drawImage(pngBmp, 0, 0);
+    pngBmp.close();
+    const dec = decCtx.getImageData(0, 0, 64, 24).data;
+    let flatChanged = 0;
+    for (let y = 0; y < 24; y++) {
+      for (let x = 0; x < 64; x++) {
+        const inside = x >= 8 && x < 56 && y >= 3 && y < 21;
+        const off = (y * 64 + x) * 4;
+        const er = inside ? 255 : 0;
+        const ea = inside ? 255 : 0;
+        if (raw[off] !== er || raw[off + 1] !== 0 || raw[off + 2] !== 0 || raw[off + 3] !== ea) flatChanged++;
+        if (dec[off] !== er || dec[off + 1] !== 0 || dec[off + 2] !== 0 || dec[off + 3] !== ea) flatChanged++;
+      }
+    }
+    results.flatMonochromeChanged = flatChanged;
+  }
   // 3) OfflineAudioContext exact sampleRate, deterministic seed digest, and silent preservation.
   {
     const ac = new OfflineAudioContext(1, 8192, 44100);
@@ -950,6 +1087,13 @@ async def verify(executable: Path, output: Path) -> None:
                         raise ValueError(
                             "ClientRects 0x0, (0,0), or multiline union contract failed"
                         )
+                    if (
+                        result.get("webglRedBoxDigest")
+                        != "bf9da7959d914298f9ce9e41a480fd66f76fac5c6f5e0a9b5a99b18cfc6fd997"
+                    ):
+                        raise ValueError("028 WebGL solid red box hash mismatch")
+                    if result.get("flatMonochromeChanged") != 0:
+                        raise ValueError("028 flat monochrome canvas perturbed")
                     await page.goto(f"http://127.0.0.1:{server.server_port}/strict")
                     check_sample(await page.evaluate(STRICT), vendor, arch)
                 finally:
@@ -1160,7 +1304,10 @@ async def verify(executable: Path, output: Path) -> None:
             )
 
             async def _verify_locale_speech_font_027(
-                seed: int, candidate_families: list[str] | tuple[str, ...] = ()
+                seed: int,
+                candidate_families: list[str] | tuple[str, ...] = (),
+                *,
+                unfiltered: bool = False,
             ) -> dict:
                 with tempfile.TemporaryDirectory(prefix="verify-027-") as tmp_profile_dir:
                     context = await pw.chromium.launch_persistent_context(
@@ -1181,6 +1328,7 @@ async def verify(executable: Path, output: Path) -> None:
                             "--lang=de-DE",
                             "--accept-lang=de-DE,de,en-US,en",
                             "--disable-background-networking",
+                            *(["--disable-spoofing=font"] if unfiltered else []),
                         ],
                     )
                     try:
@@ -1206,6 +1354,12 @@ async def verify(executable: Path, output: Path) -> None:
                             else await context.new_page()
                         )
                         await page.goto(f"http://127.0.0.1:{server.server_port}/")
+                        if unfiltered:
+                            families = await page.evaluate(
+                                """async () => Array.from(new Set(
+                                    (await window.queryLocalFonts()).map(f => f.family)))"""
+                            )
+                            return {"localFontFamilies": families}
                         main_payload = await page.evaluate(
                             """async (candidateFamilies) => {
                         const timeout = (p) => Promise.race([
@@ -1250,18 +1404,42 @@ async def verify(executable: Path, output: Path) -> None:
                         const fonts = await window.queryLocalFonts();
                         const families = Array.from(new Set(fonts.map(f => f.family))).sort();
                         const visibleLower = new Set(families.map(f => f.toLowerCase()));
+                        const c = new OffscreenCanvas(400, 60);
+                        const g = c.getContext('2d');
+                        const sampleText = 'mmmmmmmmmmlliWW0123';
+                        g.font = '32px monospace';
+                        const wMono = g.measureText(sampleText).width;
+                        g.font = '32px serif';
+                        const wSerif = g.measureText(sampleText).width;
+                        const coreQueryProbes = [
+                          'Al Bayan', 'Avenir Next', 'Euphemia UCAS',
+                          'Kohinoor Gujarati', 'Menlo', 'Monaco', 'Mukta Mahee',
+                          'Noto Sans Kannada', 'Noto Sans Myanmar', 'Noto Sans Oriya',
+                          'Noto Serif Myanmar', 'Optima', 'PingFang HK', 'PingFang MO',
+                          'PingFang SC', 'Zapfino'
+                        ];
+                        const coreCanvasProbes = [
+                          'Avenir Next', 'Euphemia UCAS', 'Menlo',
+                          'Monaco', 'Optima', 'PingFang HK', 'PingFang SC', 'Zapfino'
+                        ];
+                        let coreFontMissingCount = 0;
+                        for (const fam of coreQueryProbes) {
+                          if (!visibleLower.has(fam.toLowerCase())) coreFontMissingCount++;
+                        }
+                        for (const fam of coreCanvasProbes) {
+                          g.font = '32px "' + fam + '", monospace';
+                          const mw = g.measureText(sampleText).width;
+                          g.font = '32px "' + fam + '", serif';
+                          const sw = g.measureText(sampleText).width;
+                          if (Math.abs(mw - wMono) <= 0.01 && Math.abs(sw - wSerif) <= 0.01) {
+                            coreFontMissingCount++;
+                          }
+                        }
                         const hiddenSample = (candidateFamilies || [])
                           .filter(f => !visibleLower.has(f.toLowerCase()))
                           .slice(0, 5);
                         let caseRenderLeaks = 0;
                         if (hiddenSample.length > 0) {
-                          const c = new OffscreenCanvas(400, 60);
-                          const g = c.getContext('2d');
-                          const sampleText = 'mmmmmmmmmmlliWW0123';
-                          g.font = '32px monospace';
-                          const wMono = g.measureText(sampleText).width;
-                          g.font = '32px serif';
-                          const wSerif = g.measureText(sampleText).width;
                           for (const fam of hiddenSample) {
                             for (const variant of [fam, fam.toLowerCase(), fam.toUpperCase()]) {
                               g.font = '32px "' + variant + '", monospace';
@@ -1287,6 +1465,7 @@ async def verify(executable: Path, output: Path) -> None:
                           googleVoices: voices.filter(v => v.name.startsWith('Google')).map(v => v.name),
                           localVoiceCount: voices.filter(v => !v.name.startsWith('Google') && v.localService).length,
                           localFontFamilies: families,
+                          coreFontMissingCount,
                           hiddenSampleCount: hiddenSample.length,
                           caseRenderLeaks,
                         };
@@ -1346,9 +1525,19 @@ async def verify(executable: Path, output: Path) -> None:
                     finally:
                         await context.close()
 
+            protected_fonts = _protected_macos_fonts()
+            unfiltered_fonts = await _verify_locale_speech_font_027(3006, unfiltered=True)
+            installed_core_fonts = {
+                f.lower() for f in unfiltered_fonts["localFontFamilies"]
+            } & protected_fonts
+            if not installed_core_fonts:
+                raise ValueError("028 unfiltered protected macOS core font inventory empty")
             r3006 = await _verify_locale_speech_font_027(3006)
+            supplemental_candidates = sorted(
+                f for f in r3006["localFontFamilies"] if f.lower() not in protected_fonts
+            )
             r3003 = await _verify_locale_speech_font_027(
-                3003, candidate_families=r3006["localFontFamilies"]
+                3003, candidate_families=supplemental_candidates
             )
             expected_popup_first = {
                 "lang": "de-DE",
@@ -1392,8 +1581,28 @@ async def verify(executable: Path, output: Path) -> None:
                     raise ValueError(
                         f"027 queryLocalFonts unexpected family set ({label}): {len(fams)}"
                     )
-            if set(r3003["localFontFamilies"]) == set(r3006["localFontFamilies"]):
-                raise ValueError("027 queryLocalFonts did not reflect per-seed FontCache filtering")
+                if payload.get("coreFontMissingCount") != 0:
+                    raise ValueError(f"028 protected macOS core font hidden ({label}): {payload}")
+            core_3003 = {f.lower() for f in r3003["localFontFamilies"]} & protected_fonts
+            core_3006 = {f.lower() for f in r3006["localFontFamilies"]} & protected_fonts
+            for seed, visible in ((3003, core_3003), (3006, core_3006)):
+                missing = installed_core_fonts - visible
+                if missing:
+                    raise ValueError(
+                        f"028 installed protected macOS core font hidden (seed {seed}): "
+                        f"{sorted(missing)}"
+                    )
+            if core_3003 != core_3006:
+                raise ValueError(
+                    "028 protected macOS system font varied across seeds: "
+                    f"{sorted(core_3003 ^ core_3006)}"
+                )
+            non_core_3003 = {f.lower() for f in r3003["localFontFamilies"]} - protected_fonts
+            non_core_3006 = {f.lower() for f in r3006["localFontFamilies"]} - protected_fonts
+            if non_core_3003 == non_core_3006:
+                raise ValueError(
+                    "027 queryLocalFonts did not reflect per-seed supplemental/user FontCache filtering"
+                )
             if r3003.get("hiddenSampleCount", 0) <= 0 or r3003.get("caseRenderLeaks", 0) != 0:
                 raise ValueError(f"027 hidden font case-insensitivity check failed: {r3003}")
             report["cases"]["locale_speech_font_de"] = {
@@ -1401,6 +1610,8 @@ async def verify(executable: Path, output: Path) -> None:
                 "seed_3006_font_count": len(r3006["localFontFamilies"]),
                 "local_voice_count": r3003["localVoiceCount"],
                 "google_voice_count": 0,
+                "core_font_missing_count": r3003["coreFontMissingCount"],
+                "installed_protected_font_count": len(installed_core_fonts),
                 "hidden_case_checked": r3003["hiddenSampleCount"],
                 "window": r3003["window"],
                 "worker": r3003["worker"],

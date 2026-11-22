@@ -83,6 +83,7 @@ def compatible_identity(saved: dict, current: dict) -> bool:
         "audio_clientrects_patch_sha256",
         "apple_silicon_coherence_patch_sha256",
         "locale_speech_font_patch_sha256",
+        "pixelscan_coherence_patch_sha256",
     ):
         if key not in saved_src and key in curr_src:
             curr_src.pop(key, None)
@@ -164,12 +165,12 @@ def _repair_mtimes_from_ninja_log(out_dir: Path) -> None:
                         break
 
 
-def _apply_incremental_patches(src_dir: Path) -> bool:
+def _apply_incremental_patches(src_dir: Path, saved_source: dict | None = None) -> bool:
     spec = importlib.util.spec_from_file_location("native_prepare", KIT / "prepare.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return bool(module.apply_incremental_patches(src_dir))
+    return bool(module.apply_incremental_patches(src_dir, saved_source=saved_source))
 
 
 def pack(source: Path, destination: Path, context: dict) -> None:
@@ -377,9 +378,10 @@ def main() -> int:
                 "audio_clientrects_patch_sha256",
                 "apple_silicon_coherence_patch_sha256",
                 "locale_speech_font_patch_sha256",
+                "pixelscan_coherence_patch_sha256",
             )
         ):
-            _apply_incremental_patches(root / "build/src")
+            _apply_incremental_patches(root / "build/src", saved_src)
         (root / "native-ready.json").write_text(json.dumps(context, indent=2) + "\n")
         validate(root)
     else:

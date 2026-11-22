@@ -240,3 +240,44 @@ cross-origin `noopener` boot), whereas native `027` (`LocaleController::Init()`)
 zero-gap locale across all realms and popups (enforced by `verify.py`'s `noopener_popup`,
 `same_origin_cross_nav_popup`, and `same_origin_close_popup` gates) and automatically retires the CDP
 bridge via `LOCALE_SPEECH_FONT_027_BUNDLES`.
+
+## Native Pixelscan flat-box and macOS core-font coherence 028
+
+`patches/028-pixelscan-noise-font-coherence.patch` resolves both native Pixelscan
+`Masking detected` triggers without disabling per-seed canvas/font protection or
+touching `BUILD.gn`:
+
+- `StaticBitmapImage::ShuffleSubchannelColorData` (`static_bitmap_image.cc`) and
+  `ShuffleExtendedWebGLPixels` (`webgl_rendering_context_base.cc`) run an
+  early-exit `HasMultipleValidColors` / multi-color valid-pixel check (`alpha > 0`
+  and neither pure black nor pure white). Flat monochrome shapes on transparent,
+  black, or white backgrounds (including Pixelscan's `256x24` `#red-solid-box`
+  hash `bf9da7959d914298f9ce9e41a480fd66f76fac5c6f5e0a9b5a99b18cfc6fd997`) stay
+  unperturbed, while multi-color, gradient, and anti-aliased rendering continues to
+  receive deterministic per-seed noise.
+- `EvaluateFingerprintFont` (`font_cache.cc`) exempts the 196 protected macOS
+  system and baseline font families (`IsProtectedMacOsCoreFont`, covering all 52
+  root `/System/Library/Fonts/` and `FontServices/Reserved/` families plus
+  Pixelscan's 128 legacy `Supplemental/` baseline families, case-insensitive via
+  `canonical_family`) when `current_os == "macos"` and
+  `spoofed_platform == "macos"`, and applies a `25%` per-seed filter
+  (`probability < 0.25f`) only to remaining non-baseline
+  `/System/Library/Fonts/Supplemental/` and user-installed (`/Library/Fonts`,
+  `~/Library/Fonts`) fonts so every seed retains full macOS system-font parity
+  while preserving per-profile diversity. Cross-OS spoofing behavior is unchanged.
+- `028` touches only three `.cc` files and is registered in
+  `checkpoint.py` (`compatible_identity`) and `prepare.py`
+  (`apply_incremental_patches`), so post-`027` checkpoints such as Run `#22`
+  (`44957399598`) can resume incrementally.
+
+Before skipping an already-applied patch prefix, `prepare.py` reverses that
+prefix in a disposable copy of the touched files, newest first. This restores
+overlapping contexts without treating repeatable insertion hunks as evidence of
+a missing patch; a missing or inconsistent file fails with its patch label and path.
+Validated checkpoint `saved_source` provenance continues to exempt recorded patches.
+
+The core-font acceptance gate also queries an isolated browser profile with
+`--disable-spoofing=font` to inventory installed protected families. Every family
+in that inventory must remain visible in both seeds 3003 and 3006, including
+families absent from the explicit rendering probes. It does not require all 196
+names to be installed, and rejects an empty protected-family inventory.
