@@ -243,6 +243,7 @@ def open_extensions_dialog(
         spacing=10,
         scroll=ft.ScrollMode.AUTO,
         expand=True,
+        horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         controls=[cards_grid],
     )
 
@@ -309,10 +310,11 @@ def open_extensions_dialog(
         usage = extension_service.usage_counts(pm)
         subtitle_text.value = get_string("ext_dialog_subtitle", count=len(entries))
         if not entries:
-            cards_grid.controls = [
+            cards_grid.controls = []
+            # A wrapping Row maps to Flutter Wrap, which cannot contain Expanded.
+            scroll_box.controls = [
                 ft.Container(
                     padding=32,
-                    expand=True,
                     alignment=ft.Alignment(0, 0),
                     content=ft.Column(
                         spacing=8,
@@ -335,6 +337,7 @@ def open_extensions_dialog(
                 )
             ]
         else:
+            scroll_box.controls = [cards_grid]
             cards: list[ft.Control] = []
             for e in entries:
                 used_cnt = usage.get(e.id, 0)

@@ -6,6 +6,7 @@
 
 ### Sửa
 
+- Hộp thoại tiện ích hiển thị trạng thái trống, GPU Chrome khớp fingerprint đã lưu, bảng màu không tràn khi mở menu ngôn ngữ và hộp thoại Cookie co vừa nội dung.
 - Bố cục desktop tự xuống dòng khi thu nhỏ cửa sổ, giữ tìm kiếm, thao tác profile và phân trang luôn trong khung nhìn.
 - Hộp thoại Ngâm TK hiển thị và ghi log lỗi khi không lưu được tác vụ, không chạy tác vụ hay để lại lịch chưa lưu trong bộ nhớ.
 - Cảnh báo engine Chromium trong hộp thoại tạo profile giờ đọc được ở giao diện tối sau khi đổi giao diện.

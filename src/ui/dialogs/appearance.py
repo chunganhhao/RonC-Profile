@@ -148,6 +148,7 @@ def open_appearance_dialog(
 
     dlg = ft.AlertDialog(
         modal=False,
+        scrollable=True,
         bgcolor=COLORS["card_bg"],
         shape=ft.RoundedRectangleBorder(
             radius=16,
