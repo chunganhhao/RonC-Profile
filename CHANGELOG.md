@@ -5,6 +5,7 @@
 ## Unreleased
 
 ### Sửa
+- Hộp thoại Ngâm TK hiển thị và ghi log lỗi khi không lưu được tác vụ, không chạy tác vụ hay để lại lịch chưa lưu trong bộ nhớ.
 - Cảnh báo engine Chromium trong hộp thoại tạo profile giờ đọc được ở giao diện tối sau khi đổi giao diện.
 - Import/export cookie của profile Chrome dùng core đã gắn với profile và giữ `profile_lease`, không yêu cầu cài thêm core mặc định.
 - Gán proxy từ pool chỉ báo thành công sau khi lưu profile (`strict=True`); nếu ghi thất bại, khôi phục proxy cũ trong bộ nhớ và hiển thị lỗi trên giao diện thay vì crash.

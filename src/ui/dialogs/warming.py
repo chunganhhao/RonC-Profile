@@ -239,16 +239,26 @@ def open_warming_dialog(
         dur = int(dur_str) if dur_str.isdigit() else 3
         sched = "" if run_immediately else (schedule_field.value or "").strip()
 
-        task = warming_service.add_task(
-            name=name,
-            profile_names=targets,
-            preset=preset,
-            custom_urls=raw_urls,
-            duration_minutes=dur,
-            schedule_time=sched,
-            repeat_daily=bool(repeat_checkbox.value),
-            enabled=True,
-        )
+        try:
+            task = warming_service.add_task(
+                name=name,
+                profile_names=targets,
+                preset=preset,
+                custom_urls=raw_urls,
+                duration_minutes=dur,
+                schedule_time=sched,
+                repeat_daily=bool(repeat_checkbox.value),
+                enabled=True,
+            )
+        except OSError as exc:
+            err = get_string("warming_save_error_msg", error=str(exc))
+            feedback_text.value = err
+            feedback_text.color = COLORS["error"]
+            feedback_text.visible = True
+            log(err)
+            with contextlib.suppress(Exception):
+                page.update()
+            return
         if task is None:
             feedback_text.value = get_string("warming_invalid_msg")
             feedback_text.color = COLORS["error"]
