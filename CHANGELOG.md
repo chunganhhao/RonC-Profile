@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+### Sửa
+- File ZIP xuất profile không còn chứa chính nó khi lưu trong thư mục dữ liệu của profile.
+
 ## 2.4.0 - 2026-10-30
 
 ### Thay đổi
