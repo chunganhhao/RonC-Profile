@@ -36,6 +36,13 @@ LOCALE_SPEECH_FONT_PATCH = (
 )
 LOCALE_SPEECH_FONT_PATCH_SHA256 = "ec47709cbe9a96390cb78f76c329ec6d9e3636bf31f5a44812d1e0c69c2aa726"
 LOCALE_SPEECH_FONT_SERIES_ENTRY = "extra/fingerprint/027-macos-locale-speech-font-coherence.patch"
+PIXELSCAN_COHERENCE_PATCH = (
+    Path(__file__).with_name("patches") / "028-pixelscan-noise-font-coherence.patch"
+)
+PIXELSCAN_COHERENCE_PATCH_SHA256 = (
+    "20a3147b46a11a8e27b8c912ba64bf2457ed5aa5b9c571c403a5b4a01a84de05"
+)
+PIXELSCAN_COHERENCE_SERIES_ENTRY = "extra/fingerprint/028-pixelscan-noise-font-coherence.patch"
 
 
 def verify_checkout(path: Path, revision: str) -> None:
@@ -83,6 +90,11 @@ def prepare(root: Path) -> None:
         != LOCALE_SPEECH_FONT_PATCH_SHA256
     ):
         raise ValueError("Locale/speech/font coherence patch checksum mismatch")
+    if (
+        hashlib.sha256(PIXELSCAN_COHERENCE_PATCH.read_bytes()).hexdigest()
+        != PIXELSCAN_COHERENCE_PATCH_SHA256
+    ):
+        raise ValueError("Pixelscan coherence patch checksum mismatch")
     # Check every input before modifying either checkout.
     rust_ini = root / "downloads-arm64.ini"
     before = rust_ini.read_text()
@@ -97,6 +109,7 @@ def prepare(root: Path) -> None:
     audio_rects_target = fork / "patches" / AUDIO_CLIENTRECTS_SERIES_ENTRY
     apple_silicon_target = fork / "patches" / APPLE_SILICON_SERIES_ENTRY
     locale_speech_font_target = fork / "patches" / LOCALE_SPEECH_FONT_SERIES_ENTRY
+    pixelscan_coherence_target = fork / "patches" / PIXELSCAN_COHERENCE_SERIES_ENTRY
     if NATIVE_SERIES_ENTRY in series or native_target.exists():
         raise ValueError("Native patch already staged; use a fresh checkout")
     if MACOS_ANTIDETECT_SERIES_ENTRY in series or macos_target.exists():
@@ -109,6 +122,8 @@ def prepare(root: Path) -> None:
         raise ValueError("Apple Silicon coherence patch already staged; use a fresh checkout")
     if LOCALE_SPEECH_FONT_SERIES_ENTRY in series or locale_speech_font_target.exists():
         raise ValueError("Locale/speech/font coherence patch already staged; use a fresh checkout")
+    if PIXELSCAN_COHERENCE_SERIES_ENTRY in series or pixelscan_coherence_target.exists():
+        raise ValueError("Pixelscan coherence patch already staged; use a fresh checkout")
     if not series.rstrip().endswith("extra/fingerprint/021-device-memory-cap.patch"):
         raise ValueError("Unexpected native patch-series order")
     subprocess.run(["git", "-C", str(fork), "apply", "--check", str(PATCH.resolve())], check=True)
@@ -122,6 +137,7 @@ def prepare(root: Path) -> None:
     audio_rects_target.write_bytes(AUDIO_CLIENTRECTS_PATCH.read_bytes())
     apple_silicon_target.write_bytes(APPLE_SILICON_PATCH.read_bytes())
     locale_speech_font_target.write_bytes(LOCALE_SPEECH_FONT_PATCH.read_bytes())
+    pixelscan_coherence_target.write_bytes(PIXELSCAN_COHERENCE_PATCH.read_bytes())
     series_path.write_text(
         series.rstrip()
         + "\n"
@@ -137,6 +153,8 @@ def prepare(root: Path) -> None:
         + "\n"
         + LOCALE_SPEECH_FONT_SERIES_ENTRY
         + "\n"
+        + PIXELSCAN_COHERENCE_SERIES_ENTRY
+        + "\n"
     )
     provenance = {
         "platform_revision": PLATFORM_REV,
@@ -148,6 +166,7 @@ def prepare(root: Path) -> None:
         "audio_clientrects_patch_sha256": AUDIO_CLIENTRECTS_PATCH_SHA256,
         "apple_silicon_coherence_patch_sha256": APPLE_SILICON_PATCH_SHA256,
         "locale_speech_font_patch_sha256": LOCALE_SPEECH_FONT_PATCH_SHA256,
+        "pixelscan_coherence_patch_sha256": PIXELSCAN_COHERENCE_PATCH_SHA256,
         "rust_archive_sha256": RUST_SHA256,
         "acceptance": "EXPERIMENTAL_SOURCE_ONLY",
         "open_findings": ["native WebGPU realm coverage", "strict-CSP Blob worker compatibility"],
@@ -155,25 +174,70 @@ def prepare(root: Path) -> None:
     (root / "source-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
 
 
-def apply_incremental_patches(src_dir: Path) -> bool:
-    """Apply pending incremental patches (023/024/025/026/027) onto an unpacked src tree."""
-    applied_any = False
-    for patch_path, expected_sha, label in (
-        (MACOS_ANTIDETECT_PATCH, MACOS_ANTIDETECT_PATCH_SHA256, "023"),
-        (READBACK_PARITY_PATCH, READBACK_PARITY_PATCH_SHA256, "024"),
-        (AUDIO_CLIENTRECTS_PATCH, AUDIO_CLIENTRECTS_PATCH_SHA256, "025"),
-        (APPLE_SILICON_PATCH, APPLE_SILICON_PATCH_SHA256, "026"),
-        (LOCALE_SPEECH_FONT_PATCH, LOCALE_SPEECH_FONT_PATCH_SHA256, "027"),
-    ):
+def _patch_check(
+    src_dir: Path, patch_file: str, *, reverse: bool = False
+) -> subprocess.CompletedProcess:
+    args = ["/usr/bin/patch", "-p1"]
+    if reverse:
+        args.append("-R")
+    args.extend(["-f", "-C", "-d", str(src_dir), "-i", patch_file])
+    return subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+
+
+def apply_incremental_patches(src_dir: Path, saved_source: dict | None = None) -> bool:
+    """Apply pending incremental patches (023..028) onto an unpacked src tree."""
+    patches = (
+        (
+            MACOS_ANTIDETECT_PATCH,
+            MACOS_ANTIDETECT_PATCH_SHA256,
+            "023",
+            "macos_antidetect_patch_sha256",
+        ),
+        (READBACK_PARITY_PATCH, READBACK_PARITY_PATCH_SHA256, "024", "webgl_readback_patch_sha256"),
+        (
+            AUDIO_CLIENTRECTS_PATCH,
+            AUDIO_CLIENTRECTS_PATCH_SHA256,
+            "025",
+            "audio_clientrects_patch_sha256",
+        ),
+        (
+            APPLE_SILICON_PATCH,
+            APPLE_SILICON_PATCH_SHA256,
+            "026",
+            "apple_silicon_coherence_patch_sha256",
+        ),
+        (
+            LOCALE_SPEECH_FONT_PATCH,
+            LOCALE_SPEECH_FONT_PATCH_SHA256,
+            "027",
+            "locale_speech_font_patch_sha256",
+        ),
+        (
+            PIXELSCAN_COHERENCE_PATCH,
+            PIXELSCAN_COHERENCE_PATCH_SHA256,
+            "028",
+            "pixelscan_coherence_patch_sha256",
+        ),
+    )
+    resolved: list[tuple[str, str]] = []
+    for patch_path, expected_sha, label, prov_key in patches:
         if hashlib.sha256(patch_path.read_bytes()).hexdigest() != expected_sha:
             raise ValueError(f"Incremental patch {label} checksum mismatch")
-        patch_file = str(patch_path.resolve())
-        forward = subprocess.run(
-            ["/usr/bin/patch", "-p1", "-f", "-C", "-d", str(src_dir), "-i", patch_file],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-        )
+        if saved_source is not None and prov_key in saved_source:
+            continue
+        resolved.append((str(patch_path.resolve()), label))
+
+    # Later patches (e.g., 024/028) replace hunks from earlier ones (023/024/027), so only the
+    # latest already-applied patch cleanly passes `patch -R -C`; skip everything up to it.
+    skip_until = -1
+    for idx in range(len(resolved) - 1, -1, -1):
+        if _patch_check(src_dir, resolved[idx][0], reverse=True).returncode == 0:
+            skip_until = idx
+            break
+
+    applied_any = False
+    for patch_file, label in resolved[skip_until + 1 :]:
+        forward = _patch_check(src_dir, patch_file, reverse=False)
         if forward.returncode == 0:
             subprocess.run(
                 ["/usr/bin/patch", "-p1", "-f", "-d", str(src_dir), "-i", patch_file],
@@ -182,12 +246,7 @@ def apply_incremental_patches(src_dir: Path) -> bool:
             )
             applied_any = True
             continue
-        reverse = subprocess.run(
-            ["/usr/bin/patch", "-p1", "-R", "-f", "-C", "-d", str(src_dir), "-i", patch_file],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-        )
+        reverse = _patch_check(src_dir, patch_file, reverse=True)
         if reverse.returncode == 0:
             continue
         raise RuntimeError(

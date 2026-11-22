@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -250,6 +251,7 @@ def test_legacy_ninja_log_mtime_repair_and_migration_compatibility(tmp_path):
     new_ctx["source"]["audio_clientrects_patch_sha256"] = "new-025"
     new_ctx["source"]["apple_silicon_coherence_patch_sha256"] = "new-026"
     new_ctx["source"]["locale_speech_font_patch_sha256"] = "new-027"
+    new_ctx["source"]["pixelscan_coherence_patch_sha256"] = "new-028"
     new_ctx["kit"]["build.sh"] = "updated"
     new_ctx["kit"]["checkpoint.py"] = "updated"
     new_ctx["kit"]["prepare.py"] = "updated"
@@ -316,7 +318,7 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     monkeypatch.setattr(checkpoint, "_apply_incremental_patches", patch_hook)
     monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root), str(ckpt)])
     assert checkpoint.main() == 0
-    patch_hook.assert_called_once_with(root / "build/src")
+    patch_hook.assert_called_once_with(root / "build/src", saved_ctx["source"])
     assert json.loads((root / "native-ready.json").read_text()) == new_ctx
 
     # Post-025 checkpoint (Run #17/#19: has 023/024/025, lacks 026) must also apply 026 on restore.
@@ -328,6 +330,7 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     post026_ctx = json.loads(json.dumps(post025_saved))
     post026_ctx["source"]["apple_silicon_coherence_patch_sha256"] = "new-026"
     post026_ctx["source"]["locale_speech_font_patch_sha256"] = "new-027"
+    post026_ctx["source"]["pixelscan_coherence_patch_sha256"] = "new-028"
     post026_ctx["kit"]["prepare.py"] = "new-026"
     root2 = tmp_path / "root2"
     root2.mkdir()
@@ -336,7 +339,7 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     monkeypatch.setattr(checkpoint, "_apply_incremental_patches", patch_hook2)
     monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root2), str(ckpt25)])
     assert checkpoint.main() == 0
-    patch_hook2.assert_called_once_with(root2 / "build/src")
+    patch_hook2.assert_called_once_with(root2 / "build/src", post025_saved["source"])
     assert json.loads((root2 / "native-ready.json").read_text()) == post026_ctx
 
     # Post-026 checkpoint (has 023..026, lacks 027) must also migrate cleanly and apply 027.
@@ -346,6 +349,7 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     checkpoint.pack(source, ckpt26, post026_saved)
     post027_ctx = json.loads(json.dumps(post026_saved))
     post027_ctx["source"]["locale_speech_font_patch_sha256"] = "new-027"
+    post027_ctx["source"]["pixelscan_coherence_patch_sha256"] = "new-028"
     post027_ctx["kit"]["prepare.py"] = "new-027"
     root3 = tmp_path / "root3"
     root3.mkdir()
@@ -354,8 +358,122 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     monkeypatch.setattr(checkpoint, "_apply_incremental_patches", patch_hook3)
     monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root3), str(ckpt26)])
     assert checkpoint.main() == 0
-    patch_hook3.assert_called_once_with(root3 / "build/src")
+    patch_hook3.assert_called_once_with(root3 / "build/src", post026_saved["source"])
     assert json.loads((root3 / "native-ready.json").read_text()) == post027_ctx
+
+    # Post-027 checkpoint (Run #22: has 023..027, lacks 028) must also migrate cleanly and apply 028.
+    post027_saved = json.loads(json.dumps(post026_saved))
+    post027_saved["source"]["locale_speech_font_patch_sha256"] = "old-027"
+    ckpt27 = tmp_path / "ckpt27"
+    checkpoint.pack(source, ckpt27, post027_saved)
+    post028_ctx = json.loads(json.dumps(post027_saved))
+    post028_ctx["source"]["pixelscan_coherence_patch_sha256"] = "new-028"
+    post028_ctx["kit"]["prepare.py"] = "new-028"
+    root4 = tmp_path / "root4"
+    root4.mkdir()
+    monkeypatch.setattr(checkpoint, "identity", lambda _: post028_ctx)
+    patch_hook4 = Mock(return_value=True)
+    monkeypatch.setattr(checkpoint, "_apply_incremental_patches", patch_hook4)
+    monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root4), str(ckpt27)])
+    assert checkpoint.main() == 0
+    patch_hook4.assert_called_once_with(root4 / "build/src", post027_saved["source"])
+    assert json.loads((root4 / "native-ready.json").read_text()) == post028_ctx
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS BSD patch -C required")
+def test_cli_restore_real_post_027_to_post_028_overlapping_patches(tmp_path, monkeypatch):
+    prep_spec = importlib.util.spec_from_file_location("native_prepare", KIT / "prepare.py")
+    assert prep_spec and prep_spec.loader
+    native_prepare = importlib.util.module_from_spec(prep_spec)
+    prep_spec.loader.exec_module(native_prepare)
+
+    patch_028 = KIT / "patches/028-pixelscan-noise-font-coherence.patch"
+    source = tmp_path / "post027-src"
+    files: dict[str, list[str]] = {}
+    current_rel = None
+    in_hunk = False
+    for raw in patch_028.read_text().splitlines(keepends=True):
+        if raw.startswith("+++ b/"):
+            current_rel = raw.removeprefix("+++ b/").strip()
+            files[current_rel] = []
+            in_hunk = False
+        elif raw.startswith("@@ "):
+            old_start = int(re.match(r"@@ -(\d+)(?:,\d+)? \+", raw).group(1))
+            lines = files[current_rel]
+            while len(lines) < old_start - 1:
+                lines.append(f"// stub line {len(lines) + 1}\n")
+            in_hunk = True
+        elif in_hunk:
+            if raw.startswith((" ", "-")):
+                files[current_rel].append(raw[1:])
+            elif raw.startswith("diff --git "):
+                in_hunk = False
+    for rel, lines in files.items():
+        target = source / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("".join(lines))
+
+    root = tmp_path / "root"
+    root.mkdir()
+    saved_ctx = {
+        "format": 1,
+        "workspace": str(root.resolve()),
+        "host": ["Darwin", "arm64"],
+        "python": "3.12.0",
+        "ninja": "1.12.1",
+        "xcode": "Xcode 26",
+        "sdk": "/SDK",
+        "source": {
+            "platform_revision": native_prepare.PLATFORM_REV,
+            "macos_antidetect_patch_sha256": native_prepare.MACOS_ANTIDETECT_PATCH_SHA256,
+            "webgl_readback_patch_sha256": native_prepare.READBACK_PARITY_PATCH_SHA256,
+            "audio_clientrects_patch_sha256": native_prepare.AUDIO_CLIENTRECTS_PATCH_SHA256,
+            "apple_silicon_coherence_patch_sha256": native_prepare.APPLE_SILICON_PATCH_SHA256,
+            "locale_speech_font_patch_sha256": native_prepare.LOCALE_SPEECH_FONT_PATCH_SHA256,
+        },
+        "kit": {"ci-build.gn": "gn-sha", "build.sh": "old", "prepare.py": "old-027"},
+    }
+    ckpt = tmp_path / "ckpt27"
+    checkpoint.pack(source, ckpt, saved_ctx)
+
+    new_ctx = json.loads(json.dumps(saved_ctx))
+    new_ctx["source"]["pixelscan_coherence_patch_sha256"] = (
+        native_prepare.PIXELSCAN_COHERENCE_PATCH_SHA256
+    )
+    new_ctx["kit"]["prepare.py"] = "new-028"
+    monkeypatch.setattr(checkpoint, "identity", lambda _: new_ctx)
+    monkeypatch.setattr(checkpoint, "validate", Mock())
+    monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root), str(ckpt)])
+
+    assert checkpoint.main() == 0
+    restored = root / "build/src"
+    assert (
+        "HasMultipleValidColors"
+        in (
+            restored / "third_party/blink/renderer/platform/graphics/static_bitmap_image.cc"
+        ).read_text()
+    )
+    assert (
+        "has_multiple_valid_colors"
+        in (
+            restored / "third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc"
+        ).read_text()
+    )
+    assert (
+        "kProtectedMacOsCoreFonts"
+        in (restored / "third_party/blink/renderer/platform/fonts/font_cache.cc").read_text()
+    )
+    assert (
+        subprocess.run(
+            ["/usr/bin/patch", "-p1", "-R", "-f", "-C", "-d", str(restored), "-i", str(patch_028)],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+    # Standalone re-run without saved_source detects 028 reverse passes despite overlapping 023/024/027.
+    assert checkpoint._apply_incremental_patches(restored) is False
+    assert json.loads((root / "native-ready.json").read_text()) == new_ctx
 
 
 def test_mtime_manifest_rejects_tampering(tmp_path):

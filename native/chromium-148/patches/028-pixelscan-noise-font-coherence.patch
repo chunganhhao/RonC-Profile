@@ -1,0 +1,587 @@
+diff --git a/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc b/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc
+index aa4d387..2fd39c5 100644
+--- a/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc
++++ b/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc
+@@ -4,9 +4,13 @@
+ 
+ #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
+ 
++#include <cstdint>
++#include <cstring>
++#include <optional>
+ #include <unordered_set>
+ #include <vector>
+ #include "base/command_line.h"
++#include "base/compiler_specific.h"
+ #include "base/rand_util.h"
+ #include "base/logging.h"
+ #include "base/numerics/checked_math.h"
+@@ -127,6 +131,113 @@ void StaticBitmapImage::DrawHelper(cc::PaintCanvas* canvas,
+ 
+ #define writable_addr(T, p, stride, x, y) (T*)((const char *)(p) + (y) * (stride) + (x) * sizeof(T))
+ 
++static bool HasMultipleValidColors(const void* addr,
++                                   const SkImageInfo& info) {
++  const int w = info.width();
++  const int h = info.height();
++  if (!addr || w <= 0 || h <= 0) {
++    return false;
++  }
++  const SkColorType color_type = info.colorType();
++  const size_t row_bytes = info.minRowBytes();
++  size_t pixel_bytes = 0;
++  switch (color_type) {
++    case kRGBA_8888_SkColorType:
++    case kBGRA_8888_SkColorType:
++      pixel_bytes = 4u;
++      break;
++    case kRGB_565_SkColorType:
++    case kARGB_4444_SkColorType:
++      pixel_bytes = 2u;
++      break;
++    case kGray_8_SkColorType:
++      pixel_bytes = 1u;
++      break;
++    default:
++      return false;
++  }
++  if (row_bytes < static_cast<size_t>(w) * pixel_bytes) {
++    return false;
++  }
++  std::optional<uint32_t> first_valid;
++  for (int y = 0; y < h; ++y) {
++    const uint8_t* row_ptr = UNSAFE_TODO(
++        static_cast<const uint8_t*>(addr) + static_cast<size_t>(y) * row_bytes);
++    for (int x = 0; x < w; ++x) {
++      const uint8_t* px_ptr =
++          UNSAFE_TODO(row_ptr + static_cast<size_t>(x) * pixel_bytes);
++      bool is_valid = false;
++      uint32_t key = 0;
++      switch (color_type) {
++        case kRGBA_8888_SkColorType: {
++          uint32_t px = 0;
++          UNSAFE_TODO(std::memcpy(&px, px_ptr, 4));
++          const auto a = SkGetPackedA32(px);
++          const auto r = SkGetPackedR32(px);
++          const auto g = SkGetPackedG32(px);
++          const auto b = SkGetPackedB32(px);
++          is_valid = a > 0 && !((r == 0 && g == 0 && b == 0) ||
++                                (r == 255 && g == 255 && b == 255));
++          key = px;
++          break;
++        }
++        case kBGRA_8888_SkColorType: {
++          uint32_t px = 0;
++          UNSAFE_TODO(std::memcpy(&px, px_ptr, 4));
++          const auto a = SkGetPackedA32(px);
++          const auto b = SkGetPackedR32(px);
++          const auto g = SkGetPackedG32(px);
++          const auto r = SkGetPackedB32(px);
++          is_valid = a > 0 && !((r == 0 && g == 0 && b == 0) ||
++                                (r == 255 && g == 255 && b == 255));
++          key = px;
++          break;
++        }
++        case kGray_8_SkColorType: {
++          const uint8_t px = *px_ptr;
++          is_valid = (px != 0 && px != 255);
++          key = static_cast<uint32_t>(px);
++          break;
++        }
++        case kRGB_565_SkColorType: {
++          uint16_t px = 0;
++          UNSAFE_TODO(std::memcpy(&px, px_ptr, 2));
++          const unsigned r = SkGetPackedR16(px);
++          const unsigned g = SkGetPackedG16(px);
++          const unsigned b = SkGetPackedB16(px);
++          is_valid = !((r == 0 && g == 0 && b == 0) ||
++                       (r == 31 && g == 63 && b == 31));
++          key = static_cast<uint32_t>(px);
++          break;
++        }
++        case kARGB_4444_SkColorType: {
++          uint16_t px = 0;
++          UNSAFE_TODO(std::memcpy(&px, px_ptr, 2));
++          const auto a = SkGetPackedA4444(px);
++          const auto r = SkGetPackedR4444(px);
++          const auto g = SkGetPackedG4444(px);
++          const auto b = SkGetPackedB4444(px);
++          is_valid = a > 0 && !((r == 0 && g == 0 && b == 0) ||
++                                (r == 15 && g == 15 && b == 15));
++          key = static_cast<uint32_t>(px);
++          break;
++        }
++        default:
++          return false;
++      }
++      if (!is_valid) {
++        continue;
++      }
++      if (!first_valid.has_value()) {
++        first_valid = key;
++      } else if (*first_valid != key) {
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
+ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkImageInfo& info, int srcX, int srcY) {
+   auto w = info.width(), h = info.height();
+ 
+@@ -148,6 +259,12 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+ 
+   DLOG(INFO) << "BRM: ShuffleSubchannelColorData() w=" << w << " h=" << h << " colorType=" << colorType << " fRowBytes=" << fRowBytes;
+ 
++  // Flat monochrome shapes on transparent/black/white backgrounds carry zero
++  // rendering entropy; skip noise so Pixelscan red-box hash stays intact (#87).
++  if (!HasMultipleValidColors(addr, info)) {
++    return;
++  }
++
+   auto max_pixels = (w * h) / 128;
+   if (max_pixels > 10) {
+     max_pixels = 10;
+@@ -175,12 +292,13 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+           auto *right = writable_addr(uint32_t, addr, fRowBytes, x + 1, y);
+           auto *bottom = writable_addr(uint32_t, addr, fRowBytes, x, y + 1);
+ 
++          auto a = SkGetPackedA32(*current);
+           auto r = SkGetPackedR32(*current);
+           auto g = SkGetPackedG32(*current);
+           auto b = SkGetPackedB32(*current);
+ 
+-          // 检查是否不是纯黑或纯白
+-          isValidColor = !((r == 0 && g == 0 && b == 0) || (r == 255 && g == 255 && b == 255));
++          // 检查是否不是透明、纯黑或纯白
++          isValidColor = a > 0 && !((r == 0 && g == 0 && b == 0) || (r == 255 && g == 255 && b == 255));
+ 
+           // 检查是否为边缘（与右侧或下侧像素不同）
+           if (isValidColor) {
+@@ -198,7 +316,6 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+             uint8_t shuffleG = std::hash<std::string>{}(pixel_key_g) & 1;
+             uint8_t shuffleB = std::hash<std::string>{}(pixel_key_b) & 1;
+ 
+-            auto a = SkGetPackedA32(*current);
+             r = (r & ~0x1) | shuffleR;
+             g = (g & ~0x1) | shuffleG;
+             b = (b & ~0x1) | shuffleB;
+@@ -218,12 +335,13 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+           auto *right = writable_addr(uint32_t, addr, fRowBytes, x + 1, y);
+           auto *bottom = writable_addr(uint32_t, addr, fRowBytes, x, y + 1);
+ 
++          auto a = SkGetPackedA32(*current);
+           auto b = SkGetPackedR32(*current);
+           auto g = SkGetPackedG32(*current);
+           auto r = SkGetPackedB32(*current);
+ 
+-          // 检查是否不是纯黑或纯白
+-          isValidColor = !((r == 0 && g == 0 && b == 0) || (r == 255 && g == 255 && b == 255));
++          // 检查是否不是透明、纯黑或纯白
++          isValidColor = a > 0 && !((r == 0 && g == 0 && b == 0) || (r == 255 && g == 255 && b == 255));
+ 
+           // 检查是否为边缘（与右侧或下侧像素不同）
+           if (isValidColor) {
+@@ -241,7 +359,6 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+             uint8_t shuffleG = std::hash<std::string>{}(pixel_key_g) & 1;
+             uint8_t shuffleB = std::hash<std::string>{}(pixel_key_b) & 1;
+ 
+-            auto a = SkGetPackedA32(*current);
+             r = (r & ~0x1) | shuffleR;
+             g = (g & ~0x1) | shuffleG;
+             b = (b & ~0x1) | shuffleB;
+@@ -286,9 +403,9 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+           auto *right = writable_addr(uint16_t, addr, fRowBytes, x + 1, y);
+           auto *bottom = writable_addr(uint16_t, addr, fRowBytes, x, y + 1);
+ 
+-          unsigned r = SkPacked16ToR32(*current);
+-          unsigned g = SkPacked16ToG32(*current);
+-          unsigned b = SkPacked16ToB32(*current);
++          unsigned r = SkGetPackedR16(*current);
++          unsigned g = SkGetPackedG16(*current);
++          unsigned b = SkGetPackedB16(*current);
+ 
+           isValidColor = !((r == 0 && g == 0 && b == 0) || (r == 31 && g == 63 && b == 31));
+           if (isValidColor) {
+@@ -327,11 +444,12 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+           auto *right = writable_addr(uint16_t, addr, fRowBytes, x + 1, y);
+           auto *bottom = writable_addr(uint16_t, addr, fRowBytes, x, y + 1);
+ 
++          auto a = SkGetPackedA4444(*current);
+           auto r = SkGetPackedR4444(*current);
+           auto g = SkGetPackedG4444(*current);
+           auto b = SkGetPackedB4444(*current);
+ 
+-          isValidColor = !((r == 0 && g == 0 && b == 0) || (r == 15 && g == 15 && b == 15));
++          isValidColor = a > 0 && !((r == 0 && g == 0 && b == 0) || (r == 15 && g == 15 && b == 15));
+           if (isValidColor) {
+             isEdge = (*current != *right) || (*current != *bottom);
+           }
+@@ -347,7 +465,6 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+             uint8_t shuffleG = std::hash<std::string>{}(pixel_key_g) & 1;
+             uint8_t shuffleB = std::hash<std::string>{}(pixel_key_b) & 1;
+ 
+-            auto a = SkGetPackedA4444(*current);
+             r = (r & ~0x1) | (shuffleR & 0x1);
+             g = (g & ~0x1) | (shuffleG & 0x1);
+             b = (b & ~0x1) | (shuffleB & 0x1);
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+index 4c7a73a..79f04ac 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -31,6 +31,7 @@
+ #include <cstdint>
+ #include <cstring>
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <unordered_set>
+ #include <utility>
+@@ -5210,6 +5211,62 @@ void ShuffleExtendedWebGLPixels(uint8_t* data, int width, int height,
+     UNSAFE_TODO(std::memcpy(ptr, raw.data(), 8));
+   };
+ 
++  bool has_multiple_valid_colors = false;
++  std::optional<uint16_t> first_valid_5551;
++  std::optional<std::array<float, 4>> first_valid_float;
++  for (int py = 0; py < height && !has_multiple_valid_colors; ++py) {
++    for (int px = 0; px < width; ++px) {
++      const uint8_t* ptr = pixel_ptr(px, py);
++      if (type == GL_UNSIGNED_SHORT_5_5_5_1) {
++        uint16_t cur = 0;
++        UNSAFE_TODO(std::memcpy(&cur, ptr, 2));
++        const unsigned r = (cur >> 11) & 0x1Fu;
++        const unsigned g = (cur >> 6) & 0x1Fu;
++        const unsigned b = (cur >> 1) & 0x1Fu;
++        const unsigned a = cur & 0x1u;
++        if (a == 0u || (r == 0u && g == 0u && b == 0u) ||
++            (r == 31u && g == 31u && b == 31u)) {
++          continue;
++        }
++        if (!first_valid_5551.has_value()) {
++          first_valid_5551 = cur;
++        } else if (*first_valid_5551 != cur) {
++          has_multiple_valid_colors = true;
++          break;
++        }
++        continue;
++      }
++      const std::array<float, 4> cur = load_float4(ptr);
++      bool in_gamut = true;
++      for (size_t i = 0; i < 4; ++i) {
++        if (!std::isfinite(cur[i]) || cur[i] < 0.0f || cur[i] > 1.0f) {
++          in_gamut = false;
++          break;
++        }
++      }
++      if (!in_gamut) {
++        continue;
++      }
++      const uint8_t qr = static_cast<uint8_t>(std::lround(cur[0] * 255.0f));
++      const uint8_t qg = static_cast<uint8_t>(std::lround(cur[1] * 255.0f));
++      const uint8_t qb = static_cast<uint8_t>(std::lround(cur[2] * 255.0f));
++      const uint8_t qa = static_cast<uint8_t>(std::lround(cur[3] * 255.0f));
++      if (qa == 0u || (qr == 0u && qg == 0u && qb == 0u) ||
++          (qr == 255u && qg == 255u && qb == 255u)) {
++        continue;
++      }
++      if (!first_valid_float.has_value()) {
++        first_valid_float = cur;
++      } else if (*first_valid_float != cur) {
++        has_multiple_valid_colors = true;
++        break;
++      }
++    }
++  }
++  if (!has_multiple_valid_colors) {
++    return;
++  }
++
+   for (int y = 0; y < height - 1 && modified_pixels < max_pixels; ++y) {
+     if (processed_rows.contains(y)) {
+       continue;
+@@ -5231,13 +5288,13 @@ void ShuffleExtendedWebGLPixels(uint8_t* data, int width, int height,
+         unsigned r = (cur >> 11) & 0x1Fu;
+         unsigned g = (cur >> 6) & 0x1Fu;
+         unsigned b = (cur >> 1) & 0x1Fu;
++        const unsigned a = cur & 0x1u;
+         const bool is_valid =
+-            !((r == 0u && g == 0u && b == 0u) ||
+-              (r == 31u && g == 31u && b == 31u));
++            a > 0u && !((r == 0u && g == 0u && b == 0u) ||
++                        (r == 31u && g == 31u && b == 31u));
+         if (!is_valid || (cur == right && cur == bottom)) {
+           continue;
+         }
+-        const unsigned a = cur & 0x1u;
+         r = (r & ~0x1u) | FingerprintBit(seed_str, x, y, "_r");
+         g = (g & ~0x1u) | FingerprintBit(seed_str, x, y, "_g");
+         b = (b & ~0x1u) | FingerprintBit(seed_str, x, y, "_b");
+@@ -5265,7 +5322,8 @@ void ShuffleExtendedWebGLPixels(uint8_t* data, int width, int height,
+       for (size_t i = 0; i < 3; ++i) {
+         q[i] = static_cast<uint8_t>(std::lround(cur[i] * 255.0f));
+       }
+-      if ((q[0] == 0u && q[1] == 0u && q[2] == 0u) ||
++      const uint8_t qa = static_cast<uint8_t>(std::lround(cur[3] * 255.0f));
++      if (qa == 0u || (q[0] == 0u && q[1] == 0u && q[2] == 0u) ||
+           (q[0] == 255u && q[1] == 255u && q[2] == 255u)) {
+         continue;
+       }
+diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
+index aef4da8..bf9d2ee 100644
+--- a/third_party/blink/renderer/platform/fonts/font_cache.cc
++++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
+@@ -30,9 +30,11 @@
+ #include "third_party/blink/renderer/platform/fonts/font_cache.h"
+ 
+ #include <algorithm>
++#include <array>
+ #include <limits>
+ #include <memory>
+ #include <set>
++#include <string_view>
+ #include <vector>
+ 
+ #include "base/command_line.h"
+@@ -264,6 +266,225 @@ static const char* CurrentFingerprintOs() {
+ #endif
+ }
+ 
++inline constexpr auto kProtectedMacOsCoreFonts = std::to_array<std::string_view>({
++    "al bayan",
++    "al nile",
++    "al tarikh",
++    "american typewriter",
++    "andale mono",
++    "apple braille",
++    "apple chancery",
++    "apple color emoji",
++    "apple sd gothic neo",
++    "apple symbols",
++    "applegothic",
++    "applemyungjo",
++    "arial",
++    "arial black",
++    "arial hebrew",
++    "arial hebrew scholar",
++    "arial mt",
++    "arial narrow",
++    "arial rounded mt bold",
++    "arial unicode ms",
++    "avenir",
++    "avenir next",
++    "avenir next condensed",
++    "ayuthaya",
++    "baghdad",
++    "bangla mn",
++    "bangla sangam mn",
++    "baskerville",
++    "beirut",
++    "big caslon",
++    "blinkmacsystemfont",
++    "bodoni 72",
++    "bodoni 72 oldstyle",
++    "bodoni 72 smallcaps",
++    "bodoni ornaments",
++    "bradley hand",
++    "brush script mt",
++    "chalkboard",
++    "chalkboard se",
++    "chalkduster",
++    "charter",
++    "cochin",
++    "comic sans ms",
++    "copperplate",
++    "corsiva hebrew",
++    "courier",
++    "courier new",
++    "damascus",
++    "decotype naskh",
++    "devanagari mt",
++    "devanagari sangam mn",
++    "didot",
++    "din alternate",
++    "din condensed",
++    "diwan kufi",
++    "diwan thuluth",
++    "euphemia ucas",
++    "farah",
++    "farisi",
++    "futura",
++    "gb18030 bitmap",
++    "geeza pro",
++    "geneva",
++    "georgia",
++    "gill sans",
++    "gujarati mt",
++    "gujarati sangam mn",
++    "gurmukhi mn",
++    "gurmukhi mt",
++    "gurmukhi sangam mn",
++    "heiti sc",
++    "heiti tc",
++    "helvetica",
++    "helvetica neue",
++    "herculanum",
++    "hiragino kaku gothic pro",
++    "hiragino kaku gothic pron",
++    "hiragino kaku gothic std",
++    "hiragino kaku gothic stdn",
++    "hiragino maru gothic pro",
++    "hiragino maru gothic pron",
++    "hiragino mincho pro",
++    "hiragino mincho pron",
++    "hiragino sans",
++    "hiragino sans gb",
++    "hoefler text",
++    "impact",
++    "inaimathi",
++    "itf devanagari",
++    "itf devanagari marathi",
++    "kailasa",
++    "kannada mn",
++    "kannada sangam mn",
++    "kefa",
++    "khmer mn",
++    "khmer sangam mn",
++    "kohinoor bangla",
++    "kohinoor devanagari",
++    "kohinoor gujarati",
++    "kohinoor telugu",
++    "kokonor",
++    "krungthep",
++    "kufistandardgk",
++    "lao mn",
++    "lao sangam mn",
++    "lucida grande",
++    "luminari",
++    "malayalam mn",
++    "malayalam sangam mn",
++    "marker felt",
++    "menlo",
++    "microsoft sans serif",
++    "mishafi",
++    "mishafi gold",
++    "monaco",
++    "mshtakan",
++    "mukta mahee",
++    "muna",
++    "myanmar mn",
++    "myanmar sangam mn",
++    "nadeem",
++    "new peninim mt",
++    "noteworthy",
++    "noto nastaliq urdu",
++    "noto sans armenian",
++    "noto sans kannada",
++    "noto sans myanmar",
++    "noto sans oriya",
++    "noto sans zawgyi",
++    "noto serif myanmar",
++    "optima",
++    "oriya mn",
++    "oriya sangam mn",
++    "palatino",
++    "papyrus",
++    "phosphate",
++    "pingfang hk",
++    "pingfang mo",
++    "pingfang sc",
++    "pingfang tc",
++    "plantagenet cherokee",
++    "pt mono",
++    "pt sans",
++    "pt sans caption",
++    "pt sans narrow",
++    "pt serif",
++    "pt serif caption",
++    "raanana",
++    "rockwell",
++    "sana",
++    "sathu",
++    "savoye let",
++    "shree devanagari 714",
++    "signpainter",
++    "silom",
++    "sinhala mn",
++    "sinhala sangam mn",
++    "skia",
++    "snell roundhand",
++    "songti sc",
++    "songti tc",
++    "stixgeneral",
++    "stixintegralsd",
++    "stixintegralssm",
++    "stixintegralsup",
++    "stixintegralsupd",
++    "stixintegralsupsm",
++    "stixnonunicode",
++    "stixsizefivesym",
++    "stixsizefoursym",
++    "stixsizeonesym",
++    "stixsizethreesym",
++    "stixsizetwosym",
++    "stixvariants",
++    "stsong",
++    "sukhumvit set",
++    "symbol",
++    "system font",
++    "tahoma",
++    "tamil mn",
++    "tamil sangam mn",
++    "telugu mn",
++    "telugu sangam mn",
++    "thonburi",
++    "times",
++    "times new roman",
++    "trattatello",
++    "trebuchet ms",
++    "verdana",
++    "waseem",
++    "webdings",
++    "wingdings",
++    "wingdings 2",
++    "wingdings 3",
++    "zapf dingbats",
++    "zapfino"
++});
++
++constexpr bool IsProtectedMacOsCoreFontsSorted() {
++  for (size_t i = 1; i < kProtectedMacOsCoreFonts.size(); ++i) {
++    if (!(kProtectedMacOsCoreFonts.at(i - 1) < kProtectedMacOsCoreFonts.at(i))) {
++      return false;
++    }
++  }
++  return true;
++}
++
++static_assert(kProtectedMacOsCoreFonts.size() == 196,
++              "Expected 196 macOS core fonts");
++static_assert(IsProtectedMacOsCoreFontsSorted(),
++              "kProtectedMacOsCoreFonts must be strictly sorted");
++
++static bool IsProtectedMacOsCoreFont(std::string_view canonical_family) {
++  return std::binary_search(kProtectedMacOsCoreFonts.begin(),
++                            kProtectedMacOsCoreFonts.end(),
++                            canonical_family);
++}
++
+ static FingerprintFontDecision EvaluateFingerprintFont(
+     const std::string& requested_family) {
+   const base::CommandLine* command_line =
+@@ -310,7 +531,13 @@ static FingerprintFontDecision EvaluateFingerprintFont(
+     }
+     return {probability < 0.95, {}};
+   }
+-  return {probability < 0.02, {}};
++  if (std::string_view(current_os) == "macos") {
++    if (IsProtectedMacOsCoreFont(canonical_family)) {
++      return {};
++    }
++    return {probability < 0.25f, {}};
++  }
++  return {probability < 0.02f, {}};
+ }
+ 
+ // static
