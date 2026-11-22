@@ -30,36 +30,94 @@ def import_api(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "field",
     [
+        "name",
+        "core_version",
+        "proxy",
         "os_type",
+        "timezone",
+        "locale",
+        "engine",
         "group",
+        "tags",
+        "extension_ids",
+        "display_order",
         "account_uid",
         "account_password",
         "two_fa_secret",
+        "backup_codes",
         "recovery_email",
         "notes",
+        "start_url",
+        "webrtc_mode",
+        "canvas_mode",
     ],
 )
-@pytest.mark.parametrize("value", [["windows"], {"bad": "value"}, 42, True])
+@pytest.mark.parametrize("value", [12345, ["windows"], {"bad": "value"}, True, None])
 def test_import_bad_field_keeps_api_list_usable(tmp_path, import_api, field, value):
+    from src.services.profile.manager import ProfileManager
+
     client, app = import_api
+    if field == "display_order" and type(value) is int:
+        value = 0
     path = tmp_path / "bad.zip"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(
             "profile.json", json.dumps({"name": "bad", "engine": "chrome", field: value})
         )
     response = client.post("/api/v1/profiles/import", json={"zip_path": str(path)})
+    listed = client.get("/api/v1/profiles")
+    saved = dict(app.state.container.profile_manager.profiles)
+    app.state.container.profile_manager = ProfileManager()
+    reloaded = client.get("/api/v1/profiles")
+    body = response.json()
+    print(
+        "IMPORT_FIELD_RESULT",
+        json.dumps(
+            {
+                "field": field,
+                "value": value,
+                "import": response.status_code,
+                "success": body.get("success"),
+                "list": listed.status_code,
+                "reload": reloaded.status_code,
+            }
+        ),
+    )
     assert response.status_code == 200
-    assert client.get("/api/v1/profiles").status_code == 200
-    if field != "os_type":
-        assert response.json()["success"] is False
-        assert not app.state.container.profile_manager.profiles
+    assert listed.status_code == reloaded.status_code == 200
+    if body["success"]:
+        assert body["profile_name"] == "bad"
+        assert set(saved) == set(app.state.container.profile_manager.profiles) == {"bad"}
+        if field == "account_password":
+            assert saved["bad"].account_password == value
     else:
-        assert response.json()["success"] is True
-        assert app.state.container.profile_manager.profiles["bad"].os_type == "windows"
+        assert isinstance(body["error"], str) and body["error"]
+        assert not saved and not app.state.container.profile_manager.profiles
+        assert not (tmp_path / "camoufox_data" / "bad").exists()
+    if field == "os_type":
+        assert body["success"] is (value is None)
+        if value is None:
+            assert saved["bad"].os_type == "windows"
+        else:
+            assert body["error"] == "Invalid os_type in archive (must be text)"
+
+
+def test_import_preserves_nonstandard_string_os_type(tmp_path, import_api):
+    client, app = import_api
+    path = tmp_path / "custom-os.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "profile.json", json.dumps({"name": "custom", "engine": "chrome", "os_type": "custom"})
+        )
+    response = client.post("/api/v1/profiles/import", json={"zip_path": str(path)})
+    assert response.status_code == 200 and response.json()["success"]
+    assert client.get("/api/v1/profiles").status_code == 200
+    assert app.state.container.profile_manager.profiles["custom"].os_type == "custom"
     from src.services.profile.manager import ProfileManager
 
     app.state.container.profile_manager = ProfileManager()
     assert client.get("/api/v1/profiles").status_code == 200
+    assert app.state.container.profile_manager.profiles["custom"].os_type == "custom"
 
 
 def test_chromium_export_import_round_trip(tmp_path):

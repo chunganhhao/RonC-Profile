@@ -113,10 +113,12 @@ def import_from_zip(
             if not valid:
                 return False, f"Invalid profile name in archive: {msg}"
 
+            os_type = profile_data.get("os_type")
+            if os_type is not None and not isinstance(os_type, str):
+                return False, "Invalid os_type in archive (must be text)"
             for field in (
                 "group",
                 "account_uid",
-                "account_password",
                 "two_fa_secret",
                 "recovery_email",
                 "notes",
@@ -143,9 +145,7 @@ def import_from_zip(
                 if isinstance(profile_data.get("core_version"), str)
                 else None,
                 proxy=proxy,
-                os_type=profile_data.get("os_type")
-                if isinstance(profile_data.get("os_type"), str)
-                else "windows",
+                os_type=os_type if os_type is not None else "windows",
                 timezone=valid_or_none(profile_data.get("timezone"), validate_timezone),
                 locale=valid_or_none(profile_data.get("locale"), validate_locale),
                 engine=profile_data.get("engine")
