@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import flet as ft
 
 from ...core.strings import get_string
+from ...services.profile.manager import ProfileStoreChangedError
 from ..theme.colors import COLORS, FONT_BOLD, FONT_DATA, FONT_SEMIBOLD
 from ..theme.styles import (
     ACCENT_STYLE,
@@ -278,7 +279,18 @@ def open_proxy_pool_dialog(
             refresh_fn()
 
     def _on_auto_assign(_: ft.ControlEvent) -> None:
-        updated = pool_service.assign_round_robin(targets, pm, only_working=False)
+        try:
+            updated = pool_service.assign_round_robin(targets, pm, only_working=False)
+        except (ProfileStoreChangedError, OSError) as exc:
+            err = str(exc) or "Profile/store is busy; refresh and retry"
+            feedback_text.value = err
+            feedback_text.color = COLORS["error"]
+            feedback_text.visible = True
+            log(err)
+            _rebuild_rows(notify=True)
+            if refresh_fn:
+                refresh_fn()
+            return
         msg = get_string("proxy_pool_assigned_msg", count=updated)
         feedback_text.value = msg
         feedback_text.color = COLORS["success"] if updated > 0 else COLORS["warning"]

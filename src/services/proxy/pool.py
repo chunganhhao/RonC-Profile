@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from ...core import config as app_config
 from ...core.logging import get_logger
+from ...services.profile.manager import ProfileStoreChangedError
 from ...utils.proxy_parser import mask_proxy, normalize_proxy
 from ...utils.validation import validate_proxy_format
 
@@ -299,6 +300,7 @@ class ProxyPoolService:
         if callable(save_fn):
             pm_lock = getattr(pm, "_lock", None) or contextlib.nullcontext()
             with pm_lock:
+                previous = [(prof, prof.proxy) for prof in pm.profiles.values()]
                 for idx, name in enumerate(profile_names):
                     prof = pm.profiles.get(name)
                     if not prof:
@@ -306,7 +308,13 @@ class ProxyPoolService:
                     prof.proxy = pool[idx % len(pool)].proxy or None
                     updated += 1
                 if updated > 0:
-                    save_fn()
+                    try:
+                        save_fn(strict=True)
+                    except Exception as exc:
+                        if not isinstance(exc, ProfileStoreChangedError):
+                            for prof, proxy in previous:
+                                prof.proxy = proxy
+                        raise
             return updated
 
         for idx, name in enumerate(profile_names):

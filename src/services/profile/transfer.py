@@ -54,16 +54,16 @@ def export_to_zip(
             zipf.writestr("profile.json", json.dumps(profile.to_dict(), indent=2))
 
             if include_data and pathlib.Path(profile_data_dir).exists():
+                archive_stat = os.stat(zip_path)
                 for root, _dirs, files in os.walk(profile_data_dir):
                     for file in files:
                         file_path = os.path.join(root, file)
-                        if os.path.relpath(file_path, profile_data_dir) in exclude_files:
+                        relative_path = os.path.relpath(file_path, profile_data_dir)
+                        if relative_path in exclude_files:
                             continue
-                        arcname = os.path.join(
-                            "data",
-                            os.path.relpath(file_path, profile_data_dir),
-                        )
-                        zipf.write(file_path, arcname)
+                        if os.path.samestat(os.stat(file_path), archive_stat):
+                            continue
+                        zipf.write(file_path, os.path.join("data", relative_path))
             else:
                 # The fingerprint is the profile's identity, not browser data:
                 # keep it so the imported profile presents the same device.
@@ -103,6 +103,8 @@ def import_from_zip(
                 return False, "Invalid profile archive (missing profile.json)"
 
             profile_data = json.loads(zipf.read("profile.json"))
+            if not isinstance(profile_data, dict):
+                return False, "Invalid profile metadata"
             name = profile_data.get("name")
 
             if not name:
@@ -111,6 +113,9 @@ def import_from_zip(
             if not valid:
                 return False, f"Invalid profile name in archive: {msg}"
 
+            os_type = profile_data.get("os_type")
+            if os_type is not None and not isinstance(os_type, str):
+                return False, "Invalid os_type in archive (must be text)"
             tags = normalize_tags(profile_data.get("tags", []))
             backup_codes = normalize_backup_codes(profile_data.get("backup_codes")) or None
             display_order = profile_data.get("display_order")
@@ -129,7 +134,7 @@ def import_from_zip(
                 if isinstance(profile_data.get("core_version"), str)
                 else None,
                 proxy=proxy,
-                os_type=profile_data.get("os_type", "windows"),
+                os_type=os_type if os_type is not None else "windows",
                 timezone=valid_or_none(profile_data.get("timezone"), validate_timezone),
                 locale=valid_or_none(profile_data.get("locale"), validate_locale),
                 engine=profile_data.get("engine")

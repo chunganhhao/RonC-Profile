@@ -1,7 +1,9 @@
+import asyncio
 import json
 import time
 from contextlib import nullcontext
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +11,70 @@ from fastapi.testclient import TestClient
 from src.api.app import create_app
 from src.models.profile import Profile
 from src.services.browser import cookies
+
+
+@pytest.mark.parametrize("version", ["148.0.7778.215", ""])
+def test_cookie_tool_chrome_binding(monkeypatch, tmp_path, version):
+    import chrome_engine
+    from src.core import config
+    from src.services.browser import cookie_tool, cores
+
+    store = tmp_path / "profiles.json"
+    store.write_text(json.dumps({"profile": {"engine": "chrome", "core_version": version}}))
+    monkeypatch.setattr(config, "PROFILES_FILE", str(store))
+    executable = tmp_path / "staged" / "chrome"
+    resolve = Mock(return_value=executable)
+    engine = Mock()
+    monkeypatch.setattr(cores, "bound_executable", resolve)
+    monkeypatch.setattr(chrome_engine, "ChromeEngine", engine)
+
+    cookie_tool._open(str(tmp_path / "profile"), "linux", "chrome")
+
+    kwargs = {"platform": "linux", "headless": True}
+    if version:
+        kwargs["executable"] = executable
+        resolve.assert_called_once_with("chrome", version)
+    else:
+        resolve.assert_not_called()
+    engine.assert_called_once_with(str(tmp_path / "profile"), **kwargs)
+
+
+@pytest.mark.parametrize("failure", ["binding", "executable"])
+def test_cookie_tool_binding_errors_use_result(monkeypatch, tmp_path, capsys, failure):
+    from src.services.browser import cookie_tool, cores
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cookie_tool.sys, "argv", ["cookie_tool.py", "export", "p", "linux", "chrome"]
+    )
+    monkeypatch.setattr(cores, "launch_binding", Mock(return_value="148.0.7778.215"))
+    monkeypatch.setattr(cores, "bound_executable", Mock())
+    target = "launch_binding" if failure == "binding" else "bound_executable"
+    monkeypatch.setattr(cores, target, Mock(side_effect=cores.CoreError("binding refused")))
+
+    assert cookie_tool.main() == 1
+    assert capsys.readouterr().out == 'RESULT:{"error": "CoreError: binding refused"}\n'
+
+
+def test_cookie_tool_holds_profile_lease(monkeypatch, tmp_path):
+    from src.services.browser import cookie_tool
+    from src.services.browser.lease import profile_lease
+
+    monkeypatch.chdir(tmp_path)
+    entered = []
+
+    def open_profile(profile_dir, os_type, engine):
+        with pytest.raises(OSError), profile_lease(profile_dir):
+            pytest.fail("profile lease was not held")
+        entered.append(profile_dir)
+        raise ValueError("stop before browser start")
+
+    monkeypatch.setattr(cookie_tool, "_open", open_profile)
+    with pytest.raises(ValueError, match="stop before browser start"):
+        asyncio.run(cookie_tool._run("export", "p", "linux", [], "chrome"))
+    assert len(entered) == 1
+    with profile_lease(entered[0]):
+        pass
 
 
 def _ext_cookie(**overrides):
