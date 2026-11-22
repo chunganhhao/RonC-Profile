@@ -34,7 +34,6 @@ from ..theme.styles import ACCENT_STYLE, DLG_FIELD_KWARGS, OUTLINE_STYLE
 from .responsive import bind_responsive_dialog
 
 _DATA = ft.TextStyle(font_family=FONT_DATA, size=12.5)
-_WARN_TINT = COLORS["warn_tint"]
 
 
 class _LiveTotpText(ft.Text):
@@ -174,7 +173,7 @@ def open_profile_dialog(
         visible=engine_dropdown.value == "chrome" and not is_edit,
         padding=ft.Padding.symmetric(horizontal=12, vertical=8),
         border_radius=8,
-        bgcolor=_WARN_TINT,
+        bgcolor=COLORS["warn_tint"],
         content=ft.Row(
             spacing=8,
             vertical_alignment=ft.CrossAxisAlignment.START,
