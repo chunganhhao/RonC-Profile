@@ -16,6 +16,7 @@
 - App desktop: Lỗi nhập hồ sơ trùng tên và JSON cookie sai định dạng hiển thị đúng ngôn ngữ giao diện, không lộ chi tiết bộ phân tích JSON.
 - Ngâm TK: Khi không lưu được thao tác xoá hoặc dừng tác vụ, giữ nguyên danh sách và trạng thái tác vụ, đồng thời hiển thị lỗi trong hộp thoại.
 - Khởi động trình duyệt chỉ đếm các tab khôi phục thành công; nếu tất cả đều lỗi, mở URL khởi động đã cấu hình và không để lại tab trống thừa.
+- API: PATCH profile với notes, account_uid, start_url hoặc tags là null sẽ xoá giá trị đã lưu; trường không gửi vẫn được giữ nguyên.
 
 ## 2.4.0 - 2026-10-30
 
