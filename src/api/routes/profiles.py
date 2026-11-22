@@ -457,7 +457,11 @@ def reset_fingerprint(
     """Discard the saved fingerprint; the next launch generates a new device."""
     require_profile(name, pm)
     _require_stopped(name, bl, "resetting the fingerprint")
-    removed = fingerprint.reset(os.path.join(DATA_DIR, name))
+    try:
+        with bl.exclusive(name):
+            removed = fingerprint.reset(os.path.join(DATA_DIR, name))
+    except ProfileBusyError as e:
+        raise HTTPException(status_code=409, detail=_BUSY_DETAIL) from e
     logger.info("API reset fingerprint for %s (existed=%s)", name, removed)
     return SuccessResponse(message=f"Fingerprint reset for '{name}'")
 
