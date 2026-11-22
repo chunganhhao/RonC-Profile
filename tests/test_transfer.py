@@ -1,9 +1,14 @@
 import json
 import zipfile
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
+from src.api.app import create_app
 from src.services.browser.launcher import BrowserLauncher, ProfileBusyError, _LaunchResult
+from src.services.profile import manager
 from src.services.profile.transfer import import_from_zip
 
 
@@ -48,6 +53,38 @@ def test_launch_result_settles_once():
     r.settle(True)
     r.settle(False, "late failure")
     assert r.ok is True and r.error is None
+
+
+@pytest.mark.parametrize("destination", ["outside", "profile", "nested"])
+def test_export_api_does_not_archive_its_output(tmp_path, monkeypatch, destination):
+    monkeypatch.setattr(manager, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(manager, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("src.api.app.API_TOKEN", "")
+    monkeypatch.setattr("src.api.auth.API_TOKEN", "")
+    pm = manager.ProfileManager()
+    assert pm.add_profile("alice", "", "linux", engine="chrome")
+    data = tmp_path / "data" / "alice"
+    default = data / "Default"
+    default.mkdir()
+    (default / "Preferences").write_bytes(b'{"fixture": true}')
+    outside = tmp_path / "export"
+    outside.mkdir()
+    export_dir = {"outside": outside, "profile": data, "nested": default}[destination]
+
+    app = create_app(SimpleNamespace(profile_manager=pm))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.post(
+        "/api/v1/profiles/alice/export", json={"export_dir": str(export_dir), "include_data": True}
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["success"], result
+    archive_path = Path(result["zip_path"])
+    assert archive_path.parent == export_dir
+    with zipfile.ZipFile(archive_path) as archive:
+        assert archive.namelist() == ["profile.json", "data/Default/Preferences"]
+        assert json.loads(archive.read("profile.json"))["engine"] == "chrome"
+        assert archive.read("data/Default/Preferences") == b'{"fixture": true}'
 
 
 def test_export_without_data_keeps_the_identity(tmp_path):

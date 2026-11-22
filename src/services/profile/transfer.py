@@ -54,16 +54,16 @@ def export_to_zip(
             zipf.writestr("profile.json", json.dumps(profile.to_dict(), indent=2))
 
             if include_data and pathlib.Path(profile_data_dir).exists():
+                archive_stat = os.stat(zip_path)
                 for root, _dirs, files in os.walk(profile_data_dir):
                     for file in files:
                         file_path = os.path.join(root, file)
-                        if os.path.relpath(file_path, profile_data_dir) in exclude_files:
+                        relative_path = os.path.relpath(file_path, profile_data_dir)
+                        if relative_path in exclude_files:
                             continue
-                        arcname = os.path.join(
-                            "data",
-                            os.path.relpath(file_path, profile_data_dir),
-                        )
-                        zipf.write(file_path, arcname)
+                        if os.path.samestat(os.stat(file_path), archive_stat):
+                            continue
+                        zipf.write(file_path, os.path.join("data", relative_path))
             else:
                 # The fingerprint is the profile's identity, not browser data:
                 # keep it so the imported profile presents the same device.
