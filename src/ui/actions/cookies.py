@@ -73,7 +73,12 @@ def manage_cookies(
 
     def on_reset_fingerprint() -> None:
         def _do_reset() -> None:
-            fingerprint.reset(profile_dir)
+            try:
+                with bl.exclusive(name):
+                    fingerprint.reset(profile_dir)
+            except ProfileBusyError:
+                log(get_string("profile_busy", name=name))
+                return
             log(get_string("fingerprint_was_reset", name=name))
 
         open_confirm_dialog(
