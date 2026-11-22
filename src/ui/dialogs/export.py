@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import flet as ft
 
@@ -13,7 +13,7 @@ def open_export_dialog(
     page: ft.Page,
     file_picker: ft.FilePicker,
     profiles: list[Profile],
-    on_complete: Callable[[list[str], str, bool], None],
+    on_complete: Callable[[list[str], str, bool], Awaitable[None]],
 ) -> None:
     if not profiles:
         return
@@ -22,17 +22,26 @@ def open_export_dialog(
     checkboxes = [ft.Checkbox(label=n, value=False, shape=ft.CircleBorder()) for n in names]
     include_data_cb = ft.Checkbox(label=get_string("include_browser_data"), value=True)
 
-    async def on_export(_: ft.ControlEvent) -> None:
+    async def on_export(e: ft.ControlEvent) -> None:
+        if e.control.disabled:
+            return
         selected = [cb.label for cb in checkboxes if cb.value]
         if not selected:
             return
         include_data = include_data_cb.value
-        page.pop_dialog()
-        dir_path = await file_picker.get_directory_path(
-            dialog_title=get_string("select_export_dir"),
-        )
+        e.control.disabled = True
+        page.update()
+        try:
+            dir_path = await file_picker.get_directory_path(
+                dialog_title=get_string("select_export_dir"),
+            )
+            if dir_path:
+                await on_complete(selected, dir_path, include_data)
+        finally:
+            e.control.disabled = False
+            page.update()
         if dir_path:
-            on_complete(selected, dir_path, include_data)
+            page.pop_dialog()
 
     def sync_select_all() -> None:
         select_all_cb.value = all(cb.value for cb in checkboxes)

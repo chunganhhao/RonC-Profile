@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 
 import flet as ft
@@ -25,7 +26,7 @@ async def import_profile(
     for f in files:
         if f.path:
             try:
-                success, result = pm.import_profile(f.path)
+                success, result = await asyncio.to_thread(pm.import_profile, f.path)
             except (ProfileStoreChangedError, OSError) as exc:
                 success, result = False, str(exc) or "Profile/store is busy; refresh and retry"
             if success:
@@ -47,9 +48,11 @@ def export_profile(
     if not profiles:
         return
 
-    def on_complete(names: list[str], dir_path: str, include_data: bool) -> None:
+    async def on_complete(names: list[str], dir_path: str, include_data: bool) -> None:
         for name in names:
-            success, result = pm.export_profile(name, dir_path, include_data)
+            success, result = await asyncio.to_thread(
+                pm.export_profile, name, dir_path, include_data
+            )
             if success:
                 log(get_string("export_success") + f": {result}")
             else:

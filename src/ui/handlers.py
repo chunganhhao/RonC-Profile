@@ -73,10 +73,21 @@ class AppHandlers:
         assert page is not None
         add_profile(page, self._pm, self._ps, self._log, self._refresh)
 
-    async def on_import(self, _: ft.ControlEvent | None = None) -> None:
+    async def on_import(self, e: ft.ControlEvent | None = None) -> None:
         refs = self._get_refs()
         assert refs is not None
-        await import_profile(refs.file_picker, self._pm, self._log, self._refresh)
+        control = e.control if e else None
+        if control is not None:
+            if control.disabled:
+                return
+            control.disabled = True
+            control.update()
+        try:
+            await import_profile(refs.file_picker, self._pm, self._log, self._refresh)
+        finally:
+            if control is not None:
+                control.disabled = False
+                control.update()
 
     def on_export_open(self) -> None:
         page = self._get_page()
