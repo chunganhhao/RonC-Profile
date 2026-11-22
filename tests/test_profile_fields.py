@@ -2,6 +2,7 @@
 
 import json
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from src.api.dependencies import get_browser_launcher, get_event_bus, get_profil
 from src.api.routes.profiles import router
 from src.models.profile import Profile, normalize_tags
 from src.services.profile import manager as pm_mod
+from src.services.profile import transfer
 from src.services.profile.transfer import export_to_zip, import_from_zip
 
 
@@ -102,6 +104,32 @@ def test_metadata_round_trip_export_import(tmp_path):
     assert ok
     ok, loaded = import_from_zip(archive, str(tmp_path / "imported"))
     assert ok and loaded.tags == p.tags and loaded.display_order == 3
+
+
+def test_exports_in_the_same_second_keep_both_archives(tmp_path, monkeypatch):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 1, 2, 3, 4, 5)
+
+    monkeypatch.setattr(transfer, "datetime", FixedDatetime)
+    profile = Profile(name="alice", engine="chrome")
+    data = tmp_path / "data"
+    preferences = data / "Default" / "Preferences"
+    preferences.parent.mkdir(parents=True)
+
+    preferences.write_text('{"backup": 1}', encoding="utf-8")
+    ok, first = export_to_zip(profile, str(data), str(tmp_path))
+    assert ok, first
+    preferences.write_text('{"backup": 2}', encoding="utf-8")
+    ok, second = export_to_zip(profile, str(data), str(tmp_path))
+    assert ok, second
+
+    assert first != second
+    with zipfile.ZipFile(first) as archive:
+        assert archive.read("data/Default/Preferences") == b'{"backup": 1}'
+    with zipfile.ZipFile(second) as archive:
+        assert archive.read("data/Default/Preferences") == b'{"backup": 2}'
 
 
 def test_patch_metadata_api_validates_and_preserves_credentials(pm):
