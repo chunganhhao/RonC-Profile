@@ -5,6 +5,8 @@
 ## Unreleased
 
 ### Sửa
+
+- Bố cục desktop tự xuống dòng khi thu nhỏ cửa sổ, giữ tìm kiếm, thao tác profile và phân trang luôn trong khung nhìn.
 - Hộp thoại Ngâm TK hiển thị và ghi log lỗi khi không lưu được tác vụ, không chạy tác vụ hay để lại lịch chưa lưu trong bộ nhớ.
 - Cảnh báo engine Chromium trong hộp thoại tạo profile giờ đọc được ở giao diện tối sau khi đổi giao diện.
 - Import/export cookie của profile Chrome dùng core đã gắn với profile và giữ `profile_lease`, không yêu cầu cài thêm core mặc định.

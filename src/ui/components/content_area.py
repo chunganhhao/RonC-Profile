@@ -79,15 +79,15 @@ def build_content_area(
     last_btn: ft.IconButton | None = None,
     page_size_dropdown: ft.Dropdown | None = None,
     running_filter_btn: ft.Control | None = None,
+    initial_table_width: float | None = None,
+    on_table_resize: Callable[[float], None] | None = None,
 ) -> ft.Container:
     """Main PionLogin-style workspace: Top header, Action toolbar, Data table, Pagination & Status bar."""
     is_dark = current_theme_mode() == "dark"
-    min_table_width = 1360
-
-    # Keep field labels and full notes readable; horizontal scrollbar stays available.
+    # Rows switch to labelled cards below the ledger breakpoint.
     table = ft.Container(
         key="profiles_table_container",
-        width=min_table_width,
+        width=initial_table_width or 1,
         content=ft.Column(
             spacing=0,
             expand=True,
@@ -100,7 +100,9 @@ def build_content_area(
     )
 
     def resize_table(event: ft.LayoutSizeChangeEvent) -> None:
-        width = max(min_table_width, event.width - 2)
+        width = max(1, event.width - 2)
+        if on_table_resize is not None:
+            on_table_resize(width)
         if table.width != width:
             table.width = width
             table.update()
@@ -117,7 +119,7 @@ def build_content_area(
             key="profiles_horizontal_scroll_row",
             spacing=0,
             expand=True,
-            scroll=ft.ScrollMode.ALWAYS,
+            scroll=ft.ScrollMode.AUTO,
             vertical_alignment=ft.CrossAxisAlignment.STRETCH,
             controls=[table],
         ),
@@ -175,8 +177,6 @@ def build_content_area(
         )
 
     top_right_controls: list[ft.Control] = []
-    if toast_banner is not None:
-        top_right_controls.append(toast_banner)
     if on_refresh is not None:
         top_right_controls.append(
             ft.IconButton(
@@ -231,12 +231,13 @@ def build_content_area(
         )
 
     status_bar = ft.Container(
-        height=30,
-        padding=ft.Padding.symmetric(horizontal=18),
+        padding=ft.Padding.symmetric(horizontal=18, vertical=7),
         bgcolor=COLORS["status_bar_bg"],
         border=ft.Border.only(top=ft.BorderSide(1, COLORS["card_border"])),
         content=ft.Row(
             spacing=14,
+            run_spacing=6,
+            wrap=True,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 _status_item(
@@ -272,7 +273,6 @@ def build_content_area(
                 ),
                 *([_status_sep(), footer_proxy_text] if footer_proxy_text is not None else []),
                 *([_status_sep(), footer_warming_text] if footer_warming_text is not None else []),
-                ft.Container(expand=True),
                 ft.Text(
                     get_string("footer_version"),
                     size=11.5,
@@ -295,7 +295,10 @@ def build_content_area(
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
                         ft.Row(
+                            expand=True,
                             spacing=12,
+                            wrap=True,
+                            run_spacing=4,
                             vertical_alignment=ft.CrossAxisAlignment.BASELINE,
                             controls=[
                                 ft.Text(
@@ -311,18 +314,24 @@ def build_content_area(
                     ],
                 ),
                 ft.Container(height=12),
+                *([toast_banner] if toast_banner is not None else []),
                 ft.Row(
+                    key="profiles_toolbar",
+                    wrap=True,
+                    run_spacing=8,
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
-                        ft.Row(spacing=8, controls=toolbar_left),
-                        ft.Row(spacing=6, controls=toolbar_right),
+                        *toolbar_left,
+                        *toolbar_right,
                     ],
                 ),
                 ft.Container(height=10),
                 sheet,
                 ft.Container(height=8),
                 ft.Row(
+                    wrap=True,
+                    run_spacing=8,
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
@@ -341,6 +350,7 @@ def build_content_area(
                         ),
                         ft.Row(
                             spacing=6,
+                            tight=True,
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                             controls=[
                                 *(

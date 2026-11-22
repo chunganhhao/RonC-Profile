@@ -38,6 +38,83 @@ COLUMNS = {
     "actions": (None, 276),
 }
 ROW_HEIGHT = 72
+TABLE_BREAKPOINT = 1360
+
+
+def _responsive_row(
+    container: ft.Container, *, header: bool = False, layout_width: float | None = None
+) -> ft.Container:
+    """Reflow the same cells, keeping their callbacks and selection on resize."""
+    ledger = container.content
+    cells = dict(zip(COLUMNS, ledger.controls, strict=True))
+    layout = None
+
+    def resize(width: float, notify: bool = True) -> None:
+        nonlocal layout
+        narrow = width < TABLE_BREAKPOINT
+        # ResponsiveRow's default breakpoints follow the page, not this sheet.
+        # Account for the sidebar and workspace padding using the measured width.
+        mode = (narrow, width >= 820, width >= 1080)
+        if mode == layout:
+            return
+        layout = mode
+        for key, cell in cells.items():
+            cell.expand, cell.width = COLUMNS[key]
+        if not narrow:
+            container.content = ledger
+        elif header:
+            container.content = ft.Row(
+                spacing=10,
+                controls=[cells["select"], cells["name"]],
+            )
+        else:
+            details = []
+            for key, label in (
+                ("group", "col_group"),
+                ("proxy", "col_proxy"),
+                ("recovery", "col_recovery"),
+                ("notes", "col_notes"),
+            ):
+                cell = cells[key]
+                cell.expand, cell.width = None, None
+                details.append(
+                    ft.Column(
+                        col=3 if mode[2] else 6,
+                        spacing=4,
+                        controls=[
+                            ft.Text(get_string(label), size=11, color=COLORS["text_dim"]),
+                            cell,
+                        ],
+                    )
+                )
+            container.content = ft.Column(
+                spacing=12,
+                controls=[
+                    ft.ResponsiveRow(
+                        run_spacing=8,
+                        controls=[
+                            ft.Row(
+                                col=7 if mode[1] else 12,
+                                spacing=8,
+                                controls=[cells[k] for k in ("select", "id", "name", "status")],
+                            ),
+                            ft.Row(
+                                col=5 if mode[1] else 12,
+                                alignment=ft.MainAxisAlignment.END,
+                                controls=[cells["actions"]],
+                            ),
+                        ],
+                    ),
+                    ft.ResponsiveRow(controls=details, run_spacing=12),
+                ],
+            )
+        if notify:
+            container.update()
+
+    container.on_size_change = lambda event: resize(event.width)
+    if layout_width is not None:
+        resize(layout_width, notify=False)
+    return container
 
 
 def _cell(key: str, content: ft.Control | None) -> ft.Container:
@@ -60,7 +137,10 @@ def _tag_colors(tag: str) -> tuple[str, str]:
 
 
 def build_header_row(
-    all_selected: bool, any_selected: bool, on_select_all: Callable[[bool], None]
+    all_selected: bool,
+    any_selected: bool,
+    on_select_all: Callable[[bool], None],
+    layout_width: float | None = None,
 ) -> ft.Container:
     def label(key: str) -> ft.Text:
         return ft.Text(
@@ -72,7 +152,7 @@ def build_header_row(
         tooltip=get_string("deselect_page") if all_selected else get_string("select_page"),
         on_change=lambda e: on_select_all(not all_selected),
     )
-    return ft.Container(
+    container = ft.Container(
         height=40,
         padding=ft.Padding.symmetric(horizontal=14),
         bgcolor=COLORS["paper_sunk"],
@@ -93,6 +173,7 @@ def build_header_row(
             ],
         ),
     )
+    return _responsive_row(container, header=True, layout_width=layout_width)
 
 
 def build_profile_card(
@@ -116,6 +197,7 @@ def build_profile_card(
     on_edit_field: Callable[[str, str, int], None] | None = None,
     on_backup_codes: Callable[[str, int], None] | None = None,
     active_feedback: set[str] | None = None,
+    layout_width: float | None = None,
 ) -> ft.Container:
     """One profile as a PionLogin-style table row."""
     fb = active_feedback or set()
@@ -168,7 +250,7 @@ def build_profile_card(
         else None
     )
 
-    return ft.Container(
+    container = ft.Container(
         padding=ft.Padding.symmetric(horizontal=14, vertical=10),
         bgcolor=bg,
         border=ft.Border.only(bottom=ft.BorderSide(1, COLORS["card_border"])),
@@ -248,6 +330,7 @@ def build_profile_card(
             ],
         ),
     )
+    return _responsive_row(container, layout_width=layout_width)
 
 
 def _feedback_icon_style() -> ft.ButtonStyle:

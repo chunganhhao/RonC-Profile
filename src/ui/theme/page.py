@@ -110,7 +110,7 @@ def apply_page_theme(page: ft.Page) -> None:
 def configure_page(page: ft.Page) -> None:
     page.title = get_string("window_title")
     page.window.width, page.window.height = 1440, 880
-    page.window.min_width, page.window.min_height = 1180, 680
+    page.window.min_width, page.window.min_height = 900, 600
 
     icon_name = "icon.ico" if os.name == "nt" else "icon.png"
     icon_path = os.path.abspath(
