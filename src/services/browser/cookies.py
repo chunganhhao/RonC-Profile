@@ -43,6 +43,10 @@ class CookieError(Exception):
     pass
 
 
+class InvalidCookieJSONError(CookieError):
+    code = "invalid_cookie_json"
+
+
 def _call_tool(
     action: str, profile_name: str, os_type: str, stdin: str = "", engine: str = "camoufox"
 ) -> dict:
@@ -203,7 +207,7 @@ def parse_cookies(text: str) -> list[dict[str, Any]]:
         try:
             data = json.loads(stripped)
         except ValueError as e:
-            raise CookieError(f"Invalid cookie JSON: {e}") from e
+            raise InvalidCookieJSONError(f"Invalid cookie JSON: {e}") from e
         if isinstance(data, dict):
             data = data.get("cookies", [data])
         if not isinstance(data, list):

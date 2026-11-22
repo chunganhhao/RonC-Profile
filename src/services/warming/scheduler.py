@@ -237,11 +237,16 @@ class WarmingSchedulerService:
         with self._lock:
             if task_id not in self._tasks:
                 return False
+            previous_tasks = self._tasks.copy()
+            del self._tasks[task_id]
+            try:
+                self._save()
+            except Exception:
+                self._tasks = previous_tasks
+                raise
             cancel = self._cancel_flags.pop(task_id, None)
             if cancel:
                 cancel.set()
-            del self._tasks[task_id]
-            self._save()
             return True
 
     def stop_task(self, task_id: str) -> bool:
@@ -249,11 +254,16 @@ class WarmingSchedulerService:
             task = self._tasks.get(task_id)
             if not task:
                 return False
+            previous_status = task.status
+            task.status = "idle"
+            try:
+                self._save()
+            except Exception:
+                task.status = previous_status
+                raise
             cancel = self._cancel_flags.get(task_id)
             if cancel:
                 cancel.set()
-            task.status = "idle"
-            self._save()
             return True
 
     def execute_task_sync(

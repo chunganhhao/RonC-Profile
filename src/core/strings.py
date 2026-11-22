@@ -2,6 +2,8 @@ from .config import LANGUAGE
 
 STRINGS: dict[str, dict[str, str]] = {
     "en": {
+        "import_profile_exists": "Profile '{name}' already exists",
+        "cookie_invalid_json": "Invalid cookie JSON. Check the file format and try again.",
         "edit_field": "Edit {field}",
         "copy_user": "Copy Gmail / user",
         "copied_user": "Copied Gmail / user",
@@ -386,6 +388,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "warming_invalid_msg": "Please enter a valid task name, HH:MM time (if scheduled), and target profiles.",
     },
     "vi": {
+        "import_profile_exists": "Hồ sơ '{name}' đã tồn tại. Vui lòng đổi tên trước khi nhập.",
+        "cookie_invalid_json": "JSON cookie không hợp lệ. Vui lòng kiểm tra định dạng tệp và thử lại.",
         "edit_field": "Chỉnh sửa {field}",
         "copy_user": "Sao chép Gmail / user",
         "copied_user": "Đã sao chép Gmail / user",

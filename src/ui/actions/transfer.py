@@ -5,7 +5,7 @@ import flet as ft
 
 from ...core.strings import get_string
 from ...interfaces.protocols import IProfileManager
-from ...services.profile.manager import ProfileStoreChangedError
+from ...services.profile.manager import ProfileImportConflict, ProfileStoreChangedError
 from ..dialogs import open_export_dialog
 
 
@@ -33,6 +33,8 @@ async def import_profile(
                 ok_count += 1
                 log(get_string("import_success") + f": {result}")
             else:
+                if isinstance(result, ProfileImportConflict):
+                    result = get_string("import_profile_exists", name=result.name)
                 log(get_string("import_error", error=result))
     if ok_count:
         refresh()
