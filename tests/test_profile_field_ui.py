@@ -508,6 +508,7 @@ def test_flet_all_tags_scrollable_notes_backup_codes_pagination_and_running_filt
         "page_last_btn",
         "toolbar_running_filter_btn",
     }.issubset(area_keys)
+    assert area_keys["page_size_dropdown"].width == 100
     assert [int(opt.key) for opt in refs.page_size_dropdown.options] == list(PAGE_SIZE_OPTIONS)
     refs.page_size_dropdown.value = "50"
     refs.page_size_dropdown.on_select(SimpleNamespace(control=refs.page_size_dropdown))

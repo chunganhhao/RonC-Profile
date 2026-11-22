@@ -9,6 +9,7 @@
 - Gán proxy từ pool chỉ báo thành công sau khi lưu profile (`strict=True`); nếu ghi thất bại, khôi phục proxy cũ trong bộ nhớ và hiển thị lỗi trên giao diện thay vì crash.
 - File ZIP xuất profile không còn chứa chính nó khi lưu trong thư mục dữ liệu của profile.
 - Import ZIP kiểm tra `profile.json` là JSON object và `os_type` là chuỗi hợp lệ trước khi lưu, tránh làm lỗi danh sách profile.
+- App desktop: ô chọn số dòng mỗi trang trong danh sách profile hiển thị đầy đủ số đã chọn.
 
 ## 2.4.0 - 2026-10-30
 
