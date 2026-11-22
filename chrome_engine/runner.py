@@ -148,12 +148,19 @@ async def run_browser(
             if not context.pages:
                 await context.new_page()
             restored = 0
+            saved_urls = []
             if RESTORE_TABS:
-                restored = await restore_tabs(context, session.load(profile_dir))
+                saved_urls = session.load(profile_dir)
+                restored = await restore_tabs(context, saved_urls)
                 if restored:
                     _say(f"Restored {restored} tab(s)")
             start_url = normalize_start_url(extra.get("start_url"))
             if not restored and start_url:
+                if saved_urls:
+                    failed_pages = list(context.pages)
+                    await context.new_page()
+                    for page in failed_pages:
+                        await page.close()
                 await restore_tabs(context, session.restorable([start_url]))
 
         close_event = asyncio.Event()

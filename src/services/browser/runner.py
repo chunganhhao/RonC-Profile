@@ -79,15 +79,17 @@ async def restore_tabs(context: object, urls: list[str]) -> int:
     first = context.pages[0] if context.pages else await context.new_page()
     pages = [first] + [await context.new_page() for _ in urls[1:]]
 
-    async def go(page: object, url: str) -> None:
+    async def go(page: object, url: str) -> bool:
         try:
             await page.goto(url, wait_until="commit", timeout=15_000)
+            return True
         except Exception as e:
             _safe_print(f"Could not restore tab {url}: {_compact_error(e, 120)}")
+            return False
 
-    await asyncio.gather(*(go(p, u) for p, u in zip(pages, urls, strict=True)))
+    loaded = await asyncio.gather(*(go(p, u) for p, u in zip(pages, urls, strict=True)))
     await pages[0].bring_to_front()
-    return len(urls)
+    return sum(loaded)
 
 
 async def snapshot_tabs(context: object, profile_dir: str, stop: asyncio.Event) -> None:
@@ -334,12 +336,19 @@ async def run_browser(
                 if not context.pages:
                     await context.new_page()
                 restored = 0
+                saved_urls = []
                 if RESTORE_TABS:
-                    restored = await restore_tabs(context, session.load(profile_dir))
+                    saved_urls = session.load(profile_dir)
+                    restored = await restore_tabs(context, saved_urls)
                     if restored:
                         _safe_print(f"Restored {restored} tab(s)")
                 start_url = normalize_start_url(extra.get("start_url"))
                 if not restored and start_url:
+                    if saved_urls:
+                        failed_pages = list(context.pages)
+                        await context.new_page()
+                        for page in failed_pages:
+                            await page.close()
                     await restore_tabs(context, session.restorable([start_url]))
 
             close_event = asyncio.Event()

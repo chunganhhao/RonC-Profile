@@ -1,5 +1,7 @@
 import datetime
 import errno
+import json
+import threading
 from types import SimpleNamespace
 
 import flet as ft
@@ -1000,6 +1002,99 @@ def test_warming_add_task_rolls_back_save_error(tmp_path, monkeypatch, failure_s
     task = ws.add_task("Retry", ["profile"])
     reloaded = WarmingSchedulerService(file_path=str(store))
     assert reloaded.get_task(task.id).name == "Retry"
+
+
+@pytest.mark.parametrize("operation", ["delete_task", "stop_task"])
+@pytest.mark.parametrize("failure_site", ["mkstemp", "replace"])
+def test_warming_mutation_rolls_back_save_error(tmp_path, monkeypatch, operation, failure_site):
+    from src.services.warming import scheduler
+
+    store = tmp_path / "warming.json"
+    ws = WarmingSchedulerService(file_path=str(store))
+    first = ws.add_task("First", ["profile"])
+    task = ws.add_task("Running", ["profile"])
+    ws.add_task("Last", ["profile"])
+    task.status = "running"
+    ws._save()
+    cancel = threading.Event()
+    ws._cancel_flags[task.id] = cancel
+    before = [t.to_dict() for t in ws.list_tasks()]
+    saved = store.read_bytes()
+
+    def fail_write(*args, **kwargs):
+        raise PermissionError(errno.EACCES, "read-only store")
+
+    target = scheduler.tempfile if failure_site == "mkstemp" else scheduler.os
+    with monkeypatch.context() as patch:
+        patch.setattr(target, failure_site, fail_write)
+        with pytest.raises(PermissionError, match="read-only store"):
+            getattr(ws, operation)(task.id)
+
+    assert [t.to_dict() for t in ws.list_tasks()] == before
+    assert ws.get_task(task.id) is task
+    assert ws._cancel_flags[task.id] is cancel
+    assert not cancel.is_set()
+    assert store.read_bytes() == saved
+    assert not list(tmp_path.glob(".warming_*.tmp"))
+    assert getattr(ws, operation)(task.id)
+    assert cancel.is_set()
+    assert ws.get_task(first.id) is first
+    persisted = json.loads(store.read_text())
+    if operation == "delete_task":
+        assert task.id not in ws._cancel_flags
+        assert task.id not in [t["id"] for t in persisted]
+    else:
+        assert task.status == "idle"
+        assert next(t for t in persisted if t["id"] == task.id)["status"] == "idle"
+    assert getattr(ws, operation)("missing") is False
+
+
+@pytest.mark.parametrize("operation", ["delete_task", "stop_task"])
+@pytest.mark.parametrize("outcome", ["error", "success"])
+def test_warming_ui_mutation_save_feedback(tmp_path, monkeypatch, operation, outcome):
+    from src.core.strings import get_string
+    from src.services.warming import scheduler
+
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    task = ws.add_task("Running", ["profile"])
+    task.status = "running"
+    ws._save()
+    page = _DummyPage()
+    logs, refreshed = [], []
+    open_warming_dialog(
+        page,
+        ws,
+        SimpleNamespace(list_profiles=lambda: []),
+        SimpleNamespace(),
+        log_fn=logs.append,
+        refresh_fn=lambda: refreshed.append(True),
+    )
+    controls = list(_walk_controls(page.dialog))
+    feedback = next(
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    )
+    tooltip = get_string("delete" if operation == "delete_task" else "stop")
+    button = next(c for c in controls if isinstance(c, ft.IconButton) and c.tooltip == tooltip)
+    if outcome == "error":
+
+        def fail_write(*args, **kwargs):
+            raise OSError(errno.ENOSPC, "disk full")
+
+        monkeypatch.setattr(scheduler.os, "replace", fail_write)
+    button.on_click(None)
+    if outcome == "error":
+        assert feedback.visible
+        assert feedback.color == COLORS["error"]
+        assert "disk full" in feedback.value
+        assert logs == [feedback.value]
+        assert refreshed == []
+        assert ws.list_tasks() == [task]
+        assert task.status == "running"
+    else:
+        assert not feedback.visible
+        assert logs == []
+        assert refreshed == ([True] if operation == "delete_task" else [])
+        assert (ws.get_task(task.id) is None) == (operation == "delete_task")
 
 
 @pytest.mark.parametrize("run_immediately", [False, True])
