@@ -191,6 +191,39 @@ def test_update_disk_failure_raises_and_restores_metadata(pm, monkeypatch, extra
     assert Path(pm_mod.PROFILES_FILE).read_bytes() == disk
 
 
+def test_delete_disk_failure_preserves_metadata_and_browser_data(pm, tmp_path, monkeypatch):
+    for order, name in enumerate(["a", "b", "c"], 1):
+        assert pm.add_profile(name, "", "macos", display_order=order)
+    data_dir = tmp_path / "data" / "b"
+    marker = data_dir / "session.fixture"
+    marker.write_text("unchanged")
+    profiles = pm.profiles
+    original = profiles.copy()
+    disk = Path(pm_mod.PROFILES_FILE).read_bytes()
+
+    def fail_replace(*_args):
+        raise OSError("fixture disk failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pm_mod, "_replace", fail_replace)
+        with pytest.raises(OSError, match="fixture disk failure"):
+            pm.delete_profile("b")
+
+    assert marker.read_text() == "unchanged"
+    assert Path(pm_mod.PROFILES_FILE).read_bytes() == disk
+    assert pm.profiles is profiles
+    assert list(profiles) == ["a", "b", "c"]
+    assert all(profiles[name] is profile for name, profile in original.items())
+    assert [p.display_order for p in profiles.values()] == [1, 2, 3]
+
+    assert pm.delete_profile("b")
+    assert not data_dir.exists()
+    assert [(p.name, p.display_order) for p in pm_mod.ProfileManager().list_profiles()] == [
+        ("a", 1),
+        ("c", 2),
+    ]
+
+
 def test_failed_rename_commit_restores_directory_and_skips_identity_edit(pm, tmp_path, monkeypatch):
     assert pm.add_profile("old", "", "macos", account_uid="fixed@example.test")
     assert pm.add_profile("second", "", "macos")
