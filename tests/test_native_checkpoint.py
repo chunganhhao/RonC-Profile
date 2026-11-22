@@ -577,6 +577,12 @@ def test_workflow_chain_is_bounded_and_probe_is_independent():
         assert f"needs.{previous}.outputs.state == 'partial'" in jobs[current]
     assert "last_chunk: true" in jobs["resume_4"]
     assert "overwrite:" not in chunks and "retention-days: 7" in chunks
+    assert "retention-days: 90" in chunks
+    assert chunks.index("EXPERIMENTAL-chromium-148-macos-arm64") < chunks.index(
+        "checkpoint.py save"
+    )
+    assert chunks.count("steps.build.outputs.state == 'complete'") >= 3
+    assert "!inputs.last_chunk" in chunks
     assert 'run["head_branch"] == os.environ["GITHUB_REF_NAME"]' in chunks
     assert "verify_failed" in chunks
     assert chunks.index("checkpoint.py restore") < chunks.index("mode=resume")

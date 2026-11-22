@@ -196,7 +196,7 @@ acceptance gates can produce the existing `EXPERIMENTAL` archive. Production
 bindings and installed cores remain untouched.
 
 Checkpoint artifact names are
-`native-checkpoint-<run_id>-<run_attempt>-<chunk>`, retained for **one day**.
+`native-checkpoint-<run_id>-<run_attempt>-<chunk>`. Rolling intermediate chunk checkpoints (`1..3`) are retained for **7 days**, while accepted `EXPERIMENTAL` archives and reusable terminal checkpoints (`complete`, `verify_failed`, or `chunk 4` partial) are retained for **90 days** to allow fast incremental follow-up patches without rebuilding from scratch.
 Artifacts are immutable and earlier checkpoints are NOT overwritten or deleted
 while a new one uploads. Four exhausted chunks make the workflow fail with a
 clear resume instruction, preserving its last checkpoint instead of silently
