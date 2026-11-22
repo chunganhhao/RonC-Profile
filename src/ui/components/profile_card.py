@@ -30,7 +30,7 @@ COLUMNS = {
     "select": (None, 32),
     "id": (None, 64),
     "name": (9, None),
-    "group": (5, None),
+    "group": (6, None),  # Room for the engine badge and inline edit button.
     "proxy": (6, None),
     "recovery": (7, None),
     "notes": (8, None),
@@ -351,6 +351,7 @@ def _group_and_engine_badges(profile: Profile) -> ft.Control:
                 size=10.5,
                 font_family=FONT_DATA,
                 color=COLORS["text_sub"],
+                no_wrap=True,
             ),
         )
     )
