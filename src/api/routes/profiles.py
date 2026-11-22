@@ -405,11 +405,7 @@ def export_cookies(
 @router.post(
     "/{name}/cookies",
     response_model=CookieImportResponse,
-    responses={
-        400: {"model": ErrorResponse},
-        404: {"model": ErrorResponse},
-        409: {"model": ErrorResponse},
-    },
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
 def import_cookies(
     name: str,
@@ -426,7 +422,7 @@ def import_cookies(
     except ProfileBusyError as e:
         raise HTTPException(status_code=409, detail=_BUSY_DETAIL) from e
     except cookies.CookieError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        return CookieImportResponse(success=False, error=str(e))
     logger.info("API imported %d cookies into %s", count, name)
     return CookieImportResponse(success=True, imported=count)
 

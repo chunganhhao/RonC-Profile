@@ -211,8 +211,9 @@ def test_cookie_route_rejects_malformed_input(cookie_client, monkeypatch, data, 
 
     monkeypatch.setattr(cookies, "_call_tool", unexpected_tool)
     response = cookie_client.post("/api/v1/profiles/p/cookies", json={"content": json.dumps(data)})
-    assert response.status_code == 400, response.text
-    assert message in response.json()["detail"]
+    assert response.status_code == 200, response.text
+    assert response.json()["success"] is False
+    assert message in response.json()["error"]
 
 
 def test_cookie_route_valid_import(cookie_client, monkeypatch):
