@@ -400,32 +400,16 @@ class ExtensionService:
                 shutil.rmtree(stage_dir, ignore_errors=True)
                 raise ValueError(f"Failed to extract extension: {exc}") from exc
 
-            # shortcut: atomic swap via staging directory so failed reimport preserves working extension
-            backup_dir = None
-            try:
-                if target_dir.exists():
-                    backup_dir = Path(tempfile.mkdtemp(dir=base_dir, prefix=f".bk_{ext_id}_"))
-                    backup_dir.rmdir()
-                    target_dir.rename(backup_dir)
-                stage_dir.rename(target_dir)
-                if backup_dir and backup_dir.exists():
-                    shutil.rmtree(backup_dir, ignore_errors=True)
-            except Exception as exc:
-                if backup_dir and backup_dir.exists() and not target_dir.exists():
-                    backup_dir.rename(target_dir)
-                shutil.rmtree(stage_dir, ignore_errors=True)
-                raise ValueError(f"Failed to activate extension: {exc}") from exc
-
         default_locale = str(manifest.get("default_locale") or "en").strip()
-        resolved_name = _resolve_msg_placeholder(raw_name, target_dir, default_locale)
+        resolved_name = _resolve_msg_placeholder(raw_name, stage_dir, default_locale)
         if not resolved_name or resolved_name.startswith("__MSG_"):
             resolved_name = Path(filename or ext_id).stem
         raw_desc = str(manifest.get("description") or "").strip()
-        resolved_desc = _resolve_msg_placeholder(raw_desc, target_dir, default_locale)
+        resolved_desc = _resolve_msg_placeholder(raw_desc, stage_dir, default_locale)
         if resolved_desc.startswith("__MSG_"):
             resolved_desc = ""
 
-        icon_rel = _pick_manifest_icon(manifest, target_dir)
+        icon_rel = _pick_manifest_icon(manifest, stage_dir)
         chrome_id = compute_chrome_extension_id(target_dir, manifest)
 
         with self._lock:
@@ -444,8 +428,31 @@ class ExtensionService:
                 icon_rel_path=icon_rel,
                 source_zip=filename or f"{ext_id}.zip",
             )
-            self._entries[ext_id] = entry
-            self._save()
+            backup_dir = None
+            activated = False
+            try:
+                if target_dir.exists():
+                    backup_dir = Path(tempfile.mkdtemp(dir=base_dir, prefix=f".bk_{ext_id}_"))
+                    backup_dir.rmdir()
+                    target_dir.rename(backup_dir)
+                stage_dir.rename(target_dir)
+                activated = True
+                self._entries[ext_id] = entry
+                self._save()
+            except Exception as exc:
+                if existing is None:
+                    self._entries.pop(ext_id, None)
+                else:
+                    self._entries[ext_id] = existing
+                if activated:
+                    target_dir.rename(stage_dir)
+                if backup_dir and backup_dir.exists():
+                    backup_dir.rename(target_dir)
+                raise ValueError(f"Failed to save extension: {exc}") from exc
+            finally:
+                shutil.rmtree(stage_dir, ignore_errors=True)
+            if backup_dir:
+                shutil.rmtree(backup_dir, ignore_errors=True)
             return entry
 
     def update_extension(
@@ -462,6 +469,7 @@ class ExtensionService:
             entry = self._entries.get(ext_id)
             if entry is None:
                 return None
+            previous = (entry.enabled, entry.pin_mode, entry.apply_to_all)
             if enabled is not None:
                 entry.enabled = bool(enabled)
             if pin_mode is not None and pin_mode in PIN_MODES:
@@ -469,7 +477,11 @@ class ExtensionService:
             effective_all = apply_to_all if apply_to_all is not None else apply_to_all_chrome
             if effective_all is not None:
                 entry.apply_to_all = bool(effective_all)
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                entry.enabled, entry.pin_mode, entry.apply_to_all = previous
+                raise
             return entry
 
     def remove_extension(
@@ -518,29 +530,42 @@ class ExtensionService:
             entry = self._entries.get(ext_id)
             if entry is None:
                 return 0
-            if pin_mode is not None and pin_mode in PIN_MODES:
-                entry.pin_mode = pin_mode
-            if apply_to_all is not None:
-                entry.apply_to_all = bool(apply_to_all)
-            self._save()
-        if profile_manager is None:
-            return 0
-        target_set = set(profile_names)
-        updated_count = 0
-        for prof in profile_manager.list_profiles():
-            cur_ids = list(getattr(prof, "extension_ids", []) or [])
-            has_ext = ext_id in cur_ids
-            should_have = prof.name in target_set
-            if should_have and not has_ext:
-                cur_ids.append(ext_id)
-                prof.extension_ids = cur_ids
-                updated_count += 1
-            elif not should_have and has_ext:
-                prof.extension_ids = [x for x in cur_ids if x != ext_id]
-                updated_count += 1
-        if updated_count:
-            profile_manager.save_profiles()
-        return updated_count
+            previous = (entry.pin_mode, entry.apply_to_all)
+            profiles = profile_manager.list_profiles() if profile_manager is not None else []
+            snapshots = [(prof, list(prof.extension_ids or [])) for prof in profiles]
+            changed_profiles = []
+            registry_saved = False
+            try:
+                if pin_mode is not None and pin_mode in PIN_MODES:
+                    entry.pin_mode = pin_mode
+                if apply_to_all is not None:
+                    entry.apply_to_all = bool(apply_to_all)
+                self._save()
+                registry_saved = True
+                target_set = set(profile_names)
+                updated_count = 0
+                for prof, cur_ids in snapshots:
+                    has_ext = ext_id in cur_ids
+                    should_have = prof.name in target_set
+                    if should_have and not has_ext:
+                        changed_profiles.append((prof, cur_ids))
+                        prof.extension_ids = [*cur_ids, ext_id]
+                        updated_count += 1
+                    elif not should_have and has_ext:
+                        changed_profiles.append((prof, cur_ids))
+                        prof.extension_ids = [x for x in cur_ids if x != ext_id]
+                        updated_count += 1
+                if updated_count:
+                    profile_manager.save_profiles(strict=True)
+                return updated_count
+            except Exception:
+                for prof, ids in changed_profiles:
+                    prof.extension_ids = ids
+                entry.pin_mode, entry.apply_to_all = previous
+                if registry_saved:
+                    with contextlib.suppress(Exception):
+                        self._save()
+                raise
 
     def usage_counts(self, profile_manager: Any) -> dict[str, int]:
         counts: dict[str, int] = {}
