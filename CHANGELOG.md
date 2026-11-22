@@ -6,6 +6,7 @@
 
 ### Sửa
 
+- Chromium 148: phát hiện patch bị thiếu khi bỏ qua chuỗi patch đã áp dụng và đối chiếu font được bảo vệ với danh sách cài trên máy, tránh bỏ sót font bị ẩn ở cả hai seed.
 - Hộp thoại tiện ích hiển thị trạng thái trống, GPU Chrome khớp fingerprint đã lưu, bảng màu không tràn khi mở menu ngôn ngữ và hộp thoại Cookie co vừa nội dung.
 - Bố cục desktop tự xuống dòng khi thu nhỏ cửa sổ, giữ tìm kiếm, thao tác profile và phân trang luôn trong khung nhìn.
 - Hộp thoại Ngâm TK hiển thị và ghi log lỗi khi không lưu được tác vụ, không chạy tác vụ hay để lại lịch chưa lưu trong bộ nhớ.

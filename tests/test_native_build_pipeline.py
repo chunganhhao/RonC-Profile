@@ -313,9 +313,19 @@ def test_modified_pixelscan_coherence_overlay_refused(scaffold, monkeypatch):
     native.subprocess.run.assert_not_called()
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS BSD patch -C required")
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX patch required")
 def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkeypatch):
     import hashlib
+
+    if sys.platform.startswith("linux"):
+        run = subprocess.run
+
+        def portable_patch(args, **kwargs):
+            if args[0] == "/usr/bin/patch":
+                args = ["--dry-run" if arg == "-C" else arg for arg in args]
+            return run(args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", portable_patch)
 
     patch_a = tmp_path / "023.patch"
     patch_a.write_text(
@@ -338,9 +348,7 @@ def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkey
         "--- a/audio.txt\n+++ b/audio.txt\n@@ -1,3 +1,3 @@\n x\n-old025\n+new025\n z\n"
     )
     patch_d = tmp_path / "026.patch"
-    patch_d.write_text(
-        "--- a/apple.txt\n+++ b/apple.txt\n@@ -1,3 +1,3 @@\n m1\n-old026\n+new026\n m3\n"
-    )
+    patch_d.write_text("--- a/apple.txt\n+++ b/apple.txt\n@@ -1,2 +1,3 @@\n m1\n+new026\n m3\n")
     patch_e = tmp_path / "027.patch"
     patch_e.write_text(
         "--- a/locale.txt\n+++ b/locale.txt\n@@ -1,3 +1,3 @@\n l1\n-old027\n+new027\n l3\n"
@@ -375,7 +383,7 @@ def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkey
     src_post023.mkdir()
     (src_post023 / "shared.txt").write_text("head\nnew023_canvas\nmid\nnew023_gl\ntail\n")
     (src_post023 / "audio.txt").write_text("x\nold025\nz\n")
-    (src_post023 / "apple.txt").write_text("m1\nold026\nm3\n")
+    (src_post023 / "apple.txt").write_text("m1\nm3\n")
     (src_post023 / "locale.txt").write_text("l1\nold027\nl3\n")
     assert native.apply_incremental_patches(src_post023) is True
     assert (src_post023 / "shared.txt").read_text() == "head\nnew028_canvas\nmid\nnew028_gl\ntail\n"
@@ -412,15 +420,27 @@ def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkey
         assert (src_post027 / "locale.txt").read_text() == "l1\nnew028_font\nl3\n"
         assert native.apply_incremental_patches(src_post027, saved_source=saved_source) is False
 
-    # 3. Corrupted pending 028 fails closed.
+    # 3. Corrupted 023 fails closed before applying pending 028.
     bad_src = tmp_path / "src_bad028"
     bad_src.mkdir()
     (bad_src / "shared.txt").write_text("head\ncorrupt\nmid\nnew024_gl\ntail\n")
     (bad_src / "audio.txt").write_text("x\nnew025\nz\n")
     (bad_src / "apple.txt").write_text("m1\nnew026\nm3\n")
     (bad_src / "locale.txt").write_text("l1\nnew027\nl3\n")
-    with pytest.raises(RuntimeError, match="Incremental patch 028 failed check"):
+    with pytest.raises(RuntimeError, match="Incremental patch 023.*shared.txt"):
         native.apply_incremental_patches(bad_src)
+
+    (src_post023 / "audio.txt").write_text("x\nold025\nz\n")
+    with pytest.raises(RuntimeError, match="Incremental patch 025.*audio.txt"):
+        native.apply_incremental_patches(src_post023)
+    with pytest.raises(RuntimeError, match="Incremental patch 025.*audio.txt"):
+        native.apply_incremental_patches(
+            src_post023,
+            saved_source={
+                "macos_antidetect_patch_sha256": "h23",
+                "webgl_readback_patch_sha256": "h24",
+            },
+        )
 
 
 def test_verify_matrix_targets_macos_only_and_covers_023_gates():
@@ -492,6 +512,7 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     close_popup_override: dict | None = None
     collect_override: dict | None = None
     font_probe_override: dict | None = None
+    inventory_override: list[str] | None = None
 
     class FakePage:
         async def goto(self, url: str) -> None:
@@ -527,6 +548,12 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
                         payload.update(close_popup_override)
                 return payload
             if "queryLocalFonts" in script:
+                if "--disable-spoofing=font" in launches[-1][1]:
+                    return (
+                        inventory_override
+                        if inventory_override is not None
+                        else ["Arial", "Helvetica", "Palatino", "Not protected"]
+                    )
                 seed_arg = next(a for a in launches[-1][1] if a.startswith("--fingerprint="))
                 is_3003 = seed_arg.endswith("=3003")
                 realm = {
@@ -550,6 +577,7 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
                     "Noto Sans Oriya",
                     "Noto Serif Myanmar",
                     "Optima",
+                    "Palatino",
                     "PingFang HK",
                     "PingFang MO",
                     "PingFang SC",
@@ -784,11 +812,14 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     asyncio.run(verify_mod.verify(exe, out))
     report = json.loads(out.read_text())
     assert report["acceptance"] == "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
-    assert len(launches) == 7
-    assert len(persistent_launches) == 2
+    inventory_launches = [
+        kw for kw in persistent_launches if "--disable-spoofing=font" in kw["args"]
+    ]
+    assert len(launches) == 7 + len(inventory_launches)
+    assert len(persistent_launches) == 2 + len(inventory_launches)
     assert all(kw["no_viewport"] is True for kw in persistent_launches)
     assert all(is_open for is_open, _ in launches)
-    assert len(context_kwargs) == 7
+    assert len(context_kwargs) == 7 + len(inventory_launches)
     assert all(kw == {"color_scheme": "null"} for kw in context_kwargs)
     assert "apple_silicon_m3_laptop" in report["cases"]
     assert "apple_silicon_m2_max_desktop" in report["cases"]
@@ -813,6 +844,23 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     with pytest.raises(ValueError, match="028 flat monochrome canvas perturbed"):
         asyncio.run(verify_mod.verify(exe, out))
     collect_override = None
+
+    def _hide_installed_core(_is_3003: bool, res: dict) -> None:
+        res["localFontFamilies"].remove("Palatino")
+
+    font_probe_override = _hide_installed_core
+    with pytest.raises(
+        ValueError, match="028 installed protected macOS core font hidden.*palatino"
+    ):
+        asyncio.run(verify_mod.verify(exe, out))
+    assert len(inventory_launches) == 1
+    inventory_override = []
+    with pytest.raises(
+        ValueError, match="028 unfiltered protected macOS core font inventory empty"
+    ):
+        asyncio.run(verify_mod.verify(exe, out))
+    inventory_override = None
+
     font_probe_override = {"coreFontMissingCount": 1}
     with pytest.raises(ValueError, match="028 protected macOS core font hidden"):
         asyncio.run(verify_mod.verify(exe, out))

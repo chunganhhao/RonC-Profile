@@ -4,8 +4,10 @@ import argparse
 import hashlib
 import json
 import platform
+import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 PLATFORM_REV = "6a00dfe08591a15cfb0aed0edd292ba789d9a0d7"
@@ -184,6 +186,44 @@ def _patch_check(
     return subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
 
 
+def _verify_skipped_patches(src_dir: Path, patches: list[tuple[str, str]]) -> None:
+    parts = []
+    for patch_file, label in patches:
+        for block in re.split(r"(?m)(?=^diff --git |^--- )", Path(patch_file).read_text()):
+            if not block.startswith("--- "):
+                continue
+            target = block.splitlines()[1].removeprefix("+++ b/")
+            parts.append((label, target, block))
+
+    # Undo only touched files in a disposable tree. Peeling later patches first
+    # restores overwritten contexts without mistaking repeatable insertions for missing patches.
+    with tempfile.TemporaryDirectory(prefix="native-patch-guard-") as directory:
+        scratch = Path(directory)
+        source = scratch / "src"
+        source.mkdir()
+        for label, target, _ in parts:
+            original = src_dir / target
+            if not original.is_file():
+                raise RuntimeError(f"Incremental patch {label} missing file: {target}")
+            destination = source / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(original, destination)
+        patch = scratch / "part.patch"
+        for label, target, block in reversed(parts):
+            patch.write_text(block)
+            result = subprocess.run(
+                ["/usr/bin/patch", "-p1", "-R", "-f", "-d", str(source), "-i", str(patch)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode:
+                raise RuntimeError(
+                    f"Incremental patch {label} missing or inconsistent in {target}:\n"
+                    + (result.stderr or result.stdout)
+                )
+
+
 def apply_incremental_patches(src_dir: Path, saved_source: dict | None = None) -> bool:
     """Apply pending incremental patches (023..028) onto an unpacked src tree."""
     patches = (
@@ -234,6 +274,9 @@ def apply_incremental_patches(src_dir: Path, saved_source: dict | None = None) -
         if _patch_check(src_dir, resolved[idx][0], reverse=True).returncode == 0:
             skip_until = idx
             break
+
+    if skip_until >= 0:
+        _verify_skipped_patches(src_dir, resolved[: skip_until + 1])
 
     applied_any = False
     for patch_file, label in resolved[skip_until + 1 :]:
