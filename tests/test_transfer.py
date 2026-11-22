@@ -85,6 +85,8 @@ def test_import_bad_field_keeps_api_list_usable(tmp_path, import_api, field, val
     )
     assert response.status_code == 200
     assert listed.status_code == reloaded.status_code == 200
+    if field in ("group", "account_uid", "two_fa_secret", "recovery_email", "notes"):
+        assert body["success"] is (value is None)
     if body["success"]:
         assert body["profile_name"] == "bad"
         assert set(saved) == set(app.state.container.profile_manager.profiles) == {"bad"}
@@ -100,6 +102,27 @@ def test_import_bad_field_keeps_api_list_usable(tmp_path, import_api, field, val
             assert saved["bad"].os_type == "windows"
         else:
             assert body["error"] == "Invalid os_type in archive (must be text)"
+
+
+@pytest.mark.parametrize("metadata", [12345, ["windows"], True, None, "text"])
+def test_import_nonobject_metadata_keeps_api_list_usable(tmp_path, import_api, metadata):
+    from src.services.profile.manager import ProfileManager
+
+    client, app = import_api
+    path = tmp_path / "nonobject.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("profile.json", json.dumps(metadata))
+    response = client.post("/api/v1/profiles/import", json={"zip_path": str(path)})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert isinstance(body["error"], str) and body["error"]
+    assert not app.state.container.profile_manager.profiles
+    assert client.get("/api/v1/profiles").status_code == 200
+    app.state.container.profile_manager = ProfileManager()
+    assert not app.state.container.profile_manager.profiles
+    assert client.get("/api/v1/profiles").status_code == 200
+    assert not list((tmp_path / "camoufox_data").iterdir())
 
 
 def test_import_preserves_nonstandard_string_os_type(tmp_path, import_api):
