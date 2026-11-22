@@ -33,6 +33,36 @@ def walk(control):
         yield from walk(content)
 
 
+@pytest.mark.parametrize("initial,target", [("light", "dark"), ("dark", "light")])
+def test_chromium_warning_uses_current_theme(initial, target):
+    from src.core.strings import get_string
+    from src.ui.dialogs.profile import open_profile_dialog
+    from src.ui.theme.colors import COLORS, current_theme_mode, set_theme_mode
+    from src.ui.theme.styles import refresh_styles
+
+    previous = current_theme_mode()
+    try:
+        set_theme_mode(initial)
+        refresh_styles()
+        set_theme_mode(target)
+        refresh_styles()
+        page = Page()
+        open_profile_dialog(page, None, lambda *args, **kwargs: None)
+        warning = next(
+            c
+            for c in walk(page.dialog.content)
+            if c.__class__.__name__ == "Container"
+            and any(
+                getattr(child, "value", None) == get_string("engine_chrome_note")
+                for child in getattr(getattr(c, "content", None), "controls", [])
+            )
+        )
+        assert warning.bgcolor == COLORS["warn_tint"]
+    finally:
+        set_theme_mode(previous)
+        refresh_styles()
+
+
 def test_native_field_dialog_changes_name_not_account():
     page, saved = Page(), []
     profile = Profile("old", account_uid="fixed@example.test")
@@ -508,6 +538,7 @@ def test_flet_all_tags_scrollable_notes_backup_codes_pagination_and_running_filt
         "page_last_btn",
         "toolbar_running_filter_btn",
     }.issubset(area_keys)
+    assert area_keys["page_size_dropdown"].width == 100
     assert [int(opt.key) for opt in refs.page_size_dropdown.options] == list(PAGE_SIZE_OPTIONS)
     refs.page_size_dropdown.value = "50"
     refs.page_size_dropdown.on_select(SimpleNamespace(control=refs.page_size_dropdown))
