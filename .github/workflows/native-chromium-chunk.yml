@@ -103,17 +103,6 @@ jobs:
           mode=fresh
           if [[ -n "$CHECKPOINT_NAME" ]]; then mode=resume; fi
           bash native/chromium-148/build.sh "$GITHUB_WORKSPACE/.native-build/platform" "$mode" 2>&1 | tee native-build.log
-      - name: Save consistent full source/object checkpoint
-        if: ${{ steps.build.outputs.state == 'partial' || (failure() && steps.build.outputs.state == 'verify_failed') }}
-        run: python3 native/chromium-148/checkpoint.py save "$GITHUB_WORKSPACE/.native-build/platform" "$GITHUB_WORKSPACE/checkpoint"
-      - uses: actions/upload-artifact@v4
-        if: ${{ steps.build.outputs.state == 'partial' || (failure() && steps.build.outputs.state == 'verify_failed') }}
-        with:
-          name: native-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.chunk }}
-          path: checkpoint/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
       - name: Keep accepted experimental archive only
         uses: actions/upload-artifact@v4
         if: ${{ steps.build.outputs.state == 'complete' }}
@@ -121,7 +110,31 @@ jobs:
           name: EXPERIMENTAL-chromium-148-macos-arm64-${{ github.run_id }}-${{ github.run_attempt }}
           path: .native-build/platform/artifacts/
           if-no-files-found: error
+          retention-days: 90
+      - name: Save consistent full source/object checkpoint
+        id: save_checkpoint
+        if: ${{ (success() && (steps.build.outputs.state == 'partial' || steps.build.outputs.state == 'complete')) || (failure() && steps.build.outputs.state == 'verify_failed') }}
+        run: |
+          rm -rf "$GITHUB_WORKSPACE/.native-build/platform/package"
+          python3 native/chromium-148/checkpoint.py save "$GITHUB_WORKSPACE/.native-build/platform" "$GITHUB_WORKSPACE/checkpoint"
+      - name: Upload rolling intermediate checkpoint
+        uses: actions/upload-artifact@v4
+        if: ${{ success() && steps.build.outputs.state == 'partial' && !inputs.last_chunk }}
+        with:
+          name: native-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.chunk }}
+          path: checkpoint/
+          if-no-files-found: error
+          compression-level: 0
           retention-days: 7
+      - name: Upload reusable terminal checkpoint (90 days)
+        uses: actions/upload-artifact@v4
+        if: ${{ (success() && (steps.build.outputs.state == 'complete' || (inputs.last_chunk && steps.build.outputs.state == 'partial'))) || (failure() && steps.build.outputs.state == 'verify_failed' && steps.save_checkpoint.outcome == 'success') }}
+        with:
+          name: native-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.chunk }}
+          path: checkpoint/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
       - name: Keep logs and effective build inputs
         if: always()
         uses: actions/upload-artifact@v4
