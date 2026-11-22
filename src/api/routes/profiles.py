@@ -308,6 +308,9 @@ def update_profile(
         )
         if k in supplied
     }
+    for field, empty in {"notes": "", "account_uid": "", "start_url": "", "tags": []}.items():
+        if field in extra_update and extra_update[field] is None:
+            extra_update[field] = empty
     try:
         updated = pm.update_profile(
             name,

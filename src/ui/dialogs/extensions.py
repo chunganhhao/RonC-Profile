@@ -92,16 +92,23 @@ def open_extension_settings_dialog(
         ),
     )
 
+    save_error = ft.Text("", size=12, color=COLORS["error"], visible=False)
+
     def _on_confirm(_: ft.ControlEvent) -> None:
         new_pin = pin_group.value or "custom"
         all_chrome = bool(apply_all_switch.value)
-        extension_service.update_extension(
-            entry.id,
-            pin_mode=new_pin,
-            apply_to_all_chrome=all_chrome,
-        )
         selected_profiles = [name for name, cb in profile_checks.items() if cb.value]
-        extension_service.assign_profiles(entry.id, selected_profiles, pm)
+        try:
+            extension_service.assign_profiles(
+                entry.id, selected_profiles, pm, pin_mode=new_pin, apply_to_all=all_chrome
+            )
+        except Exception as exc:
+            msg = get_string("ext_save_error", error=str(exc))
+            save_error.value = msg
+            save_error.visible = True
+            log(msg)
+            page.update()
+            return
         msg = get_string("ext_saved_toast", name=entry.name)
         log(msg)
         page.pop_dialog()
@@ -139,6 +146,7 @@ def open_extension_settings_dialog(
                     color=COLORS["text_sub"],
                 ),
                 profiles_box,
+                save_error,
             ],
         ),
     )
@@ -494,21 +502,23 @@ def open_extensions_dialog(
         )
         if not files:
             return
+        outcomes = []
+        failed = False
         for f in files:
             if not f.path:
                 continue
             try:
                 entry = extension_service.install_from_zip(f.path)
                 msg = get_string("ext_installed_toast", name=entry.name, version=entry.version)
-                feedback_text.value = msg
-                feedback_text.color = COLORS["success"]
-                feedback_text.visible = True
+                outcomes.append(msg)
                 log(msg)
             except Exception as exc:
-                feedback_text.value = str(exc)
-                feedback_text.color = COLORS["error"]
-                feedback_text.visible = True
+                outcomes.append(f"{os.path.basename(f.path)}: {exc}")
+                failed = True
                 log(f"[Extensions] Error: {exc}")
+        feedback_text.value = "\n".join(outcomes)
+        feedback_text.color = COLORS["error"] if failed else COLORS["success"]
+        feedback_text.visible = bool(outcomes)
         _rebuild_cards(notify=True)
         if refresh_fn:
             refresh_fn()

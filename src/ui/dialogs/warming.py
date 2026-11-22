@@ -118,11 +118,19 @@ def open_warming_dialog(
         _rebuild_tasks(notify=True)
 
     def _stop_task(tid: str) -> None:
-        warming_service.stop_task(tid)
+        try:
+            warming_service.stop_task(tid)
+        except OSError as exc:
+            _show_save_error(exc)
+            return
         _rebuild_tasks(notify=True)
 
     def _delete_task(tid: str) -> None:
-        warming_service.delete_task(tid)
+        try:
+            warming_service.delete_task(tid)
+        except OSError as exc:
+            _show_save_error(exc)
+            return
         _rebuild_tasks(notify=True)
         if refresh_fn:
             refresh_fn()
@@ -231,6 +239,15 @@ def open_warming_dialog(
             with contextlib.suppress(Exception):
                 page.update()
 
+    def _show_save_error(exc: OSError) -> None:
+        err = get_string("warming_save_error_msg", error=str(exc))
+        feedback_text.value = err
+        feedback_text.color = COLORS["error"]
+        feedback_text.visible = True
+        log(err)
+        with contextlib.suppress(Exception):
+            page.update()
+
     def _create_from_inputs(run_immediately: bool) -> None:
         name = (task_name_field.value or "").strip()
         preset = preset_dropdown.value or "youtube_trust"
@@ -251,13 +268,7 @@ def open_warming_dialog(
                 enabled=True,
             )
         except OSError as exc:
-            err = get_string("warming_save_error_msg", error=str(exc))
-            feedback_text.value = err
-            feedback_text.color = COLORS["error"]
-            feedback_text.visible = True
-            log(err)
-            with contextlib.suppress(Exception):
-                page.update()
+            _show_save_error(exc)
             return
         if task is None:
             feedback_text.value = get_string("warming_invalid_msg")

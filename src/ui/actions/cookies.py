@@ -67,7 +67,12 @@ def manage_cookies(
             text = pathlib.Path(files[0].path).read_text(encoding="utf-8-sig")
             count = await asyncio.to_thread(_locked, cookies.import_cookies, text)
         except (cookies.CookieError, OSError, UnicodeDecodeError, ProfileBusyError) as e:
-            log(get_string("cookie_error", name=name, error=e))
+            error = (
+                get_string("cookie_invalid_json")
+                if isinstance(e, cookies.InvalidCookieJSONError)
+                else str(e)
+            )
+            log(get_string("cookie_error", name=name, error=error))
             return
         log(get_string("cookie_imported", name=name, count=count))
 

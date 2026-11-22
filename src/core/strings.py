@@ -2,6 +2,8 @@ from .config import LANGUAGE
 
 STRINGS: dict[str, dict[str, str]] = {
     "en": {
+        "import_profile_exists": "Profile '{name}' already exists",
+        "cookie_invalid_json": "Invalid cookie JSON. Check the file format and try again.",
         "edit_field": "Edit {field}",
         "copy_user": "Copy Gmail / user",
         "copied_user": "Copied Gmail / user",
@@ -300,6 +302,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "ext_installed_toast": "[Extensions] Installed '{name}' (v{version})",
         "ext_deleted_toast": "[Extensions] Removed '{name}'",
         "ext_saved_toast": "[Extensions] Saved settings for '{name}'",
+        "ext_save_error": "Could not save extension settings: {error}",
         "tooltip_copy_pass": "Copy password ({uid})",
         "tooltip_copy_2fa": "Copy 6-digit 2FA OTP",
         "copied_password": "[{name}] Copied account password to clipboard",
@@ -386,6 +389,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "warming_invalid_msg": "Please enter a valid task name, HH:MM time (if scheduled), and target profiles.",
     },
     "vi": {
+        "import_profile_exists": "Profile '{name}' đã tồn tại. Vui lòng đổi tên trước khi nhập.",
+        "cookie_invalid_json": "JSON cookie không hợp lệ. Vui lòng kiểm tra định dạng tệp và thử lại.",
         "edit_field": "Chỉnh sửa {field}",
         "copy_user": "Sao chép Gmail / user",
         "copied_user": "Đã sao chép Gmail / user",
@@ -684,6 +689,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "ext_installed_toast": "[Tiện ích] Đã cài đặt '{name}' (v{version})",
         "ext_deleted_toast": "[Tiện ích] Đã xóa '{name}'",
         "ext_saved_toast": "[Tiện ích] Đã lưu cài đặt cho '{name}'",
+        "ext_save_error": "Không thể lưu cài đặt tiện ích: {error}",
         "tooltip_copy_pass": "Sao chép mật khẩu ({uid})",
         "tooltip_copy_2fa": "Sao chép mã 2FA 6 số",
         "copied_password": "[{name}] Đã sao chép mật khẩu vào bộ nhớ tạm",

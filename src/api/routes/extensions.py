@@ -119,21 +119,31 @@ def update_extension(
         raise HTTPException(
             status_code=400, detail=f"pin_mode must be one of: {', '.join(PIN_MODES)}"
         )
-    entry = ext.update_extension(
-        ext_id,
-        enabled=body.enabled,
-        pin_mode=body.pin_mode,
-        apply_to_all_chrome=(
-            body.apply_to_all_chrome if body.apply_to_all_chrome is not None else body.apply_to_all
-        ),
-    )
+    entry = ext.get_entry(ext_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Extension not found")
     target_profiles = (
         body.profile_names if body.profile_names is not None else body.assigned_profiles
     )
-    if target_profiles is not None:
-        ext.assign_profiles(ext_id, target_profiles, pm)
+    apply_all = (
+        body.apply_to_all_chrome if body.apply_to_all_chrome is not None else body.apply_to_all
+    )
+    try:
+        if target_profiles is not None:
+            ext.assign_profiles(
+                ext_id, target_profiles, pm, pin_mode=body.pin_mode, apply_to_all=apply_all
+            )
+            entry = ext.get_entry(ext_id)
+            if body.enabled is not None:
+                entry = ext.update_extension(ext_id, enabled=body.enabled)
+        else:
+            entry = ext.update_extension(
+                ext_id, enabled=body.enabled, pin_mode=body.pin_mode, apply_to_all=apply_all
+            )
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Could not save extension settings: {exc}"
+        ) from exc
     eb.emit()
     return entry.to_dict()
 

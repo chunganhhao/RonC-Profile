@@ -37,6 +37,15 @@ from .transfer import export_to_zip, import_from_zip, read_profile_meta
 logger = get_logger("profile.manager")
 
 
+class ProfileImportConflict(str):
+    code = "profile_exists"
+
+    def __new__(cls, name: str):
+        result = super().__new__(cls, f"Profile '{name}' already exists")
+        result.name = name
+        return result
+
+
 class ProfileStoreChangedError(RuntimeError):
     pass
 
@@ -624,7 +633,7 @@ class ProfileManager:
             existing_key = self._find_by_casefold(name) if name else None
             if existing_key is not None:
                 if not overwrite:
-                    return False, f"Profile '{name}' already exists"
+                    return False, ProfileImportConflict(name)
                 if meta.get("core_version") != self.profiles[existing_key].core_version:
                     return (
                         False,
