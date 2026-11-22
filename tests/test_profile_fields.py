@@ -191,6 +191,80 @@ def test_update_disk_failure_raises_and_restores_metadata(pm, monkeypatch, extra
     assert Path(pm_mod.PROFILES_FILE).read_bytes() == disk
 
 
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("populated", [False, True])
+def test_create_disk_failure_restores_metadata_and_data(
+    pm, tmp_path, monkeypatch, existing, populated
+):
+    if populated:
+        for order, name in enumerate(["a", "b"], 1):
+            assert pm.add_profile(name, "", "macos", engine="chrome", display_order=order)
+    data_dir = tmp_path / "data" / "new"
+    if existing:
+        data_dir.mkdir()
+        (data_dir / "session.fixture").write_text("unchanged")
+        (data_dir / "chrome_persona.json").write_text("original")
+    profiles = pm.profiles
+    original = profiles.copy()
+    before = {name: p.to_dict() for name, p in profiles.items()}
+    path = Path(pm_mod.PROFILES_FILE)
+    disk = path.read_bytes() if path.exists() else None
+
+    def fail_replace(*_args):
+        raise OSError("fixture disk failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pm_mod, "_replace", fail_replace)
+        with pytest.raises(OSError, match="fixture disk failure"):
+            pm.add_profile(
+                "new",
+                "",
+                "macos",
+                engine="chrome",
+                display_order=1,
+                initial_fingerprint={"seed": 123456},
+            )
+
+    assert pm.profiles is profiles
+    assert {name: p.to_dict() for name, p in profiles.items()} == before
+    assert all(profiles[name] is profile for name, profile in original.items())
+    assert (path.read_bytes() if path.exists() else None) == disk
+    assert not path.with_suffix(".json.tmp").exists()
+    if existing:
+        assert (data_dir / "session.fixture").read_text() == "unchanged"
+        assert (data_dir / "chrome_persona.json").read_text() == "original"
+    else:
+        assert not data_dir.exists()
+
+    assert pm.add_profile(
+        "new", "", "macos", engine="chrome", display_order=1, initial_fingerprint={"seed": 123456}
+    )
+    assert pm_mod.ProfileManager().profiles["new"].engine == "chrome"
+    assert (data_dir / "chrome_persona.json").exists()
+
+
+def test_create_disk_failure_returns_api_error(pm, monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_profile_manager] = lambda: pm
+    app.dependency_overrides[get_browser_launcher] = lambda: SimpleNamespace(
+        is_running=lambda _: False
+    )
+    app.dependency_overrides[get_event_bus] = lambda: SimpleNamespace(emit=lambda: None)
+
+    def fail_replace(*_args):
+        raise OSError("fixture disk failure")
+
+    monkeypatch.setattr(pm_mod, "_replace", fail_replace)
+    monkeypatch.setattr("src.api.routes.profiles.chrome_prefetch.start", lambda: None)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/profiles", json={"name": "new", "engine": "chrome", "os_type": "macos"}
+        )
+    assert response.status_code == 500
+    assert not pm.profiles
+
+
 def test_delete_disk_failure_preserves_metadata_and_browser_data(pm, tmp_path, monkeypatch):
     for order, name in enumerate(["a", "b", "c"], 1):
         assert pm.add_profile(name, "", "macos", display_order=order)

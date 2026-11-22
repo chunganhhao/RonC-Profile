@@ -228,23 +228,19 @@ class ProfileManager:
             # Create directory before touching profiles.json so a mkdir failure
             # does not leave an entry with no data dir on disk.
             data_dir = self._data_path(name)
+            data_dir_existed = pathlib.Path(data_dir).exists()
             try:
                 pathlib.Path(data_dir).mkdir(exist_ok=True, parents=True)
             except OSError as e:
                 logger.warning("Could not create data dir for %s: %s", name, e)
                 return False
-            if isinstance(initial_fingerprint, dict):
-                if engine == "camoufox":
-                    with contextlib.suppress(Exception):
-                        fp_service.save_fingerprint(data_dir, os_type, initial_fingerprint)
-                elif engine == "chrome" and "seed" in initial_fingerprint:
-                    with contextlib.suppress(Exception):
-                        fp_service.save_chrome_persona(data_dir, initial_fingerprint)
             clean_ext_ids = (
                 [str(x).strip() for x in extension_ids if isinstance(x, str) and x.strip()]
                 if isinstance(extension_ids, list)
                 else []
             )
+            previous = self.profiles.copy()
+            previous_orders = [(p, p.display_order) for p in self.profiles.values()]
             self.profiles[name] = Profile(
                 name=name,
                 proxy=proxy or None,
@@ -266,9 +262,26 @@ class ProfileManager:
                 webrtc_mode=_webrtc_or_default(webrtc_mode),
                 canvas_mode=_canvas_or_default(canvas_mode),
             )
-            if display_order is not None:
-                self._move_profile(name, display_order)
-            self.save_profiles()
+            try:
+                if display_order is not None:
+                    self._move_profile(name, display_order)
+                self.save_profiles(strict=True)
+            except Exception as exc:
+                if not isinstance(exc, ProfileStoreChangedError):
+                    for profile, order in previous_orders:
+                        profile.display_order = order
+                    self.profiles.clear()
+                    self.profiles.update(previous)
+                if not data_dir_existed:
+                    shutil.rmtree(data_dir, ignore_errors=True)
+                raise
+            if isinstance(initial_fingerprint, dict):
+                if engine == "camoufox":
+                    with contextlib.suppress(Exception):
+                        fp_service.save_fingerprint(data_dir, os_type, initial_fingerprint)
+                elif engine == "chrome" and "seed" in initial_fingerprint:
+                    with contextlib.suppress(Exception):
+                        fp_service.save_chrome_persona(data_dir, initial_fingerprint)
             logger.info("Created profile: %s", name)
             return True
 
