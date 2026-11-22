@@ -1,4 +1,4 @@
-"""Read or write a stopped profile's cookies through a headless Camoufox.
+"""Read or write a stopped profile's cookies through its headless browser engine.
 
 Run as a subprocess (like runner.py) so the async browser gets its own event
 loop. Usage:
@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import nullcontext
 from typing import Any
 
 sys.path.insert(
@@ -26,15 +27,21 @@ from camoufox.async_api import AsyncCamoufox
 from src.core.config import DATA_DIR
 from src.models.profile import ENGINES
 from src.services.browser.fingerprint import load_or_create
+from src.services.browser.lease import profile_lease
 from src.utils.validation import validate_profile_name
 
 
 def _open(profile_dir: str, os_type: str, engine: str) -> Any:
     if engine == "chrome":
         from chrome_engine import ChromeEngine
+        from src.services.browser.cores import bound_executable, launch_binding
 
+        kwargs = {}
+        version = launch_binding(os.path.basename(profile_dir), "chrome")
+        if version:
+            kwargs["executable"] = bound_executable("chrome", version)
         # No proxy: cookies need no network, and no exit-IP lookup is made.
-        return ChromeEngine(profile_dir, platform=os_type, headless=True)
+        return ChromeEngine(profile_dir, platform=os_type, headless=True, **kwargs)
     return AsyncCamoufox(
         headless=True,
         os=os_type,
@@ -48,11 +55,12 @@ async def _run(
     action: str, profile_name: str, os_type: str, payload: list, engine: str = "camoufox"
 ) -> dict:
     profile_dir = os.path.join(os.getcwd(), DATA_DIR, profile_name)
-    async with _open(profile_dir, os_type, engine) as context:
-        if action == "export":
-            return {"cookies": await context.cookies()}
-        await context.add_cookies(payload)
-        return {"imported": len(payload)}
+    with profile_lease(profile_dir) if engine == "chrome" else nullcontext():
+        async with _open(profile_dir, os_type, engine) as context:
+            if action == "export":
+                return {"cookies": await context.cookies()}
+            await context.add_cookies(payload)
+            return {"imported": len(payload)}
 
 
 def main() -> int:
