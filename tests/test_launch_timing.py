@@ -213,6 +213,7 @@ def test_chrome_engine_times_geo_and_actual_launch_separately(monkeypatch, tmp_p
     assert [line.split()[1] for line in lines] == [
         "chrome_core_resolve",
         "chrome_persona",
+        "chrome_native_integrity",
         "chrome_proxy_bridge",
         "chrome_geo_locale",
         "chrome_driver",

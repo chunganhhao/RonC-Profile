@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -297,6 +298,7 @@ def test_modified_locale_speech_font_overlay_refused(scaffold, monkeypatch):
     native.subprocess.run.assert_not_called()
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS BSD patch -C required")
 def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkeypatch):
     import hashlib
 
