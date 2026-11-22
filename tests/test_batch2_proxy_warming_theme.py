@@ -16,13 +16,32 @@ from src.ui.dialogs.profile import open_profile_dialog
 from src.ui.dialogs.proxy_pool import open_proxy_pool_dialog
 from src.ui.dialogs.warming import open_warming_dialog
 from src.ui.theme import (
+    ACCENT_STYLE,
     COLORS,
     DLG_FIELD_KWARGS,
+    OUTLINE_STYLE,
     current_theme_mode,
     refresh_styles,
     set_theme_mode,
     toggle_theme_mode,
 )
+
+
+def _assert_disabled_button_styles():
+    for style, background, enabled_color, enabled_background in (
+        (ACCENT_STYLE, "rule_strong", "#FFFFFF", COLORS["accent"]),
+        (OUTLINE_STYLE, "paper_sunk", COLORS["text_main"], COLORS["card_bg"]),
+    ):
+        assert style.color[ft.ControlState.DISABLED] == COLORS["text_dim"]
+        assert style.bgcolor[ft.ControlState.DISABLED] == COLORS[background]
+        assert style.color[ft.ControlState.DEFAULT] == enabled_color
+        assert style.bgcolor[ft.ControlState.DEFAULT] == enabled_background
+        assert style.color[ft.ControlState.DISABLED] != enabled_color
+        assert style.bgcolor[ft.ControlState.DISABLED] != enabled_background
+
+
+def test_initial_disabled_button_styles():
+    _assert_disabled_button_styles()
 
 
 def _walk_controls(ctrl):
@@ -57,12 +76,14 @@ def test_theme_switching_updates_colors_and_styles():
         assert current_theme_mode() == "dark"
         assert COLORS["bg"] == "#0B0C0E"
         assert DLG_FIELD_KWARGS["bgcolor"] == "#16191F"
+        _assert_disabled_button_styles()
 
         toggle_theme_mode()
         refresh_styles()
         assert current_theme_mode() == "light"
         assert COLORS["bg"] == "#F8FAFC"
         assert DLG_FIELD_KWARGS["bgcolor"] == "#FFFFFF"
+        _assert_disabled_button_styles()
     finally:
         set_theme_mode(orig)
         refresh_styles()
