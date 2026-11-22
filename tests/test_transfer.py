@@ -7,6 +7,119 @@ from src.services.browser.launcher import BrowserLauncher, ProfileBusyError, _La
 from src.services.profile.transfer import import_from_zip
 
 
+@pytest.fixture
+def import_api(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api.routes.profiles import router
+    from src.core.events import EventBus
+    from src.services.profile.manager import ProfileManager
+
+    monkeypatch.chdir(tmp_path)
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.state.container = SimpleNamespace(
+        profile_manager=ProfileManager(), browser_launcher=BrowserLauncher(), event_bus=EventBus()
+    )
+    return TestClient(app, raise_server_exceptions=False), app
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "os_type",
+        "group",
+        "account_uid",
+        "account_password",
+        "two_fa_secret",
+        "recovery_email",
+        "notes",
+    ],
+)
+@pytest.mark.parametrize("value", [["windows"], {"bad": "value"}, 42, True])
+def test_import_bad_field_keeps_api_list_usable(tmp_path, import_api, field, value):
+    client, app = import_api
+    path = tmp_path / "bad.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "profile.json", json.dumps({"name": "bad", "engine": "chrome", field: value})
+        )
+    response = client.post("/api/v1/profiles/import", json={"zip_path": str(path)})
+    assert response.status_code == 200
+    assert client.get("/api/v1/profiles").status_code == 200
+    if field != "os_type":
+        assert response.json()["success"] is False
+        assert not app.state.container.profile_manager.profiles
+    else:
+        assert response.json()["success"] is True
+        assert app.state.container.profile_manager.profiles["bad"].os_type == "windows"
+    from src.services.profile.manager import ProfileManager
+
+    app.state.container.profile_manager = ProfileManager()
+    assert client.get("/api/v1/profiles").status_code == 200
+
+
+def test_chromium_export_import_round_trip(tmp_path):
+    from src.models.profile import Profile
+    from src.services.profile.transfer import export_to_zip
+
+    original = Profile(
+        name="chromium",
+        engine="chrome",
+        os_type="linux",
+        proxy="http://localhost:8080",
+        timezone="Europe/Paris",
+        locale="en-US",
+        core_version="148.0.0",
+        group="work",
+        tags=["work", "personal"],
+        extension_ids=["extension"],
+        display_order=7,
+        account_uid="user",
+        account_password="  password  ",
+        two_fa_secret="JBSWY3DPEHPK3PXP",
+        recovery_email="user@example.com",
+        backup_codes="12345678\n87654321",
+        notes="notes",
+        start_url="https://example.com",
+        webrtc_mode="disable",
+        canvas_mode="noise",
+    )
+    ok, path = export_to_zip(original, str(tmp_path / "source"), str(tmp_path))
+    assert ok, path
+    ok, imported = import_from_zip(path, str(tmp_path / "destination"))
+    assert ok, imported
+    assert imported.to_dict() == original.to_dict()
+
+
+@pytest.mark.parametrize("value", [None, "", False, 0, [], {}])
+def test_import_legacy_empty_fields(tmp_path, value):
+    path = tmp_path / "empty.zip"
+    metadata = {"name": "legacy", "engine": "chrome", "proxy": "None"}
+    metadata.update(
+        dict.fromkeys(
+            (
+                "group",
+                "account_uid",
+                "account_password",
+                "two_fa_secret",
+                "recovery_email",
+                "notes",
+            ),
+            value,
+        )
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("profile.json", json.dumps(metadata))
+    ok, profile = import_from_zip(str(path), str(tmp_path / "data"))
+    assert ok, profile
+    assert profile.proxy is None
+    assert profile.os_type == "windows"
+
+
 def _archive(path, name, files):
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("profile.json", json.dumps({"name": name, "os_type": "windows"}))

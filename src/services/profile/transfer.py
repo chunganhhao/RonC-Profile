@@ -103,6 +103,8 @@ def import_from_zip(
                 return False, "Invalid profile archive (missing profile.json)"
 
             profile_data = json.loads(zipf.read("profile.json"))
+            if not isinstance(profile_data, dict):
+                return False, "Invalid profile metadata"
             name = profile_data.get("name")
 
             if not name:
@@ -110,6 +112,18 @@ def import_from_zip(
             valid, msg = validate_profile_name(name)
             if not valid:
                 return False, f"Invalid profile name in archive: {msg}"
+
+            for field in (
+                "group",
+                "account_uid",
+                "account_password",
+                "two_fa_secret",
+                "recovery_email",
+                "notes",
+            ):
+                value = profile_data.get(field)
+                if value and not isinstance(value, str):
+                    return False, f"Invalid {field} in archive (must be text)"
 
             tags = normalize_tags(profile_data.get("tags", []))
             backup_codes = normalize_backup_codes(profile_data.get("backup_codes")) or None
@@ -129,7 +143,9 @@ def import_from_zip(
                 if isinstance(profile_data.get("core_version"), str)
                 else None,
                 proxy=proxy,
-                os_type=profile_data.get("os_type", "windows"),
+                os_type=profile_data.get("os_type")
+                if isinstance(profile_data.get("os_type"), str)
+                else "windows",
                 timezone=valid_or_none(profile_data.get("timezone"), validate_timezone),
                 locale=valid_or_none(profile_data.get("locale"), validate_locale),
                 engine=profile_data.get("engine")

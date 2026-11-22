@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+### Sửa
+- Import ZIP kiểm tra kiểu dữ liệu metadata trước khi lưu, tránh làm lỗi danh sách profile khi archive chứa field sai kiểu.
+
 ## 2.4.0 - 2026-10-30
 
 ### Thay đổi
