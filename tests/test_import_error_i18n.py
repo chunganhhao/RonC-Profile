@@ -57,7 +57,7 @@ def test_desktop_import_errors_localized(imports, tmp_path, monkeypatch, languag
             transfer.import_profile(picker, pm, logs.append, lambda: refreshed.append(True))
         )
         expected = (
-            "Hồ sơ 'existing' đã tồn tại"
+            "Profile 'existing' đã tồn tại"
             if language == "vi"
             else "Profile 'existing' already exists"
         )

@@ -388,7 +388,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "warming_invalid_msg": "Please enter a valid task name, HH:MM time (if scheduled), and target profiles.",
     },
     "vi": {
-        "import_profile_exists": "Hồ sơ '{name}' đã tồn tại. Vui lòng đổi tên trước khi nhập.",
+        "import_profile_exists": "Profile '{name}' đã tồn tại. Vui lòng đổi tên trước khi nhập.",
         "cookie_invalid_json": "JSON cookie không hợp lệ. Vui lòng kiểm tra định dạng tệp và thử lại.",
         "edit_field": "Chỉnh sửa {field}",
         "copy_user": "Sao chép Gmail / user",
