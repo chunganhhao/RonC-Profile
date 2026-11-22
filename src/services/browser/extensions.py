@@ -533,6 +533,7 @@ class ExtensionService:
             previous = (entry.pin_mode, entry.apply_to_all)
             profiles = profile_manager.list_profiles() if profile_manager is not None else []
             snapshots = [(prof, list(prof.extension_ids or [])) for prof in profiles]
+            changed_profiles = []
             registry_saved = False
             try:
                 if pin_mode is not None and pin_mode in PIN_MODES:
@@ -547,16 +548,18 @@ class ExtensionService:
                     has_ext = ext_id in cur_ids
                     should_have = prof.name in target_set
                     if should_have and not has_ext:
+                        changed_profiles.append((prof, cur_ids))
                         prof.extension_ids = [*cur_ids, ext_id]
                         updated_count += 1
                     elif not should_have and has_ext:
+                        changed_profiles.append((prof, cur_ids))
                         prof.extension_ids = [x for x in cur_ids if x != ext_id]
                         updated_count += 1
                 if updated_count:
                     profile_manager.save_profiles(strict=True)
                 return updated_count
             except Exception:
-                for prof, ids in snapshots:
+                for prof, ids in changed_profiles:
                     prof.extension_ids = ids
                 entry.pin_mode, entry.apply_to_all = previous
                 if registry_saved:

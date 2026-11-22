@@ -74,6 +74,23 @@ def test_assignment_rolls_back_and_retry_writes(state, monkeypatch):
     assert ext.get_entry(entry.id).apply_to_all
 
 
+def test_assignment_rollback_preserves_untouched_profile_changes(state, monkeypatch):
+    ext, pm, entry = state
+    pm.profiles["bob"] = Profile(name="bob", engine="chrome")
+
+    def fail_after_concurrent_change(*, strict=False):
+        assert strict
+        assert pm.profiles["alice"].extension_ids == [entry.id]
+        pm.profiles["bob"].extension_ids = ["another-extension"]
+        raise OSError("disk full")
+
+    monkeypatch.setattr(pm, "save_profiles", fail_after_concurrent_change)
+    with pytest.raises(OSError, match="disk full"):
+        ext.assign_profiles(entry.id, ["alice"], pm)
+    assert pm.profiles["alice"].extension_ids == []
+    assert pm.profiles["bob"].extension_ids == ["another-extension"]
+
+
 def test_update_restores_memory(state, monkeypatch):
     ext, _, entry = state
     registry = Path(ext.file_path).read_bytes()
