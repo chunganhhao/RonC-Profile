@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+### Sửa
+- Import/export cookie của profile Chrome dùng core đã gắn với profile, không yêu cầu cài thêm core mặc định.
+
 ## 2.4.0 - 2026-10-30
 
 ### Thay đổi
