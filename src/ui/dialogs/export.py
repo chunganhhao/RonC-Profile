@@ -1,4 +1,5 @@
-from collections.abc import Callable
+import inspect
+from collections.abc import Awaitable, Callable
 
 import flet as ft
 
@@ -13,7 +14,7 @@ def open_export_dialog(
     page: ft.Page,
     file_picker: ft.FilePicker,
     profiles: list[Profile],
-    on_complete: Callable[[list[str], str, bool], None],
+    on_complete: Callable[[list[str], str, bool], Awaitable[None] | None],
 ) -> None:
     if not profiles:
         return
@@ -21,18 +22,47 @@ def open_export_dialog(
     names = [p.name for p in profiles]
     checkboxes = [ft.Checkbox(label=n, value=False, shape=ft.CircleBorder()) for n in names]
     include_data_cb = ft.Checkbox(label=get_string("include_browser_data"), value=True)
+    dismissed = False
 
-    async def on_export(_: ft.ControlEvent) -> None:
+    def _on_dismiss(_: ft.ControlEvent | None = None) -> None:
+        nonlocal dismissed
+        dismissed = True
+
+    def _on_cancel(_: ft.ControlEvent | None = None) -> None:
+        nonlocal dismissed
+        if cancel_btn.disabled or dismissed:
+            return
+        dismissed = True
+        page.pop_dialog()
+
+    async def on_export(e: ft.ControlEvent | None = None) -> None:
+        nonlocal dismissed
+        btn = e.control if e is not None else export_btn
+        if btn.disabled:
+            return
         selected = [cb.label for cb in checkboxes if cb.value]
         if not selected:
             return
         include_data = include_data_cb.value
-        page.pop_dialog()
-        dir_path = await file_picker.get_directory_path(
-            dialog_title=get_string("select_export_dir"),
-        )
-        if dir_path:
-            on_complete(selected, dir_path, include_data)
+        btn.disabled = True
+        cancel_btn.disabled = True
+        page.update()
+        dir_path: str | None = None
+        try:
+            dir_path = await file_picker.get_directory_path(
+                dialog_title=get_string("select_export_dir"),
+            )
+            if dir_path:
+                res = on_complete(selected, dir_path, include_data)
+                if inspect.isawaitable(res):
+                    await res
+        finally:
+            btn.disabled = False
+            cancel_btn.disabled = False
+            page.update()
+        if dir_path and not dismissed:
+            dismissed = True
+            page.pop_dialog()
 
     def sync_select_all() -> None:
         select_all_cb.value = all(cb.value for cb in checkboxes)
@@ -111,21 +141,22 @@ def open_export_dialog(
         ),
     )
 
+    cancel_btn = ft.TextButton(get_string("cancel"), on_click=_on_cancel)
+    export_btn = ft.Button(
+        get_string("export"),
+        icon=ft.Icons.UPLOAD,
+        style=ACCENT_STYLE,
+        on_click=on_export,
+    )
+
     dlg = ft.AlertDialog(
         modal=True,
         bgcolor=COLORS["card_bg"],
         shape=ft.RoundedRectangleBorder(radius=12),
         title=ft.Text(get_string("export_profiles"), size=20, weight=ft.FontWeight.BOLD),
         content=body_container,
-        actions=[
-            ft.TextButton(get_string("cancel"), on_click=lambda _: page.pop_dialog()),
-            ft.Button(
-                get_string("export"),
-                icon=ft.Icons.UPLOAD,
-                style=ACCENT_STYLE,
-                on_click=on_export,
-            ),
-        ],
+        on_dismiss=_on_dismiss,
+        actions=[cancel_btn, export_btn],
     )
     bind_responsive_dialog(
         page,

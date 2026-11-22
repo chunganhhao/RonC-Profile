@@ -2,6 +2,7 @@
 
 import json
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from src.models.profile import (
     normalize_tags,
 )
 from src.services.profile import manager as pm_mod
+from src.services.profile import transfer
 from src.services.profile.transfer import export_to_zip, import_from_zip
 
 
@@ -109,6 +111,32 @@ def test_metadata_round_trip_export_import(tmp_path):
     assert ok and loaded.tags == p.tags and loaded.display_order == 3
 
 
+def test_exports_in_the_same_second_keep_both_archives(tmp_path, monkeypatch):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 1, 2, 3, 4, 5)
+
+    monkeypatch.setattr(transfer, "datetime", FixedDatetime)
+    profile = Profile(name="alice", engine="chrome")
+    data = tmp_path / "data"
+    preferences = data / "Default" / "Preferences"
+    preferences.parent.mkdir(parents=True)
+
+    preferences.write_text('{"backup": 1}', encoding="utf-8")
+    ok, first = export_to_zip(profile, str(data), str(tmp_path))
+    assert ok, first
+    preferences.write_text('{"backup": 2}', encoding="utf-8")
+    ok, second = export_to_zip(profile, str(data), str(tmp_path))
+    assert ok, second
+
+    assert first != second
+    with zipfile.ZipFile(first) as archive:
+        assert archive.read("data/Default/Preferences") == b'{"backup": 1}'
+    with zipfile.ZipFile(second) as archive:
+        assert archive.read("data/Default/Preferences") == b'{"backup": 2}'
+
+
 def test_patch_metadata_api_validates_and_preserves_credentials(pm):
     assert pm.add_profile(
         "a", "", "macos", account_uid="fixture@example.test", account_password="secret"
@@ -194,6 +222,39 @@ def test_update_disk_failure_raises_and_restores_metadata(pm, monkeypatch, extra
     assert external_reference is pm.profiles["b"]
     assert external_reference.to_dict() == before["b"]
     assert Path(pm_mod.PROFILES_FILE).read_bytes() == disk
+
+
+def test_delete_disk_failure_preserves_metadata_and_browser_data(pm, tmp_path, monkeypatch):
+    for order, name in enumerate(["a", "b", "c"], 1):
+        assert pm.add_profile(name, "", "macos", display_order=order)
+    data_dir = tmp_path / "data" / "b"
+    marker = data_dir / "session.fixture"
+    marker.write_text("unchanged")
+    profiles = pm.profiles
+    original = profiles.copy()
+    disk = Path(pm_mod.PROFILES_FILE).read_bytes()
+
+    def fail_replace(*_args):
+        raise OSError("fixture disk failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pm_mod, "_replace", fail_replace)
+        with pytest.raises(OSError, match="fixture disk failure"):
+            pm.delete_profile("b")
+
+    assert marker.read_text() == "unchanged"
+    assert Path(pm_mod.PROFILES_FILE).read_bytes() == disk
+    assert pm.profiles is profiles
+    assert list(profiles) == ["a", "b", "c"]
+    assert all(profiles[name] is profile for name, profile in original.items())
+    assert [p.display_order for p in profiles.values()] == [1, 2, 3]
+
+    assert pm.delete_profile("b")
+    assert not data_dir.exists()
+    assert [(p.name, p.display_order) for p in pm_mod.ProfileManager().list_profiles()] == [
+        ("a", 1),
+        ("c", 2),
+    ]
 
 
 def test_failed_rename_commit_restores_directory_and_skips_identity_edit(pm, tmp_path, monkeypatch):

@@ -11,10 +11,11 @@ _PAD = ft.Padding.symmetric(horizontal=12)
 ACCENT_STYLE = ft.ButtonStyle(
     shape=_SHAPE,
     bgcolor={
+        ft.ControlState.DISABLED: COLORS["rule_strong"],
         ft.ControlState.DEFAULT: COLORS["accent"],
         ft.ControlState.HOVERED: COLORS["accent_hover"],
     },
-    color="#FFFFFF",
+    color={ft.ControlState.DISABLED: COLORS["text_dim"], ft.ControlState.DEFAULT: "#FFFFFF"},
     text_style=_LABEL,
     padding=_PAD,
     elevation=0,
@@ -47,8 +48,14 @@ ERROR_STYLE = ft.ButtonStyle(
 OUTLINE_STYLE = ft.ButtonStyle(
     shape=_SHAPE,
     side=ft.BorderSide(1, COLORS["rule_strong"]),
-    color=COLORS["text_main"],
-    bgcolor=COLORS["card_bg"],
+    color={
+        ft.ControlState.DISABLED: COLORS["text_dim"],
+        ft.ControlState.DEFAULT: COLORS["text_main"],
+    },
+    bgcolor={
+        ft.ControlState.DISABLED: COLORS["paper_sunk"],
+        ft.ControlState.DEFAULT: COLORS["card_bg"],
+    },
     text_style=ft.TextStyle(font_family=FONT_MEDIUM, size=13),
 )
 
@@ -80,8 +87,13 @@ DLG_FIELD_KWARGS: dict[str, Any] = dict(
 def refresh_styles() -> None:
     """Synchronize mutable style objects and DLG_FIELD_KWARGS after a theme change."""
     ACCENT_STYLE.bgcolor = {
+        ft.ControlState.DISABLED: COLORS["rule_strong"],
         ft.ControlState.DEFAULT: COLORS["accent"],
         ft.ControlState.HOVERED: COLORS["accent_hover"],
+    }
+    ACCENT_STYLE.color = {
+        ft.ControlState.DISABLED: COLORS["text_dim"],
+        ft.ControlState.DEFAULT: "#FFFFFF",
     }
     INK_STYLE.bgcolor = {
         ft.ControlState.DEFAULT: COLORS["ink_button"],
@@ -92,8 +104,14 @@ def refresh_styles() -> None:
         ft.ControlState.HOVERED: COLORS["delete_hover"],
     }
     OUTLINE_STYLE.side = ft.BorderSide(1, COLORS["rule_strong"])
-    OUTLINE_STYLE.color = COLORS["text_main"]
-    OUTLINE_STYLE.bgcolor = COLORS["card_bg"]
+    OUTLINE_STYLE.color = {
+        ft.ControlState.DISABLED: COLORS["text_dim"],
+        ft.ControlState.DEFAULT: COLORS["text_main"],
+    }
+    OUTLINE_STYLE.bgcolor = {
+        ft.ControlState.DISABLED: COLORS["paper_sunk"],
+        ft.ControlState.DEFAULT: COLORS["card_bg"],
+    }
 
     RAIL_STYLE.side = ft.BorderSide(1, COLORS["cover_line"])
     RAIL_STYLE.color = COLORS["cover_ink"]

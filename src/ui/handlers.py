@@ -1,5 +1,6 @@
 """Event handlers extracted from App for Single Responsibility compliance."""
 
+import contextlib
 from collections.abc import Callable
 
 import flet as ft
@@ -40,6 +41,7 @@ class AppHandlers:
         self._log = log_fn
         self._refresh = refresh_fn
         self._get_page_profiles = get_page_profiles
+        self._importing = False
 
     def on_launch(self, name: str) -> None:
         launch_or_stop(name, self._pm, self._bl, self._state, self._log)
@@ -73,10 +75,25 @@ class AppHandlers:
         assert page is not None
         add_profile(page, self._pm, self._ps, self._log, self._refresh)
 
-    async def on_import(self, _: ft.ControlEvent | None = None) -> None:
+    async def on_import(self, e: ft.ControlEvent | None = None) -> None:
+        control = e.control if e else None
+        if self._importing or (control is not None and control.disabled):
+            return
         refs = self._get_refs()
         assert refs is not None
-        await import_profile(refs.file_picker, self._pm, self._log, self._refresh)
+        self._importing = True
+        if control is not None:
+            control.disabled = True
+            with contextlib.suppress(RuntimeError):
+                control.update()
+        try:
+            await import_profile(refs.file_picker, self._pm, self._log, self._refresh)
+        finally:
+            self._importing = False
+            if control is not None:
+                control.disabled = False
+                with contextlib.suppress(RuntimeError):
+                    control.update()
 
     def on_export_open(self) -> None:
         page = self._get_page()

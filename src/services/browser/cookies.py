@@ -135,10 +135,12 @@ def _as_timestamp(value: Any) -> float:
 
 def _from_json(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     cookies = []
-    for item in items:
+    for index, item in enumerate(items, start=1):
         if not isinstance(item, dict) or not item.get("name") or not item.get("domain"):
             continue
         domain = item["domain"]
+        if not isinstance(domain, str):
+            raise CookieError(f"Cookie {index} field 'domain' must be a string")
         if item.get("hostOnly") is False and not domain.startswith("."):
             domain = "." + domain
         # Extension layout uses expirationDate; Playwright layout uses expires.

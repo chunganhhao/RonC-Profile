@@ -533,11 +533,22 @@ class ProfileManager:
             self._check_store_current()
             if name not in self.profiles:
                 return False
+            previous = self.profiles.copy()
+            previous_orders: list[tuple[Profile, int | None]] = []
             del self.profiles[name]
-            if any(p.display_order is not None for p in self.profiles.values()):
-                for index, profile in enumerate(self._ordered_profiles(), 1):
-                    profile.display_order = index
-            self.save_profiles()
+            try:
+                if any(p.display_order is not None for p in self.profiles.values()):
+                    for index, profile in enumerate(self._ordered_profiles(), 1):
+                        previous_orders.append((profile, profile.display_order))
+                        profile.display_order = index
+                self.save_profiles(strict=True)
+            except Exception as exc:
+                if not isinstance(exc, ProfileStoreChangedError):
+                    for profile, order in previous_orders:
+                        profile.display_order = order
+                    self.profiles.clear()
+                    self.profiles.update(previous)
+                raise
             # Inside the lock: a profile re-created under the same (or, on a
             # case-insensitive file system, a case-variant) name must not have
             # its fresh data dir removed by this delete.

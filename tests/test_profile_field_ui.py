@@ -112,6 +112,21 @@ def test_card_exposes_copy_and_five_field_editors():
     assert clicked[-1] == "fixture"
 
 
+@pytest.mark.parametrize(("engine", "label"), [("camoufox", "Camoufox"), ("chrome", "Chrome")])
+def test_card_engine_badge_does_not_wrap(engine, label):
+    card = build_profile_card(
+        Profile("fixture", engine=engine),
+        False,
+        False,
+        lambda _: None,
+        lambda _: None,
+        lambda _: None,
+        on_edit_field=lambda *_: None,
+    )
+    engine_badge = next(c for c in walk(card) if getattr(c, "value", None) == label)
+    assert engine_badge.no_wrap
+
+
 def test_card_active_feedback_renders_checkmarks():
     import flet as ft
 

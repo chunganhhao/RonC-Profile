@@ -3,6 +3,7 @@ import os
 import pathlib
 import zipfile
 from datetime import datetime
+from itertools import count
 
 from ...core.logging import get_logger
 from ...models.profile import (
@@ -39,10 +40,17 @@ def export_to_zip(
     """Create a ZIP archive of a profile and optionally its browser data."""
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        zip_filename = f"{profile.name}_{timestamp}.zip"
-        zip_path = os.path.join(export_path, zip_filename)
+        stem = f"{profile.name}_{timestamp}"
+        for index in count():
+            suffix = f"_{index}" if index else ""
+            zip_path = os.path.join(export_path, f"{stem}{suffix}.zip")
+            try:
+                zipf = zipfile.ZipFile(zip_path, "x", zipfile.ZIP_DEFLATED)
+            except FileExistsError:
+                continue
+            break
 
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+        with zipf:
             zipf.writestr("profile.json", json.dumps(profile.to_dict(), indent=2))
 
             if include_data and pathlib.Path(profile_data_dir).exists():

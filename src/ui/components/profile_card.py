@@ -358,6 +358,7 @@ def _group_and_engine_badges(profile: Profile) -> ft.Control:
             size=10.5,
             font_family=FONT_DATA,
             color=COLORS["text_sub"],
+            no_wrap=True,
         ),
     )
     return ft.Column(
