@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+### Sửa
+- Gán proxy từ pool chỉ báo thành công sau khi lưu profile; nếu ghi thất bại, giữ nguyên proxy trong bộ nhớ.
+
 ## 2.4.0 - 2026-10-30
 
 ### Thay đổi

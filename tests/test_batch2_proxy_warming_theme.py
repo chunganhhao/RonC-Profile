@@ -1,7 +1,9 @@
 import datetime
+import errno
 from types import SimpleNamespace
 
 import flet as ft
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import create_app
@@ -269,6 +271,50 @@ def test_batch2_api_endpoints(tmp_path, monkeypatch):
 
         del_w = client.delete(f"/api/v1/warming/tasks/{tid}")
         assert del_w.status_code == 200
+
+
+@pytest.mark.parametrize("names", [["first", "missing", "second", "first"], [], ["missing"]])
+def test_proxy_assign_strict_save_rollback(tmp_path, monkeypatch, names):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    container = Container()
+    pm = container.profile_manager
+    for name in ("first", "second"):
+        pm.add_profile(name, "192.0.2.1:8080", "windows", engine="chrome")
+    originals = pm.profiles.copy()
+    before = {name: p.to_dict() for name, p in pm.profiles.items()}
+    with TestClient(
+        create_app(container), base_url="http://127.0.0.1", raise_server_exceptions=False
+    ) as client:
+        client.post("/api/v1/proxy/pool/bulk", json={"text": "198.51.100.99:8080"})
+        with monkeypatch.context() as failing:
+
+            def fail_replace(*args):
+                raise OSError(errno.ENOSPC, "No space left on device")
+
+            failing.setattr(pm_mod, "_replace", fail_replace)
+            response = client.post("/api/v1/proxy/pool/assign", json={"profile_names": names})
+        assert {name: p.to_dict() for name, p in pm.profiles.items()} == before
+        assert all(pm.profiles[name] is original for name, original in originals.items())
+        assert {name: p.to_dict() for name, p in pm_mod.ProfileManager().profiles.items()} == before
+        if "first" in names:
+            assert response.status_code == 500
+            assert response.text == "Internal Server Error"
+        else:
+            assert response.status_code == 200
+            assert response.json() == {"updated": 0}
+        response = client.post("/api/v1/proxy/pool/assign", json={"profile_names": names})
+        assert response.status_code == 200
+        assert response.json() == {"updated": 3 if "first" in names else 0}
+        persisted = pm_mod.ProfileManager()
+        for name in originals:
+            expected = "198.51.100.99:8080" if name in names else "192.0.2.1:8080"
+            assert pm.profiles[name].proxy == expected
+            assert persisted.profiles[name].proxy == expected
 
 
 def test_pionlogin_ui_components_and_dialogs(tmp_path, monkeypatch):
@@ -783,10 +829,10 @@ def test_b2_f1_to_f4_warming_concurrency_duration_and_api_lifespan(tmp_path, mon
     save_calls = 0
     orig_save = pm.save_profiles
 
-    def counted_save():
+    def counted_save(**kwargs):
         nonlocal save_calls
         save_calls += 1
-        orig_save()
+        orig_save(**kwargs)
 
     monkeypatch.setattr(pm, "save_profiles", counted_save)
     assert pool.assign_round_robin(["shared-prof", "uses-10"], pm) == 2
