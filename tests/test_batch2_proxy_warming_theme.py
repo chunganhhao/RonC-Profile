@@ -372,6 +372,88 @@ def test_proxy_pool_ui_auto_assign_handles_save_error(tmp_path, monkeypatch):
     assert refreshed == [True]
 
 
+def _fail_pool_save(monkeypatch):
+    import src.services.proxy.pool as pool_mod
+
+    def fail_mkstemp(*_args, **_kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied", "proxies.json")
+
+    monkeypatch.setattr(pool_mod.tempfile, "mkstemp", fail_mkstemp)
+
+
+def test_proxy_pool_bulk_import_save_error_keeps_pool(tmp_path, monkeypatch):
+    path = tmp_path / "proxies.json"
+    pool = ProxyPoolService(file_path=str(path))
+    pool.bulk_import("192.0.2.10:8080|Old")
+    before = [e.to_dict() for e in pool.list_entries()]
+    saved = path.read_text(encoding="utf-8")
+
+    with monkeypatch.context() as failing:
+        _fail_pool_save(failing)
+        with pytest.raises(PermissionError):
+            pool.bulk_import("192.0.2.10:8080|New\n198.51.100.20:3128")
+
+    assert [e.to_dict() for e in pool.list_entries()] == before
+    assert path.read_text(encoding="utf-8") == saved
+    assert pool.bulk_import("198.51.100.20:3128") == (1, 0)
+    assert {e.proxy for e in ProxyPoolService(file_path=str(path)).list_entries()} == {
+        "192.0.2.10:8080",
+        "198.51.100.20:3128",
+    }
+
+
+def test_proxy_pool_ui_import_handles_save_error(tmp_path, monkeypatch):
+    from src.core import config as app_config
+    from src.core.strings import get_string
+    from src.services.proxy.service import ProxyService
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+
+    pm = pm_mod.ProfileManager()
+    pool = ProxyPoolService(file_path=str(tmp_path / "proxies.json"))
+    page = _DummyPage()
+    logs: list[str] = []
+    refreshed: list[bool] = []
+    open_proxy_pool_dialog(
+        page,
+        pool,
+        ProxyService(),
+        pm,
+        log_fn=logs.append,
+        refresh_fn=lambda: refreshed.append(True),
+    )
+    controls = list(_walk_controls(page.dialog))
+    import_label = get_string("proxy_pool_import_btn")
+    import_btn = next(c for c in controls if getattr(c, "content", None) == import_label)
+    bulk_input = next(c for c in controls if isinstance(c, ft.TextField) and c.multiline)
+    feedback = next(
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    )
+
+    bulk_input.value = "198.51.100.20:3128"
+    _fail_pool_save(monkeypatch)
+    import_btn.on_click(None)
+
+    assert feedback.visible is True
+    assert feedback.color == COLORS["error"]
+    assert "Permission denied" in feedback.value
+    assert logs and "Permission denied" in logs[-1]
+    assert bulk_input.value == "198.51.100.20:3128"
+    assert pool.list_entries() == []
+    assert refreshed == []
+
+    monkeypatch.undo()
+    import_btn.on_click(None)
+
+    assert feedback.color == COLORS["success"]
+    assert feedback.value == get_string("proxy_pool_imported_msg", added=1, invalid=0)
+    assert bulk_input.value == ""
+    assert [e.proxy for e in pool.list_entries()] == ["198.51.100.20:3128"]
+    assert refreshed == [True]
+
+
 def test_pionlogin_ui_components_and_dialogs(tmp_path, monkeypatch):
     from src.core import config as app_config
 

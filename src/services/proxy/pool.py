@@ -7,7 +7,7 @@ import os
 import tempfile
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import TYPE_CHECKING
 
 from ...core import config as app_config
@@ -157,6 +157,7 @@ class ProxyPoolService:
         added = 0
         invalid = 0
         with self._lock:
+            previous = {pid: replace(entry) for pid, entry in self._entries.items()}
             for raw_line in (text or "").splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -174,7 +175,11 @@ class ProxyPoolService:
                 else:
                     invalid += 1
             if added > 0:
-                self._save()
+                try:
+                    self._save()
+                except Exception:
+                    self._entries = previous
+                    raise
         return added, invalid
 
     def remove_proxy(self, proxy_id: str) -> bool:

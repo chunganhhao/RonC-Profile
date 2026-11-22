@@ -232,10 +232,20 @@ def open_proxy_pool_dialog(
         raw = (bulk_input.value or "").strip()
         if not raw:
             return
-        added, invalid = pool_service.bulk_import(
-            raw,
-            default_label=(tag_input.value or "").strip(),
-        )
+        try:
+            added, invalid = pool_service.bulk_import(
+                raw,
+                default_label=(tag_input.value or "").strip(),
+            )
+        except OSError as exc:
+            err = get_string("proxy_pool_import_failed_msg", error=exc)
+            feedback_text.value = err
+            feedback_text.color = COLORS["error"]
+            feedback_text.visible = True
+            log(err)
+            with contextlib.suppress(Exception):
+                page.update()
+            return
         bulk_input.value = ""
         msg = get_string("proxy_pool_imported_msg", added=added, invalid=invalid)
         feedback_text.value = msg
