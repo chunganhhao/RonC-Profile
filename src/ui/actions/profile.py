@@ -22,7 +22,7 @@ def _store_conflict(on_save):
     return guarded
 
 
-def _delete_profile(
+def delete_profile_logged(
     name: str,
     pm: IProfileManager,
     log: Callable[[str], None],
@@ -43,7 +43,7 @@ def delete_profile(
     refresh: Callable[[], None],
 ) -> None:
     def do_delete() -> None:
-        _delete_profile(name, pm, log)
+        delete_profile_logged(name, pm, log)
         refresh()
 
     open_confirm_dialog(page, name, do_delete)
