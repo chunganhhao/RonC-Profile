@@ -136,25 +136,14 @@ def _as_timestamp(value: Any) -> float:
 def _from_json(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     cookies = []
     for index, item in enumerate(items, start=1):
-        if not isinstance(item, dict):
-            raise CookieError(f"Cookie {index} must be an object")
-        for field in ("name", "domain", "value", "path", "sameSite"):
-            if field in item and not isinstance(item[field], str):
-                raise CookieError(f"Cookie {index} field '{field}' must be a string")
-        for field in ("hostOnly", "httpOnly", "secure", "session"):
-            if field in item and not isinstance(item[field], bool):
-                raise CookieError(f"Cookie {index} field '{field}' must be a boolean")
-        for field in ("expirationDate", "expires"):
-            value = item.get(field)
-            if value is not None and (
-                isinstance(value, bool) or not isinstance(value, (int, float, str))
-            ):
-                raise CookieError(f"Cookie {index} field '{field}' must be a number or string")
-        if not item.get("name") or not item.get("domain"):
+        if not isinstance(item, dict) or not item.get("name") or not item.get("domain"):
             continue
         domain = item["domain"]
-        if item.get("hostOnly") is False and not domain.startswith("."):
-            domain = "." + domain
+        if item.get("hostOnly") is False:
+            if not isinstance(domain, str):
+                raise CookieError(f"Cookie {index} field 'domain' must be a string")
+            if not domain.startswith("."):
+                domain = "." + domain
         # Extension layout uses expirationDate; Playwright layout uses expires.
         expires = item.get("expirationDate", item.get("expires"))
         same_site = item.get("sameSite")

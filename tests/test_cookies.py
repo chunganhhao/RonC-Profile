@@ -165,21 +165,136 @@ def test_non_numeric_expiry_is_treated_as_session():
     assert c["expires"] > time.time() + 300 * 24 * 3600
 
 
+def _export_cases():
+    session_expiry = 1_700_000_000 + 365 * 24 * 3600
+    expected = {
+        "name": "sid",
+        "value": "abc",
+        "domain": ".example.com",
+        "path": "/",
+        "httpOnly": True,
+        "secure": True,
+        "sameSite": "Lax",
+        "expires": 2_000_000_000.0,
+    }
+    cases = []
+
+    def add(label, data, **changes):
+        cases.append((label, json.dumps(data), [dict(expected, **changes)]))
+
+    for same_site, parsed in (
+        (None, "None"),
+        ("no_restriction", "None"),
+        ("lax", "Lax"),
+        ("strict", "Strict"),
+        ("unspecified", "Lax"),
+    ):
+        add(
+            f"cookie-editor-{same_site}",
+            [_ext_cookie(sameSite=same_site, storeId=None)],
+            sameSite=parsed,
+        )
+    session = _ext_cookie(session=True)
+    del session["expirationDate"]
+    add("cookie-editor-session", [session], expires=session_expiry)
+    add(
+        "edit-this-cookie",
+        [_ext_cookie(id=1, storeId="0", expirationDate=2_000_000_000.5)],
+        expires=2_000_000_000.5,
+    )
+    add("gologin-gpm-extension-layout", [_ext_cookie(storeId="0")])
+    add("cookies-wrapper", {"cookies": [_ext_cookie()]})
+    add("single-object", _ext_cookie())
+    for variant in ("null", "absent", "number"):
+        item = _ext_cookie()
+        del item["expirationDate"]
+        if variant != "absent":
+            item["expires"] = None if variant == "null" else 2_000_000_000
+        add(
+            f"playwright-expires-{variant}",
+            [item],
+            expires=2_000_000_000.0 if variant == "number" else session_expiry,
+        )
+    for field in (
+        "value",
+        "path",
+        "sameSite",
+        "hostOnly",
+        "httpOnly",
+        "secure",
+        "session",
+        "expirationDate",
+        "expires",
+        "storeId",
+        "id",
+    ):
+        for variant in ("null", "absent"):
+            item = _ext_cookie(domain="example.com", secure=False)
+            if variant == "null":
+                item[field] = None
+            else:
+                item.pop(field, None)
+            changes = {"secure": False}
+            if field == "value":
+                changes["value"] = "None" if variant == "null" else ""
+            elif field == "sameSite":
+                changes.update(sameSite="None", secure=True)
+            elif field == "hostOnly":
+                changes["domain"] = "example.com"
+            elif field == "httpOnly":
+                changes["httpOnly"] = False
+            elif field == "expirationDate":
+                changes["expires"] = session_expiry
+            add(f"{field}-{variant}", [item], **changes)
+    for field in ("name", "domain"):
+        for variant in ("null", "absent"):
+            item = _ext_cookie()
+            if variant == "null":
+                item[field] = None
+            else:
+                del item[field]
+            cases.append((f"{field}-{variant}", json.dumps([item]), []))
+    for field, value, changes in (
+        ("value", 123, {"value": "123"}),
+        ("value", {}, {"value": "{}"}),
+        ("path", 123, {"path": 123}),
+        ("path", [], {"path": "/"}),
+        ("sameSite", [], {"sameSite": "Lax"}),
+        ("hostOnly", 0, {}),
+        ("httpOnly", "false", {}),
+        ("secure", [], {"secure": False}),
+        ("session", 1, {"expires": session_expiry}),
+        ("expirationDate", {}, {"expires": session_expiry}),
+        ("expires", [], {}),
+        ("name", 123, {"name": 123}),
+    ):
+        add(f"coerced-{field}-{type(value).__name__}", [_ext_cookie(**{field: value})], **changes)
+    cases.append(("non-object-entries", json.dumps([None, 123, [], _ext_cookie()]), [expected]))
+    cases.append(("empty", "[]", []))
+    cases.append(
+        (
+            "netscape-http-only-session",
+            "# Netscape HTTP Cookie File\n#HttpOnly_.example.com\tTRUE\t/\tTRUE\t0\tsid\tabc\n",
+            [dict(expected, expires=session_expiry)],
+        )
+    )
+    return cases
+
+
+EXPORT_CASES = _export_cases()
+
+
+@pytest.mark.parametrize("label, text, expected", EXPORT_CASES, ids=[c[0] for c in EXPORT_CASES])
+def test_realistic_export_shapes(label, text, expected, monkeypatch):
+    monkeypatch.setattr(cookies.time, "time", lambda: 1_700_000_000)
+    assert cookies.parse_cookies(text) == expected
+
+
 INVALID_COOKIES = [
     ([_ext_cookie(domain=123)], "domain"),
-    ([_ext_cookie(name=[])], "name"),
-    ([_ext_cookie(value={})], "value"),
-    ([_ext_cookie(path=123)], "path"),
-    ([_ext_cookie(sameSite=[])], "sameSite"),
-    ([_ext_cookie(hostOnly=0)], "hostOnly"),
-    ([_ext_cookie(httpOnly="false")], "httpOnly"),
-    ([_ext_cookie(secure=[])], "secure"),
-    ([_ext_cookie(session=1)], "session"),
-    ([_ext_cookie(expirationDate={})], "expirationDate"),
-    ([_ext_cookie(expires=[])], "expires"),
-    ([_ext_cookie(domain=None)], "domain"),
-    ([_ext_cookie(), 123], "object"),
-    ([None], "object"),
+    ([_ext_cookie(domain=["example.com"])], "domain"),
+    ([_ext_cookie(domain={"host": "example.com"})], "domain"),
+    ([_ext_cookie(domain=True)], "domain"),
     ({"cookies": {}}, "list"),
 ]
 
