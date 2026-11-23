@@ -885,7 +885,9 @@ def test_legacy_auto_cpu_preserves_identity_and_stale_web_seed(client, workdir, 
     assert leg_after_bound_auto is not None
     assert not leg_after_bound_auto.requires_apple_silicon_026
     assert leg_after_bound_auto.platform_version == "14.6.1"
-    assert leg_after_bound_auto.hardware_concurrency == 11
+    assert leg_after_bound_auto.hardware_concurrency == chrome_persona.default_cpu_for_persona(
+        "macos", 39, coherence_026=False
+    )
 
     # Full 026 payload against bound-Run19 is refused atomically with file bytes unchanged.
     m026_full = fingerprint.generate_chrome_persona("macos", seed=39, coherence_026=True)
@@ -947,11 +949,11 @@ def test_save_contract_flet_cpu_patch_api_no_platform_and_atomic_refusal(
     chrome_persona.save(
         race_dir,
         chrome_persona.Persona(
-            seed=39,
+            seed=6,
             platform="macos",
             platform_version="14.6.1",
             brand="Edge",
-            hardware_concurrency=16,
+            hardware_concurrency=11,
         ),
     )
 
@@ -1012,7 +1014,7 @@ def test_save_contract_flet_cpu_patch_api_no_platform_and_atomic_refusal(
         for c in ctrls
         if isinstance(c, ft.Dropdown)
         and any(o.key == "12" for o in (c.options or []))
-        and any(o.key == "16" for o in (c.options or []))
+        and any(o.key == "11" for o in (c.options or []))
     )
     cores_dd.value = "12"
     cores_dd.on_select(None)
@@ -1054,7 +1056,7 @@ def test_save_contract_flet_cpu_patch_api_no_platform_and_atomic_refusal(
         return None
 
     with monkeypatch.context() as mc:
-        mc.setattr(chrome_persona.secrets, "randbelow", lambda _: 38)
+        mc.setattr(chrome_persona.secrets, "randbelow", lambda _: 5)
         page_meta = DummyPage()
         open_profile_dialog(
             page_meta, None, on_save_uninit, pm.profiles["flet-uninit-race"], profile_manager=pm
@@ -1097,7 +1099,7 @@ def test_save_contract_flet_cpu_patch_api_no_platform_and_atomic_refusal(
         for c in ctrls_a
         if isinstance(c, ft.Dropdown)
         and any(o.key == "12" for o in (c.options or []))
-        and any(o.key == "16" for o in (c.options or []))
+        and any(o.key == "11" for o in (c.options or []))
     )
     cores_a.value = "12"
     cores_a.on_select(None)
@@ -1122,43 +1124,47 @@ def test_save_contract_flet_cpu_patch_api_no_platform_and_atomic_refusal(
     )
     empty_captured: dict = {}
     page_empty = DummyPage()
-    open_profile_dialog(
-        page_empty,
-        None,
-        lambda name, proxy, os_type, tz, loc, eng, **kw: (
-            empty_captured.update(kw),
-            pm.update_profile(
-                "flet-uninit-empty",
-                name,
-                proxy,
-                os_type,
-                tz,
-                loc,
-                initial_fingerprint=kw["initial_fingerprint"],
-            ),
+    with monkeypatch.context() as mc:
+        mc.setattr(chrome_persona.secrets, "randbelow", lambda _: 5)
+        open_profile_dialog(
+            page_empty,
             None,
-        )[2],
-        pm.profiles["flet-uninit-empty"],
-        profile_manager=pm,
-    )
+            lambda name, proxy, os_type, tz, loc, eng, **kw: (
+                empty_captured.update(kw),
+                pm.update_profile(
+                    "flet-uninit-empty",
+                    name,
+                    proxy,
+                    os_type,
+                    tz,
+                    loc,
+                    initial_fingerprint=kw["initial_fingerprint"],
+                ),
+                None,
+            )[2],
+            pm.profiles["flet-uninit-empty"],
+            profile_manager=pm,
+        )
     cores_empty = next(
         c
         for c in walk(page_empty.dialog)
         if isinstance(c, ft.Dropdown)
         and any(o.key == "12" for o in (c.options or []))
-        and any(o.key == "16" for o in (c.options or []))
+        and any(o.key == "11" for o in (c.options or []))
     )
     cores_empty.value = "12"
     cores_empty.on_select(None)
     page_empty.dialog.actions[-1].on_click(None)
     assert empty_captured["initial_fingerprint"] == {
         "platform": "macos",
+        "seed": 6,
         "hardware_concurrency": 12,
     }
     empty_saved = chrome_persona.load(workdir / "camoufox_data/flet-uninit-empty")
     assert (
         empty_saved is not None
         and empty_saved.platform == "macos"
+        and empty_saved.seed == 6
         and empty_saved.hardware_concurrency == 12
     )
 

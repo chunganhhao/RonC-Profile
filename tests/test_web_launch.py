@@ -65,7 +65,9 @@ def test_editor_uses_server_host_for_chrome(host):
     result = run_js(
         f"""
         const hostOS = {json.dumps(host)}, os = {{value: 'macos'}}, engine = {{value: 'chrome'}};
+        const coresSelect = {{value: ''}};
         let p = null, hwChanged = false, osChanged = false;
+        function syncCoreOptions() {{}}
         function renderHwNote() {{}}
         function change() {{{handler}}}
         change();
@@ -91,6 +93,7 @@ def test_engine_change_preserves_explicit_os():
         const p = null, coresSelect = {{value: ''}};
         let osChanged = false, hwChanged = false, seedRolled = false;
         let coresOverridden = false, currentSeed = 123456789;
+        function syncCoreOptions() {{}}
         function renderHwNote() {{}}
         function pickOS() {{{os_handler}}}
         function changeEngine() {{{engine_handler}}}
@@ -102,6 +105,34 @@ def test_engine_change_preserves_explicit_os():
         """
     )
     assert result == ["windows", "windows"]
+
+
+def test_editor_offers_only_m2_cpu_counts():
+    from fastapi.testclient import TestClient
+
+    from src.api.app import create_app
+    from src.core.container import Container
+
+    response = TestClient(create_app(Container()), base_url="http://127.0.0.1").get("/")
+    assert response.status_code == 200
+    html = response.text
+    hardware = re.search(r"const panelHardware = .*;", html)
+    controls = html.split("    const existingFp = p?.fingerprint;", 1)[1].split(
+        "    const webrtcSelect", 1
+    )[0]
+    assert run_js(
+        f"""
+        {hardware[0] if hardware else ""}
+        const p = {{fingerprint: {{seed: 495, hardware_concurrency: 14}}}};
+        const existingFp = p.fingerprint;
+        const engine = {{value: 'chrome'}}, os = {{value: 'macos'}};
+        function h(tag, attrs, children = []) {{
+          return {{...attrs, children, replaceChildren(...items) {{this.children = items;}}}};
+        }}
+        {controls}
+        console.log(JSON.stringify(coresSelect.children.map(option => option.value)));
+        """
+    ) == ["", "8"]
 
 
 @pytest.mark.parametrize("failure", ["network", "http", "json"])

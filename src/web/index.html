@@ -594,6 +594,7 @@ input.ext-switch:checked::after { transform: translateX(16px); background: var(-
 
 <script>
 "use strict";
+const panelHardware = /* panel hardware */ {};
 const I18N = {
   vi: {
     "core_applied": "Đã gán core cho lần mở sau. Dữ liệu browser giữ nguyên. Backup riêng tư: {path}",
@@ -1417,10 +1418,24 @@ function openEditor(p) {
     const existingCores = existingFp && existingFp.hardware_concurrency ? String(existingFp.hardware_concurrency) : "";
     let coresOverridden = Boolean(p && existingCores);
     const coreOptions = [...new Set(["4", "6", "8", "10", "11", "12", "14", "16", "20", existingCores].filter(Boolean))].sort((a, b) => Number(a) - Number(b));
-    const coresSelect = h("select", { id: "f-cores" }, [
-      h("option", { value: "", selected: !existingCores }, "Auto"),
-      ...coreOptions.map((c) => h("option", { value: c, selected: existingCores === c }, `${c} Cores`)),
-    ]);
+    const coresSelect = h("select", { id: "f-cores" });
+    const syncCoreOptions = (value) => {
+      let choices = coreOptions;
+      if (engine.value === "chrome" && os.value === "macos") {
+        const { macCpuCounts, seedMax } = panelHardware;
+        const seed = currentSeed;
+        const aligned = seed % 3 === 0 ? seed : (seed <= Math.floor(seedMax / 3) ? seed * 3 : seed - seed % 3);
+        choices = seed != null && macCpuCounts ? macCpuCounts[aligned % macCpuCounts.length].map(String) : [];
+      }
+      const selected = choices.includes(value) ? value : "";
+      coresSelect.replaceChildren(
+        h("option", { value: "" }, "Auto"),
+        ...choices.map((c) => h("option", { value: c }, `${c} Cores`))
+      );
+      coresSelect.value = selected;
+      coresOverridden = Boolean(selected);
+    };
+    syncCoreOptions(existingCores);
     const webrtcSelect = h("select", { id: "f-webrtc" }, [
       ["proxy", t("webrtc_proxy")],
       ["disable", t("webrtc_disable")],
@@ -1450,11 +1465,13 @@ function openEditor(p) {
       coresOverridden = false;
       coresSelect.value = "";
       currentSeed = Math.floor(100000000 + Math.random() * 2000000000);
+      syncCoreOptions("");
       renderHwNote();
     } }, icon("reload", true), t("roll_fp"));
     engine.onchange = () => {
       if (!p && !osChanged) os.value = engine.value === "chrome" ? hostOS : "macos";
       hwChanged = true;
+      syncCoreOptions(coresSelect.value);
       renderHwNote();
     };
     os.onchange = () => {
@@ -1464,6 +1481,7 @@ function openEditor(p) {
       coresOverridden = false;
       coresSelect.value = "";
       if (currentSeed == null) currentSeed = Math.floor(100000000 + Math.random() * 2000000000);
+      syncCoreOptions("");
       renderHwNote();
     };
     coresSelect.onchange = () => { hwChanged = true; coresOverridden = Boolean(coresSelect.value); renderHwNote(); };

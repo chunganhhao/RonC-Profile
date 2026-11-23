@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import pathlib
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from chrome_engine.persona import MACOS_CPU_COUNTS_BY_SLOT, SEED_MAX
 from chrome_engine.release import host_os
 
 from ..core.config import API_PORT, API_TOKEN, HEADLESS
@@ -119,8 +121,10 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
         }
 
     @app.get("/", include_in_schema=False)
-    def panel() -> FileResponse:
-        return FileResponse(_PANEL, headers={"Cache-Control": "no-store"})
+    def panel() -> HTMLResponse:
+        hardware = json.dumps({"macCpuCounts": MACOS_CPU_COUNTS_BY_SLOT, "seedMax": SEED_MAX})
+        html = _PANEL.read_text(encoding="utf-8").replace("/* panel hardware */ {}", hardware, 1)
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     @app.get("/assets/fonts/{name}", include_in_schema=False)
     def font(name: str) -> FileResponse:

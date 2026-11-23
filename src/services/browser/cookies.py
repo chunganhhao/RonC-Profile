@@ -173,7 +173,7 @@ def _from_json(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _from_netscape(text: str) -> list[dict[str, Any]]:
     cookies = []
     for raw in text.splitlines():
-        line = raw.strip()
+        line = raw.lstrip()
         http_only = line.startswith("#HttpOnly_")
         if http_only:
             line = line.removeprefix("#HttpOnly_")

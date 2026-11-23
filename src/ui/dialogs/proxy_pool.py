@@ -57,6 +57,15 @@ def open_proxy_pool_dialog(
     subtitle_text = ft.Text("", size=13, color=COLORS["text_sub"])
     list_col = ft.Column(spacing=4, scroll=ft.ScrollMode.AUTO, expand=True)
 
+    def _show_save_error() -> None:
+        msg = get_string("proxy_pool_save_failed_msg")
+        feedback_text.value = msg
+        feedback_text.color = COLORS["error"]
+        feedback_text.visible = True
+        log(msg)
+        with contextlib.suppress(Exception):
+            page.update()
+
     def _status_badge(entry: ProxyPoolEntry) -> ft.Container:
         if entry.status == "working":
             fg = COLORS["success"]
@@ -89,13 +98,21 @@ def open_proxy_pool_dialog(
 
     def _check_single(pid: str) -> None:
         def _worker() -> None:
-            pool_service.check_entry(pid, proxy_service)
+            try:
+                pool_service.check_entry(pid, proxy_service)
+            except OSError:
+                _show_save_error()
+                return
             _rebuild_rows(notify=True)
 
         threading.Thread(target=_worker, daemon=True).start()
 
     def _delete_single(pid: str) -> None:
-        pool_service.remove_proxy(pid)
+        try:
+            pool_service.remove_proxy(pid)
+        except OSError:
+            _show_save_error()
+            return
         _rebuild_rows(notify=True)
         if refresh_fn:
             refresh_fn()
@@ -269,16 +286,24 @@ def open_proxy_pool_dialog(
             page.update()
 
         def _worker() -> None:
-            pool_service.check_all(proxy_service)
-            check_all_btn.disabled = False
-            _rebuild_rows(notify=True)
+            try:
+                pool_service.check_all(proxy_service)
+            except OSError:
+                _show_save_error()
+            finally:
+                check_all_btn.disabled = False
+                _rebuild_rows(notify=True)
 
         threading.Thread(target=_worker, daemon=True).start()
 
     check_all_btn.on_click = _on_check_all
 
     def _on_clear_dead(_: ft.ControlEvent) -> None:
-        removed = pool_service.clear_dead()
+        try:
+            removed = pool_service.clear_dead()
+        except OSError:
+            _show_save_error()
+            return
         msg = get_string("proxy_pool_cleared_dead_msg", count=removed)
         feedback_text.value = msg
         feedback_text.color = COLORS["text_sub"]

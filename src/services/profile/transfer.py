@@ -1,6 +1,10 @@
+import contextlib
+import errno
 import json
 import os
 import pathlib
+import stat
+import tempfile
 import zipfile
 from datetime import datetime
 from itertools import count
@@ -29,6 +33,9 @@ from ..browser.fingerprint import IDENTITY_FILES
 
 logger = get_logger("profile.transfer")
 
+_EXPORT_STAGING_PREFIX = ".ronc-profile-export-"
+_EXPORT_STAGING_SUFFIX = ".tmp"
+
 
 def export_to_zip(
     profile: Profile,
@@ -41,42 +48,83 @@ def export_to_zip(
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         stem = f"{profile.name}_{timestamp}"
-        for index in count():
-            suffix = f"_{index}" if index else ""
-            zip_path = os.path.join(export_path, f"{stem}{suffix}.zip")
-            try:
-                zipf = zipfile.ZipFile(zip_path, "x", zipfile.ZIP_DEFLATED)
-            except FileExistsError:
-                continue
-            break
+        fd, staging_path = tempfile.mkstemp(
+            dir=export_path, prefix=_EXPORT_STAGING_PREFIX, suffix=_EXPORT_STAGING_SUFFIX
+        )
+        with contextlib.ExitStack() as cleanup:
+            cleanup.callback(pathlib.Path(staging_path).unlink, missing_ok=True)
+            with (
+                os.fdopen(fd, "w+b") as staging,
+                zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED) as zipf,
+            ):
+                zipf.writestr("profile.json", json.dumps(profile.to_dict(), indent=2))
 
-        with zipf:
-            zipf.writestr("profile.json", json.dumps(profile.to_dict(), indent=2))
+                if include_data and pathlib.Path(profile_data_dir).exists():
+                    archive_stat = os.fstat(staging.fileno())
+                    for root, _dirs, files in os.walk(profile_data_dir):
+                        for file in files:
+                            if file.startswith(_EXPORT_STAGING_PREFIX) and file.endswith(
+                                _EXPORT_STAGING_SUFFIX
+                            ):
+                                continue
+                            file_path = os.path.join(root, file)
+                            relative_path = os.path.relpath(file_path, profile_data_dir)
+                            if relative_path in exclude_files:
+                                continue
+                            try:
+                                source_stat = os.lstat(file_path)
+                                if not stat.S_ISREG(source_stat.st_mode) or os.path.samestat(
+                                    source_stat, archive_stat
+                                ):
+                                    continue
+                                zipf.write(file_path, os.path.join("data", relative_path))
+                            except FileNotFoundError as exc:
+                                if exc.filename != file_path:
+                                    raise
+                else:
+                    # The fingerprint is the profile's identity, not browser data.
+                    for identity in IDENTITY_FILES:
+                        fp_file = os.path.join(profile_data_dir, identity)
+                        if pathlib.Path(fp_file).exists():
+                            zipf.write(fp_file, os.path.join("data", identity))
 
-            if include_data and pathlib.Path(profile_data_dir).exists():
-                archive_stat = os.stat(zip_path)
-                for root, _dirs, files in os.walk(profile_data_dir):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        relative_path = os.path.relpath(file_path, profile_data_dir)
-                        if relative_path in exclude_files:
-                            continue
-                        if os.path.samestat(os.stat(file_path), archive_stat):
-                            continue
-                        zipf.write(file_path, os.path.join("data", relative_path))
-            else:
-                # The fingerprint is the profile's identity, not browser data:
-                # keep it so the imported profile presents the same device.
-                for identity in IDENTITY_FILES:
-                    fp_file = os.path.join(profile_data_dir, identity)
-                    if pathlib.Path(fp_file).exists():
-                        zipf.write(fp_file, os.path.join("data", identity))
+            zip_path = _publish_zip(staging_path, export_path, stem)
 
         logger.info("Exported profile %s to %s", profile.name, zip_path)
         return True, zip_path
     except Exception as e:
         logger.exception("Error exporting profile %s: %s", profile.name, e)
         return False, str(e)
+
+
+def _publish_zip(staging_path: str, export_path: str, stem: str) -> str:
+    for index in count():
+        suffix = f"_{index}" if index else ""
+        zip_path = os.path.join(export_path, f"{stem}{suffix}.zip")
+        try:
+            if os.name == "nt":
+                os.rename(staging_path, zip_path)
+            else:
+                os.link(staging_path, zip_path)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            if exc.errno not in (errno.EOPNOTSUPP, errno.ENOSYS, errno.EPERM):
+                raise
+        else:
+            return zip_path
+        # Filesystems without links still need an exclusive filename reservation.
+        try:
+            with open(zip_path, "xb"):
+                pass
+        except FileExistsError:
+            continue
+        try:
+            os.replace(staging_path, zip_path)
+        except BaseException:
+            pathlib.Path(zip_path).unlink(missing_ok=True)
+            raise
+        return zip_path
 
 
 def read_profile_meta(zip_path: str) -> dict | None:

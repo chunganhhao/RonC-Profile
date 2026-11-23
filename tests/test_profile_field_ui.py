@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+import flet as ft
 import pytest
 
 from src.models.profile import Profile
@@ -97,6 +98,27 @@ def test_chromium_warning_uses_current_theme(initial, target):
     finally:
         set_theme_mode(previous)
         refresh_styles()
+
+
+def test_chrome_m2_desktop_cpu_picker_uses_chip_options(monkeypatch):
+    from chrome_engine.persona import generate
+    from src.services.browser import fingerprint
+    from src.ui.dialogs.profile import open_profile_dialog
+
+    persona = generate("macos", seed=495, coherence_026=True).to_json()
+    persona["hardware_concurrency"] = 14
+    monkeypatch.setattr(fingerprint, "load_saved_chrome_persona", lambda _: persona)
+    page = Page()
+    open_profile_dialog(
+        page, None, lambda *_args: None, Profile("m2", engine="chrome", os_type="macos")
+    )
+    cpu = next(
+        control
+        for control in walk(page.dialog)
+        if isinstance(control, ft.Dropdown) and any(option.key == "8" for option in control.options)
+    )
+    assert [option.key for option in cpu.options] == ["8"]
+    assert cpu.value == "8"
 
 
 def test_native_field_dialog_changes_name_not_account():

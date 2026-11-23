@@ -7,6 +7,7 @@ from typing import Any
 
 import flet as ft
 
+from chrome_engine.persona import macos_cpu_counts_for_seed
 from chrome_engine.release import host_os
 
 from ...core.config import DATA_DIR
@@ -372,6 +373,11 @@ def open_profile_dialog(
         ]
 
     def _core_options_for(os_name: str, renderer: str) -> list[ft.dropdown.Option]:
+        if engine_dropdown.value == "chrome" and os_name == "macos":
+            return [
+                ft.dropdown.Option(str(c), f"{c} Cores")
+                for c in macos_cpu_counts_for_seed(chrome_state["persona"]["seed"])
+            ]
         cores = set(fp_service.available_cores(os_name, renderer))
         if engine_dropdown.value == "chrome":
             from chrome_engine.persona import _CORES
@@ -577,9 +583,12 @@ def open_profile_dialog(
                 core_version=bound_core,
             )
             if is_chrome_mode:
+                cores_dropdown.options = _core_options_for(os_val, renderer_hint)
                 c_str = str(chrome_state["persona"].get("hardware_concurrency") or 8)
                 if c_str in {opt.key for opt in cores_dropdown.options}:
                     cores_dropdown.value = c_str
+                elif cores_dropdown.options:
+                    cores_dropdown.value = cores_dropdown.options[0].key
 
         _render_fp_summary()
         with contextlib.suppress(Exception):
@@ -612,9 +621,12 @@ def open_profile_dialog(
         for ctrl in (cores_dropdown, webrtc_dropdown, roll_btn):
             ctrl.disabled = False
         if is_chrome:
+            cores_dropdown.options = _core_options_for(os_dropdown.value or "windows", "")
             c_str = str(chrome_state["persona"].get("hardware_concurrency") or 8)
             if c_str in {opt.key for opt in cores_dropdown.options}:
                 cores_dropdown.value = c_str
+            elif cores_dropdown.options:
+                cores_dropdown.value = cores_dropdown.options[0].key
 
     _sync_hardware_controls_for_engine()
     _render_fp_summary()
@@ -820,10 +832,17 @@ def open_profile_dialog(
             initial_fp: dict[str, Any] | None = None
         elif is_chrome and not chrome_rolled["value"]:
             raw_cores = cores_dropdown.value or ""
+            selected_cpu = int(raw_cores) if raw_cores.isdigit() else None
             initial_fp = {
                 "platform": os_type,
-                "hardware_concurrency": int(raw_cores) if raw_cores.isdigit() else None,
+                "hardware_concurrency": selected_cpu,
             }
+            if profile is not None and os_type == "macos":
+                latest = fp_service.load_saved_chrome_persona(os.path.join(DATA_DIR, profile.name))
+                if latest is None:
+                    initial_fp["seed"] = chrome_state["persona"]["seed"]
+                elif selected_cpu not in macos_cpu_counts_for_seed(latest["seed"]):
+                    initial_fp["hardware_concurrency"] = None
         else:
             initial_fp = chrome_state["persona"] if is_chrome else fp_state["fp"]
         extra_kwargs = {

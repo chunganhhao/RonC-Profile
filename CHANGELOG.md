@@ -6,6 +6,8 @@
 
 ### Sửa
 
+- Xuất ZIP profile Chromium đang chạy không còn vướng file khoá hay để lại bản sao lưu dở; các tiến trình không ghi đè proxy của nhau; cookie Netscape giữ nguyên giá trị rỗng; bộ tạo cũ và ô chọn CPU dùng số nhân phù hợp với GPU Apple Silicon.
+
 - Không chạy lịch ngâm tài khoản đã bị xoá từ tiến trình khác; web giữ ghi chú nhiều dòng và tiêu điểm ô chọn, đồng thời chỉ tải lại danh sách một lần khi mở hoặc dừng nhiều profile.
 
 - Tác vụ ngâm tài khoản giữ đúng profile khi đổi tên và không treo ở trạng thái đang chạy khi không lưu được; web cập nhật fingerprint theo danh sách, hiển thị đúng cổng proxy và cho phép sửa URL mở mặc định.

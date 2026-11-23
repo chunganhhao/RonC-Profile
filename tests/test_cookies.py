@@ -200,6 +200,20 @@ def test_netscape_round_trip():
     ]
 
 
+def test_netscape_round_trip_keeps_empty_value():
+    source = [
+        {"name": "filled", "domain": "example.test", "value": "test"},
+        {"name": "empty", "domain": "example.test", "value": "", "httpOnly": True},
+    ]
+    text = cookies._to_netscape(source)
+    assert text.splitlines()[-1].endswith("\tempty\t")
+    parsed = cookies.parse_cookies(text.replace("\n", "\r\n"))
+    assert [(c["name"], c["value"], c["httpOnly"]) for c in parsed] == [
+        ("filled", "test", False),
+        ("empty", "", True),
+    ]
+
+
 def test_extension_json_round_trip():
     source = [
         {
