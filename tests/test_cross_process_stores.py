@@ -92,26 +92,25 @@ class _Profiles:
     profiles = {"warm": Profile(name="warm", engine="chrome")}
 
 
-def test_assigning_an_extension_lets_other_threads_write_the_profile_store(tmp_path):
+def test_assigning_an_extension_lets_other_threads_write_the_profile_store(tmp_path, monkeypatch):
     ext = ExtensionService(str(tmp_path / "extensions.json"), str(tmp_path / "extensions"))
     alpha = ext.install_from_zip(_archive("Alpha"), filename="alpha.zip")
+    monkeypatch.setattr(manager, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    pm = manager.ProfileManager()
     written = threading.Event()
 
-    class _Manager:
-        def list_profiles(self):
-            # add_profile takes the manager's lock, then the profile store lease.
-            def write():
-                with store_lease(tmp_path / "profiles.json"):
-                    written.set()
+    def list_profiles():
+        # The extension transaction must not already hold the process-wide store mutex.
+        def write():
+            with store_lease(manager.PROFILES_FILE):
+                written.set()
 
-            threading.Thread(target=write, daemon=True).start()
-            assert written.wait(2), "profile store write blocked by the extension assignment"
-            return []
+        threading.Thread(target=write, daemon=True).start()
+        assert written.wait(2), "profile store write blocked by the extension assignment"
+        return []
 
-        def save_profiles(self):
-            pass
-
-    assert ext.assign_profiles(alpha.id, [], _Manager()) == 0
+    monkeypatch.setattr(pm, "list_profiles", list_profiles)
+    assert ext.assign_profiles(alpha.id, [], pm) == 0
 
 
 def _running_pair(tmp_path):

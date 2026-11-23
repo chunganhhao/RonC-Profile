@@ -1,8 +1,13 @@
 import asyncio
 import io
 import json
+import os
+import subprocess
+import sys
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -11,8 +16,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.api.app import create_app
 from src.api.dependencies import get_event_bus, get_extension_service, get_profile_manager
 from src.api.routes.extensions import router
+from src.core.container import Container
+from src.core.strings import get_string
 from src.models.profile import Profile
 from src.services.browser.extensions import ExtensionService, compute_chrome_extension_id
 from src.services.profile import manager
@@ -89,6 +97,78 @@ def test_assignment_rollback_preserves_untouched_profile_changes(state, monkeypa
         ext.assign_profiles(entry.id, ["alice"], pm)
     assert pm.profiles["alice"].extension_ids == []
     assert pm.profiles["bob"].extension_ids == ["another-extension"]
+
+
+@pytest.mark.parametrize("assign", [True, False], ids=["add", "remove"])
+def test_assignment_preserves_an_extension_saved_during_registry_write(state, monkeypatch, assign):
+    ext, pm, entry = state
+    other = ext.install_from_zip(archive("another"), filename="other.zip")
+    initial = [] if assign else [entry.id]
+    assert pm.update_profile("alice", "alice", "", "windows", extension_ids=initial)
+
+    writing, resume = Event(), Event()
+    save_registry = ext._save
+
+    def pause_registry_write():
+        writing.set()
+        assert resume.wait(5), "profile edit did not release registry write"
+        save_registry()
+
+    monkeypatch.setattr(ext, "_save", pause_registry_write)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assignment = pool.submit(ext.assign_profiles, entry.id, ["alice"] if assign else [], pm)
+        try:
+            assert writing.wait(5), "assignment never reached the registry write"
+            assert pm.update_profile(
+                "alice", "alice", "", "windows", extension_ids=[*initial, other.id]
+            )
+        finally:
+            resume.set()
+        assert assignment.result(timeout=5) == 1
+
+    expected = [other.id, entry.id] if assign else [other.id]
+    assert json.loads(Path(manager.PROFILES_FILE).read_text())["alice"]["extension_ids"] == expected
+    assert pm.get_profile("alice").extension_ids == expected
+
+
+def test_assignment_rejects_a_profile_renamed_during_registry_write(state, monkeypatch):
+    ext, pm, entry = state
+    assert pm.update_profile("alice", "alice", "", "windows", extension_ids=[entry.id])
+    save_registry = ext._save
+    registry = Path(ext.file_path).read_bytes()
+
+    def write_after_peer_rename():
+        monkeypatch.setattr(ext, "_save", save_registry)
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from src.services.profile.manager import ProfileManager; "
+                "assert ProfileManager().update_profile('alice', 'alicia', '', 'windows')",
+            ],
+            env={
+                **os.environ,
+                "FOXPROFILE_PROFILES_FILE": manager.PROFILES_FILE,
+                "FOXPROFILE_DATA_DIR": manager.DATA_DIR,
+            },
+            check=True,
+            timeout=15,
+        )
+        save_registry()
+
+    monkeypatch.setattr(ext, "_save", write_after_peer_rename)
+    app = create_app(Container())
+    app.dependency_overrides[get_extension_service] = lambda: ext
+    app.dependency_overrides[get_profile_manager] = lambda: pm
+    response = TestClient(app, base_url="http://127.0.0.1").patch(
+        f"/api/v1/extensions/{entry.id}", json={"profile_names": ["alice"], "pin_mode": "custom"}
+    )
+
+    saved = json.loads(Path(manager.PROFILES_FILE).read_text())
+    assert list(saved) == ["alicia"]
+    assert saved["alicia"]["extension_ids"] == [entry.id]
+    assert response.status_code == 409
+    assert Path(ext.file_path).read_bytes() == registry
 
 
 def test_update_restores_memory(state, monkeypatch):
@@ -171,6 +251,23 @@ def test_settings_save_error_keeps_dialog_open(state, monkeypatch):
         for c in controls(dialog.content)
     )
     assert "disk full" in log.call_args.args[0]
+
+
+def test_settings_renamed_profile_shows_conflict_and_keeps_dialog_open(state):
+    ext, pm, entry = state
+    assert pm.update_profile("alice", "alice", "", "windows", extension_ids=[entry.id])
+    page, saved = page_fake(), Mock()
+    open_extension_settings_dialog(page, entry, ext, pm, on_saved=saved)
+    dialog = page.show_dialog.call_args.args[0]
+    assert pm.update_profile("alice", "alicia", "", "windows")
+    dialog.actions[-1].on_click(None)
+    assert not saved.called
+    assert not page.pop_dialog.called
+    assert any(
+        isinstance(c, ft.Text) and c.visible and c.value == get_string("ext_selection_changed")
+        for c in controls(dialog.content)
+    )
+    assert pm.get_profile("alicia").extension_ids == [entry.id]
 
 
 def test_upload_reports_broken_and_valid(state, tmp_path):

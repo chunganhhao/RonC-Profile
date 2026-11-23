@@ -794,6 +794,7 @@ Object.assign(I18N.en, {
   ext_pin_custom: "Custom", ext_pin_always: "Always pin to toolbar", ext_pin_never: "Always unpin from toolbar",
   ext_assign_profiles_title: "Install on Profiles", ext_apply_all_chrome: "Automatically enable on all Chrome profiles",
   ext_confirm_btn: "Confirm", ext_section_title: "Chromium Extensions", ext_manage_btn: "Manage Extensions",
+  ext_selection_changed: "Profiles changed or are busy. Reopen extension settings and try again.",
   hw_section_title: "Hardware & Fingerprint (Coherence C++)", cpu_cores: "CPU Cores", webrtc_mode: "WebRTC Mode",
   webrtc_proxy: "Match Proxy IP (Recommended)", webrtc_disable: "Disable WebRTC", roll_fp: "Roll New Machine",
   chrome_seed_note: "Persistent C++ seed, not a guarantee of anonymity. Use the host OS; worker GPU/canvas protections still have known limits.",
@@ -830,6 +831,7 @@ Object.assign(I18N.vi, {
   ext_pin_custom: "Tùy chỉnh", ext_pin_always: "Luôn ghim lên thanh công cụ", ext_pin_never: "Luôn tháo ghim khỏi thanh công cụ",
   ext_assign_profiles_title: "Cài đặt trên Profile", ext_apply_all_chrome: "Tự động bật trên tất cả profile Chrome",
   ext_confirm_btn: "Xác nhận", ext_section_title: "Tiện ích mở rộng (Extensions)", ext_manage_btn: "Quản lý Tiện ích",
+  ext_selection_changed: "Profile đã thay đổi hoặc đang bận. Hãy mở lại cài đặt tiện ích rồi thử lại.",
   hw_section_title: "Phần cứng & Fingerprint (Chuẩn C++)", cpu_cores: "Số nhân CPU", webrtc_mode: "Chế độ WebRTC",
   webrtc_proxy: "Theo IP Proxy (Khuyên dùng)", webrtc_disable: "Chặn hoàn toàn WebRTC", roll_fp: "Đổi máy mới",
   chrome_seed_note: "Seed C++ ổn định không bảo đảm ẩn danh. Dùng đúng OS máy thật; bảo vệ GPU trong worker/canvas vẫn có giới hạn đã biết.",
@@ -2004,14 +2006,13 @@ function openExtensionSettingsModal(extEntry, onSaved) {
   modal((close) => {
     let pinMode = extEntry.pin_mode || "custom";
     const applyAll = h("input", { type: "checkbox", checked: Boolean(extEntry.apply_to_all_chrome) });
-    const selectedProfs = new Set(extEntry.assigned_profiles || []);
+    const selectedProfs = new Set();
     const profList = h("div", { class: "ext-prof-list" },
       profiles.length
         ? profiles.map((p) => {
             const cb = h("input", { type: "checkbox", checked: (p.extension_ids || []).includes(extEntry.id),
               onchange: (e) => { e.target.checked ? selectedProfs.add(p.name) : selectedProfs.delete(p.name); } });
             if (cb.checked) selectedProfs.add(p.name);
-            else selectedProfs.delete(p.name);
             return h("label", { class: "check", style: "margin-top:2px" }, cb, h("span", {}, `${p.name} (${p.engine.toUpperCase()})`));
           })
         : h("span", { class: "muted" }, t("empty_title"))
@@ -2037,7 +2038,10 @@ function openExtensionSettingsModal(extEntry, onSaved) {
         close();
         await refresh();
         if (onSaved) onSaved();
-      } catch (e) { toast(e.message, true); }
+      } catch (e) {
+        toast(e.status === 409 ? t("ext_selection_changed") : e.message, true);
+        if (e.status === 409) await refresh();
+      }
       finally { saveBtn.disabled = false; }
     } }, t("ext_confirm_btn"));
 
