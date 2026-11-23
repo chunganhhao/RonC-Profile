@@ -1,3 +1,5 @@
+import re
+
 from .config import LANGUAGE
 
 STRINGS: dict[str, dict[str, str]] = {
@@ -252,7 +254,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "copy_backup_codes": "Copy All",
         "copied_backup_codes_toast": "[{name}] Copied backup codes",
         "export_credentials_warning": "Warning: profile.json inside the ZIP still includes saved account credentials, 2FA secrets, and backup codes even when browser data is unchecked. Keep exported ZIPs private.",
-        "rows_per_page_label": "Rows.",
+        "rows_per_page_label": "Rows per page",
+        "chrome_cross_os": "This profile is set to {target}, but this computer runs {host}. Chrome profiles must use the same OS as this computer.",
         "first_page": "First page",
         "last_page": "Last page",
         "toolbar_running_filter": "Running ({count})",
@@ -639,7 +642,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "copy_backup_codes": "Chép tất cả",
         "copied_backup_codes_toast": "[{name}] Đã sao chép mã dự phòng",
         "export_credentials_warning": "Lưu ý: file profile.json trong file ZIP vẫn chứa thông tin tài khoản, khóa 2FA và mã dự phòng ngay cả khi bỏ chọn dữ liệu trình duyệt. Hãy giữ file ZIP riêng tư.",
-        "rows_per_page_label": "Hàng.",
+        "rows_per_page_label": "Dòng mỗi trang",
+        "chrome_cross_os": "Profile này đặt hệ điều hành {target}, nhưng máy đang chạy {host}. Profile Chrome phải dùng cùng hệ điều hành với máy.",
         "first_page": "Trang đầu",
         "last_page": "Trang cuối",
         "toolbar_running_filter": "Đang mở ({count})",
@@ -782,6 +786,17 @@ _ACTIVE = STRINGS.get(LANGUAGE, STRINGS["en"])
 
 def current_language() -> str:
     return next(code for code, table in STRINGS.items() if table is _ACTIVE)
+
+
+def localize_launch_error(message: str) -> str:
+    match = re.search(
+        r"A (windows|macos|linux) persona cannot be presented consistently on a (windows|macos|linux) host",
+        message,
+    )
+    if match:
+        names = {"windows": "Windows", "macos": "macOS", "linux": "Linux"}
+        return get_string("chrome_cross_os", target=names[match[1]], host=names[match[2]])
+    return message.replace("EngineError: ", "")
 
 
 def set_language(code: str) -> None:

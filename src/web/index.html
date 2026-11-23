@@ -799,7 +799,8 @@ Object.assign(I18N.en, {
   backup_codes_reveal: "Load & edit backup codes", backup_codes_saved_hidden: "Saved (hidden until loaded)", backup_codes_none_saved: "None saved",
   backup_codes_loading: "Loading backup codes...", backup_codes_load_failed: "Failed to load backup codes: {e}", backup_codes_retry: "Retry",
   copy_backup_codes: "Copy All", copied_backup_codes: "Backup codes copied",
-  footer_total: "Total: {n}", rows_per_page: "Rows.", page_of: "Page {cur} of {tot}",
+  footer_total: "Total: {n}", rows_per_page: "Rows per page", page_of: "Page {cur} of {tot}",
+  chrome_cross_os: "This profile is set to {target}, but this computer runs {host}. Chrome profiles must use the same OS as this computer.",
   first_page: "First page", prev_page: "Previous page", next_page: "Next page", last_page: "Last page",
   toolbar_running: "Running ({r})"
 });
@@ -833,7 +834,8 @@ Object.assign(I18N.vi, {
   backup_codes_reveal: "Xem & sửa mã dự phòng", backup_codes_saved_hidden: "Đã lưu (ẩn cho đến khi mở)", backup_codes_none_saved: "Chưa có mã dự phòng",
   backup_codes_loading: "Đang tải mã dự phòng...", backup_codes_load_failed: "Không thể tải mã dự phòng: {e}", backup_codes_retry: "Thử lại",
   copy_backup_codes: "Chép tất cả", copied_backup_codes: "Đã sao chép mã dự phòng",
-  footer_total: "Tổng cộng: {n}", rows_per_page: "Hàng.", page_of: "Trang {cur} / {tot}",
+  footer_total: "Tổng cộng: {n}", rows_per_page: "Dòng mỗi trang", page_of: "Trang {cur} / {tot}",
+  chrome_cross_os: "Profile này đặt hệ điều hành {target}, nhưng máy đang chạy {host}. Profile Chrome phải dùng cùng hệ điều hành với máy.",
   first_page: "Trang đầu", prev_page: "Trang trước", next_page: "Trang sau", last_page: "Trang cuối",
   toolbar_running: "Đang mở ({r})"
 });
@@ -845,6 +847,13 @@ let profiles = [], running = new Set(), fingerprints = {}, extensions = [];
 let filter = "all";
 const busy = new Map();          // name -> "starting" | "stopping"
 const failed = new Map();        // name -> error message of the last failed launch
+let hostOS;
+
+function localizeLaunchError(message) {
+  const match = message.match(/A (windows|macos|linux) persona cannot be presented consistently on a (windows|macos|linux) host/);
+  const names = { windows: "Windows", macos: "macOS", linux: "Linux" };
+  return match ? t("chrome_cross_os", { target: names[match[1]], host: names[match[2]] }) : message.replace("EngineError: ", "");
+}
 const liveSince = new Map();     // name -> Date the profile was first seen running
 const justLanded = new Set();    // stamps to animate on the next render
 const selected = new Set();
@@ -1116,7 +1125,7 @@ function stamp(p) {
     return h("span", { class: "stamp" + (justLanded.has(p.name) ? " land" : "") },
       t("stamp_live"), since ? h("small", {}, hhmm(since)) : null);
   }
-  if (failed.has(p.name)) return h("span", { class: "stamp failed", title: failed.get(p.name) }, t("stamp_failed"));
+  if (failed.has(p.name)) return h("span", { class: "stamp failed", title: localizeLaunchError(failed.get(p.name)) }, t("stamp_failed"));
   return h("span", { class: "idle" }, t("idle"));
 }
 
@@ -1339,8 +1348,9 @@ async function toggle(p, { quiet = false } = {}) {
       if (!quiet) toast(r && r.message && !/started/i.test(r.message) ? r.message : t("started", { name: p.name }));
     }
   } catch (e) {
+    const reason = localizeLaunchError(e.message);
     if (!stopping) failed.set(p.name, e.message);
-    toast(`${p.name}: ${e.message}`, true);
+    toast(`${p.name}: ${reason}`, true);
   }
   busy.delete(p.name);
   await refresh();
@@ -1438,6 +1448,7 @@ function openEditor(p) {
       );
     };
     let hwChanged = false;
+    let osChanged = false;
     const rollBtn = h("button", { type: "button", class: "btn btn-line", id: "f-roll-fp", onclick: () => {
       hwChanged = true;
       seedRolled = true;
@@ -1446,8 +1457,13 @@ function openEditor(p) {
       currentSeed = Math.floor(100000000 + Math.random() * 2000000000);
       renderHwNote();
     } }, icon("reload", true), t("roll_fp"));
-    engine.onchange = () => { hwChanged = true; renderHwNote(); };
+    engine.onchange = () => {
+      if (!p && !osChanged) os.value = engine.value === "chrome" ? hostOS : "macos";
+      hwChanged = true;
+      renderHwNote();
+    };
     os.onchange = () => {
+      osChanged = true;
       hwChanged = true;
       seedRolled = true;
       coresOverridden = false;
@@ -2139,6 +2155,7 @@ document.addEventListener("keydown", (e) => {
     const res = await fetch("/api/v1/info");
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     const info = await res.json();
+    hostOS = info.host_os;
     if (info.auth_required && !token) return showLogin();
     try { await showApp(info.auth_required); } catch { showLogin(); }
   } catch (e) {

@@ -1,6 +1,52 @@
 from src.ui.state import AppState
 
 
+def test_activity_log_localizes_launch_failure_and_flushes_immediately():
+    from src.core.strings import get_string, set_language
+
+    try:
+        for language in ("en", "vi"):
+            set_language(language)
+            state = AppState()
+            state.add_log("Starting Chrome engine...")
+            state.flush_log()
+            message = "[shop-01] LAUNCH_FAILED: A windows persona cannot be presented consistently on a linux host: native worker WebGPU"
+            assert state.add_log(message)
+            expected = get_string("chrome_cross_os", target="Windows", host="Linux")
+            assert state.get_all_log_lines()[-1] == f"> {expected}"
+            assert expected in state.flush_log()
+    finally:
+        set_language("en")
+
+
+def test_failed_reason_tooltip():
+    from src.ui.components.profile_card import _stamp
+
+    state = AppState()
+    state.failed["demo"] = "Could not start browser"
+    assert _stamp(False, False, "", state.failed["demo"]).tooltip == "Could not start browser"
+
+
+def test_localized_launch_error():
+    from src.core.strings import localize_launch_error, set_language
+
+    message = "EngineError: A windows persona cannot be presented consistently on a linux host: native worker WebGPU can reveal the host GPU; use a same-OS profile until a verified native core is available"
+    try:
+        set_language("vi")
+        result = localize_launch_error(message)
+        assert "EngineError" not in result
+        assert "Windows" in result and "Linux" in result
+        assert "hệ điều hành" in result
+        set_language("en")
+        assert "Chrome profiles must use the same OS" in localize_launch_error(message)
+        assert "WebGPU" not in localize_launch_error(message)
+        assert localize_launch_error("EngineError: Could not start") == "Could not start"
+        assert localize_launch_error("Connection refused") == "Connection refused"
+        assert localize_launch_error("") == ""
+    finally:
+        set_language("en")
+
+
 def test_select_all_accumulates_across_pages():
     """select_all should add to existing selection, not replace it."""
     state = AppState()

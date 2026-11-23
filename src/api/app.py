@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
+from chrome_engine.release import host_os
+
 from ..core.config import API_PORT, API_TOKEN, HEADLESS
 from ..core.logging import get_logger
 from ..services.profile.manager import ProfileStoreChangedError
@@ -112,6 +114,7 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
             "version": VERSION,
             "auth_required": bool(API_TOKEN),
             "headless": HEADLESS,
+            "host_os": host_os(),
             "mcp_path": mcp_http.MCP_PATH,
         }
 

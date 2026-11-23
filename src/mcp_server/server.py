@@ -133,7 +133,7 @@ async def get_profile(name: str) -> dict:
 @mcp.tool()
 async def create_profile(
     name: str,
-    os_type: Literal["windows", "macos", "linux"] = "windows",
+    os_type: Literal["windows", "macos", "linux"] | None = None,
     proxy: str | None = None,
     timezone: str | None = None,
     locale: str | None = None,
@@ -148,7 +148,7 @@ async def create_profile(
         "/profiles",
         {
             "name": name,
-            "os_type": os_type,
+            **({"os_type": os_type} if os_type is not None else {}),
             "proxy": proxy,
             "timezone": timezone,
             "locale": locale,

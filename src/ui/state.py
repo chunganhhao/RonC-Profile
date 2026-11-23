@@ -1,7 +1,7 @@
 import threading
 import time
 
-from ..core.strings import get_string
+from ..core.strings import get_string, localize_launch_error
 
 PAGE_SIZE_OPTIONS: tuple[int, ...] = (5, 10, 20, 50, 100, 200)
 ITEMS_PER_PAGE = 20
@@ -17,7 +17,7 @@ class AppState:
         self._log_lines: list[str] = []
         self._loading_profiles: set[str] = set()
         # Profiles whose last launch exited before it was ready.
-        self.failed: set[str] = set()
+        self.failed: dict[str, str] = {}
         self._loading_lock = threading.Lock()
         self._log_lock = threading.Lock()
         self._last_log_ui_update: float = 0.0
@@ -56,6 +56,8 @@ class AppState:
             or "Error" in message
         )
         now = time.monotonic()
+        if "LAUNCH_FAILED:" in message:
+            message = localize_launch_error(message)
         with self._log_lock:
             self._log_lines.append(f"> {message}")
             if force or now - self._last_log_ui_update >= 0.15:

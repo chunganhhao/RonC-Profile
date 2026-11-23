@@ -97,9 +97,10 @@ def test_gpu_substages_do_not_log_binary_env_or_gpu_values(monkeypatch, tmp_path
     assert re.fullmatch(r"LAUNCH_TIMING gpu_probe_headless \d+\.\d{3}s ok", lines[1])
 
 
-@pytest.mark.parametrize("failed", [False, True])
+@pytest.mark.parametrize("failed", [False, True, "engine"])
 def test_chrome_runner_timing_and_protocol(monkeypatch, tmp_path, capsys, failed):
     from chrome_engine import runner as chrome
+    from chrome_engine.engine import EngineError
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(chrome, "_read_profile_extra", lambda _: {})
@@ -118,6 +119,8 @@ def test_chrome_runner_timing_and_protocol(monkeypatch, tmp_path, capsys, failed
             pass
 
         async def start(self):
+            if failed == "engine":
+                raise EngineError("fixture engine failed")
             if failed:
                 raise RuntimeError("fixture start failed")
             return context
@@ -135,7 +138,7 @@ def test_chrome_runner_timing_and_protocol(monkeypatch, tmp_path, capsys, failed
     monkeypatch.setattr(chrome, "ChromeEngine", Engine)
     monkeypatch.setattr(chrome, "ensure_installed", noop)
     monkeypatch.setattr(chrome.control, "serve", serve)
-    assert asyncio.run(chrome.run_browser("fixture", "None", "macos")) == int(failed)
+    assert asyncio.run(chrome.run_browser("fixture", "None", "macos")) == int(bool(failed))
     lines = capsys.readouterr().out.splitlines()
     markers = [line.split()[1] for line in lines if line.startswith("LAUNCH_TIMING ")]
     assert markers[:3] == ["profile_metadata", "install_check", "browser_start"]
@@ -144,6 +147,9 @@ def test_chrome_runner_timing_and_protocol(monkeypatch, tmp_path, capsys, failed
             re.fullmatch(r"LAUNCH_TIMING browser_start \d+\.\d{3}s failed", line) for line in lines
         )
         assert "BROWSER_STARTED" not in lines
+        if failed == "engine":
+            assert "LAUNCH_FAILED: fixture engine failed" in lines
+            assert not any("LAUNCH_FAILED: EngineError" in line for line in lines)
     else:
         assert markers[3:] == ["restore_tabs", "control_ready", "launch_ready_total"]
         assert lines.index("CONTROL:1234:fixture-token") < lines.index("BROWSER_STARTED")

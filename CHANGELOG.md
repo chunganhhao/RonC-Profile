@@ -6,6 +6,8 @@
 
 ### Sửa
 
+- Profile Chrome mới mặc định theo hệ điều hành của máy; lỗi mở trình duyệt hiển thị lý do dễ hiểu bằng đúng ngôn ngữ trên desktop và web, tooltip giữ lý do thất bại và nhãn phân trang rõ ràng hơn. Trên macOS, mặc định tắt Impeller để tooltip không bị lỗi chữ, vẫn giữ giá trị `FLET_NO_IMPELLER` do người dùng đặt.
+
 - Chromium 148: phát hiện patch bị thiếu khi bỏ qua chuỗi patch đã áp dụng và đối chiếu font được bảo vệ với danh sách cài trên máy, tránh bỏ sót font bị ẩn ở cả hai seed.
 - Hộp thoại tiện ích hiển thị trạng thái trống, GPU Chrome khớp fingerprint đã lưu, bảng màu không tràn khi mở menu ngôn ngữ và hộp thoại Cookie co vừa nội dung.
 - Bố cục desktop tự xuống dòng khi thu nhỏ cửa sổ, giữ tìm kiếm, thao tác profile và phân trang luôn trong khung nhìn.

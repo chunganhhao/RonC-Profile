@@ -34,26 +34,33 @@ def launch_or_stop(
         return
 
     state.set_loading(name, True)
-    state.failed.discard(name)
+    state.failed.pop(name, None)
     log(get_string("launching_profile", name=name))
     state.schedule_refresh()
     ready = threading.Event()
 
     def _on_ready() -> None:
         ready.set()
+        state.failed.pop(name, None)
         state.set_loading(name, False)
         state.schedule_refresh()
 
     def _on_stop() -> None:
         if not ready.is_set():
-            state.failed.add(name)
+            state.failed.setdefault(name, get_string("stamp_failed"))
         state.set_loading(name, False)
         state.schedule_refresh()
+
+    def _launch_log(message: str) -> None:
+        if "LAUNCH_FAILED:" in message:
+            reason = message.split("LAUNCH_FAILED:", 1)[1].strip()
+            state.failed[name] = reason or get_string("stamp_failed")
+        log(message)
 
     try:
         started = bl.start_thread(
             profile,
-            log,
+            _launch_log,
             None,
             on_ready=_on_ready,
             on_stop=_on_stop,

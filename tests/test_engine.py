@@ -69,6 +69,64 @@ def test_api_creates_and_reports_the_engine(client):
     assert client.post("/api/v1/profiles", json={"name": "f1"}).json()["engine"] == "camoufox"
 
 
+def test_chrome_defaults_to_host_os(client):
+    from chrome_engine.release import host_os
+
+    assert Profile(name="model", engine="chrome").os_type == host_os()
+    response = client.post("/api/v1/profiles", json={"name": "host", "engine": "chrome"})
+    assert response.status_code == 201
+    assert response.json()["os_type"] == host_os()
+    assert client.get("/api/v1/info").json()["host_os"] == host_os()
+    assert Profile(name="firefox").os_type == "windows"
+
+
+def test_chrome_api_default_os(client):
+    from chrome_engine.release import host_os
+
+    assert (
+        client.post("/api/v1/profiles", json={"name": "host", "engine": "chrome"}).json()["os_type"]
+        == host_os()
+    )
+    assert client.post("/api/v1/profiles", json={"name": "firefox"}).json()["os_type"] == "windows"
+
+
+@pytest.mark.parametrize("os_type", ["windows", "macos", "linux"])
+def test_chrome_explicit_os_is_preserved(client, os_type):
+    response = client.post(
+        "/api/v1/profiles", json={"name": "explicit", "engine": "chrome", "os_type": os_type}
+    )
+    assert response.status_code == 201
+    assert response.json()["os_type"] == os_type
+
+
+@pytest.mark.parametrize("host", ["windows", "macos", "linux"])
+def test_model_and_schema_default_to_server_host(monkeypatch, host):
+    from src.api.schemas import profiles as schema
+    from src.models import profile as model
+
+    monkeypatch.setattr(schema, "host_os", lambda: host)
+    monkeypatch.setattr(model, "host_os", lambda: host)
+    assert schema.ProfileCreate(name="demo", engine="chrome").os_type == host
+    assert model.Profile(name="demo", engine="chrome").os_type == host
+    assert schema.ProfileCreate(name="demo").os_type == "windows"
+    assert model.Profile(name="demo").os_type == "windows"
+    assert schema.ProfileCreate(name="demo", engine="chrome", os_type="macos").os_type == "macos"
+
+
+def test_mcp_omits_unspecified_os(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from src.mcp_server import server
+
+    request = AsyncMock(return_value={})
+    monkeypatch.setattr(server, "_arequest", request)
+    asyncio.run(server.create_profile(name="demo", engine="chrome"))
+    assert "os_type" not in request.call_args.args[2]
+    asyncio.run(server.create_profile(name="demo", engine="chrome", os_type="macos"))
+    assert request.call_args.args[2]["os_type"] == "macos"
+
+
 def test_api_rejects_unknown_engine(client):
     r = client.post("/api/v1/profiles", json={"name": "x", "engine": "netscape"})
     assert r.status_code == 400

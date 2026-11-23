@@ -34,6 +34,33 @@ def walk(control):
         yield from walk(content)
 
 
+@pytest.mark.parametrize("explicit_os", [None, "windows", "macos", "linux"])
+def test_create_chrome_uses_host_os_unless_user_picked_os(explicit_os):
+    from chrome_engine.release import host_os
+
+    page = page_fake()
+    open_profile_dialog(page, None, Mock())
+    dialog = page.show_dialog.call_args.args[0]
+    dropdowns = [c for c in walk(dialog.content) if isinstance(c, ft.Dropdown)]
+    engine = next(c for c in dropdowns if {o.key for o in c.options} == {"camoufox", "chrome"})
+    os_picker = next(
+        c for c in dropdowns if {o.key for o in c.options} == {"windows", "macos", "linux"}
+    )
+    try:
+        assert os_picker.value == "macos"
+        if explicit_os is not None:
+            os_picker.value = explicit_os
+            os_picker.on_select(None)
+        engine.value = "chrome"
+        engine.on_select(None)
+        assert os_picker.value == (explicit_os or host_os())
+        engine.value = "camoufox"
+        engine.on_select(None)
+        assert os_picker.value == (explicit_os or "macos")
+    finally:
+        dialog.on_dismiss(None)
+
+
 def test_empty_extensions_do_not_expand_inside_a_wrapping_row():
     page = page_fake()
     service = SimpleNamespace(list_entries=lambda: [], usage_counts=lambda _: {})
