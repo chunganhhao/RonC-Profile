@@ -220,6 +220,28 @@ def test_warming_scheduler_execution_and_due_slots(tmp_path, monkeypatch):
     assert ws.check_due_tasks(pm, bl, now=dt) == []
 
 
+def test_due_warming_task_retries_in_same_minute_after_store_contention(tmp_path, monkeypatch):
+    path = str(tmp_path / "warming.json")
+    ws = WarmingSchedulerService(file_path=path)
+    due = ws.add_task("Due", ["Profile"], schedule_time="14:15")
+    peer = WarmingSchedulerService(file_path=path)
+    started = threading.Event()
+    monkeypatch.setattr(ws, "_execute_task", lambda *_args: started.set())
+    dt = datetime.datetime(2026, 11, 8, 14, 15, 10)
+
+    with peer._store_lease(), pytest.raises(OSError):
+        ws.check_due_tasks(None, None, now=dt)
+
+    assert not started.is_set()
+    assert ws.get_task(due.id).last_triggered_slot == ""
+    assert ws.check_due_tasks(None, None, now=dt) == [due.id]
+    assert started.wait(5)
+    assert ws.check_due_tasks(None, None, now=dt) == []
+    assert WarmingSchedulerService(file_path=path).get_task(due.id).last_triggered_slot == (
+        "2026-11-08 14:15"
+    )
+
+
 def test_profile_rename_retargets_saved_warming_task(tmp_path, monkeypatch):
     from src.core import config as app_config
 

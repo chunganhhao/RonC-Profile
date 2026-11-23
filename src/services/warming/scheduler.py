@@ -598,13 +598,24 @@ class WarmingSchedulerService:
                 and t.status != "running"
                 and t.last_triggered_slot != slot
             ]
-            for t in due:
-                t.last_triggered_slot = slot
-            if due:
-                self._save()
-        for t in due:
-            if self.run_task_async(t.id, pm, bl, log_fn=log_fn, on_update=on_update):
-                triggered.append(t.id)
+            if not due:
+                return triggered
+            with self._store_lease():
+                for task in due:
+                    previous_slot = task.last_triggered_slot
+                    task.last_triggered_slot = slot
+                    started = False
+                    try:
+                        started = self.run_task_async(
+                            task.id, pm, bl, log_fn=log_fn, on_update=on_update
+                        )
+                    finally:
+                        if not started:
+                            task.last_triggered_slot = previous_slot
+                            if self._saved_tasks[task.id]["last_triggered_slot"] == slot:
+                                self._save()
+                    if started:
+                        triggered.append(task.id)
         return triggered
 
     def start_daemon(
