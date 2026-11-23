@@ -55,7 +55,7 @@ RonC Profile quản lý các profile trình duyệt chống phát hiện: mỗi 
 - **Timezone và locale** tự khớp theo IP hoặc đặt cố định cho từng profile. Nút **Kiểm tra IP** đối chiếu IP ra với Cloudflare, ipinfo, ip-api và cảnh báo khi lệch quốc gia/timezone hoặc IP bị gắn datacenter.
 - **Xuất/nhập cookie** dạng JSON Cookie-Editor / EditThisCookie (GoLogin, GPM, Multilogin, extension Cookie-Editor) và `cookies.txt` Netscape (yt-dlp, curl, wget).
 - **Xuất/nhập cả profile** ra file ZIP để chuyển sang máy khác, có hoặc không kèm dữ liệu trình duyệt. Fingerprint luôn đi kèm.
-- **Bảng profile dễ quét**: mỗi dòng cho thấy engine, thiết bị đang giả lập, proxy (đã ẩn mật khẩu), timezone/locale và trạng thái. Trạng thái phân biệt bằng cả hình lẫn màu: dấu tím viền kép kèm giờ mở là đang chạy, viền xám là đang mở, dấu đỏ gạch ngang là mở lỗi.
+- **Bảng profile dễ quét**: mỗi dòng cho thấy engine, thiết bị đang giả lập, proxy (đã ẩn mật khẩu), timezone/locale và trạng thái. Trạng thái phân biệt rõ theo nhãn và màu: nhãn xanh Đang chạy kèm giờ mở là đang hoạt động, trạng thái chờ/đã dừng dùng chữ trung tính, và nhãn viền đỏ Lỗi báo mở thất bại.
 - **Lọc và tìm kiếm**: lọc theo đang chạy, có/không proxy, engine Chrome (kèm số đếm); tìm theo tên hoặc proxy.
 - **Thao tác hàng loạt**: chọn nhiều profile để mở, dừng hoặc xóa cùng lúc.
 - **MCP server**: Claude, Cursor... tự mở profile, lướt web, click, gõ, chụp màn hình.

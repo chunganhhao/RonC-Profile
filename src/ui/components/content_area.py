@@ -82,7 +82,7 @@ def build_content_area(
     initial_table_width: float | None = None,
     on_table_resize: Callable[[float], None] | None = None,
 ) -> ft.Container:
-    """Main PionLogin-style workspace: Top header, Action toolbar, Data table, Pagination & Status bar."""
+    """Main workspace: Top header, Action toolbar, Data table, Pagination & Status bar."""
     is_dark = current_theme_mode() == "dark"
     # Rows switch to labelled cards below the ledger breakpoint.
     table = ft.Container(

@@ -55,7 +55,7 @@ RonC Profile manages anti-detect browser profiles: each profile is a separate id
 - **Timezone and locale** follow the exit IP or can be pinned per profile. **Check IP** compares the exit IP across Cloudflare, ipinfo and ip-api and warns about country/timezone mismatches and datacenter IPs.
 - **Cookie export/import** as Cookie-Editor / EditThisCookie JSON (GoLogin, GPM, Multilogin, the Cookie-Editor extension) and Netscape `cookies.txt` (yt-dlp, curl, wget).
 - **Profile export/import** as ZIP, with or without browser data, to move profiles between machines. The fingerprint always travels with the profile.
-- **A profile table built for scanning**: every row shows the engine, the emulated device, the proxy (credentials hidden), timezone/locale and the state. States differ in shape as well as colour: a violet double-ruled stamp with the launch time means running, a grey rule means starting, a struck red stamp means the launch failed.
+- **A profile table built for scanning**: every row shows the engine, the emulated device, the proxy (credentials hidden), timezone/locale and the state. States are clearly distinguished by badge and colour: an emerald Running badge with the launch time means active, a muted starting/stopped label means idle or launching, and a red-bordered Failed badge indicates launch failure.
 - **Filters and search**: filter by running, with/without proxy and Chrome engine (with counts); search by name or proxy.
 - **Bulk actions**: launch, stop or delete many profiles at once.
 - **MCP server** so AI agents (Claude, Cursor...) can launch profiles, browse, click, type and take screenshots.

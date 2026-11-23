@@ -15,17 +15,17 @@ _OS_ICONS = {
     "linux": ft.Icons.TERMINAL_ROUNDED,
 }
 
-# PionLogin-style tag pill color pairs: (bg_color, text_color)
+# Tag pill color pairs: (bg_color, text_color)
 _TAG_PALETTES = (
-    ("#86EFAC", "#064E3B"),  # Mint green (like AGY in PionLogin)
-    ("#F9A8D4", "#831843"),  # Soft pink (like Gemini in PionLogin)
+    ("#86EFAC", "#064E3B"),  # Mint green
+    ("#F9A8D4", "#831843"),  # Soft pink
     ("#93C5FD", "#1E3A8A"),  # Sky blue
     ("#FDE68A", "#78350F"),  # Amber gold
     ("#C4B5FD", "#4C1D95"),  # Lavender violet
     ("#67E8F9", "#164E63"),  # Cyan
 )
 
-# PionLogin table grid: (expand, fixed_width)
+# Table grid: (expand, fixed_width)
 COLUMNS = {
     "select": (None, 32),
     "id": (None, 64),
@@ -199,7 +199,7 @@ def build_profile_card(
     active_feedback: set[str] | None = None,
     layout_width: float | None = None,
 ) -> ft.Container:
-    """One profile as a PionLogin-style table row."""
+    """One profile as a table row."""
     fb = active_feedback or set()
     if is_running:
         bg = COLORS["card_hover"]

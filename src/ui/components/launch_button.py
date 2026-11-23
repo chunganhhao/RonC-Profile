@@ -14,7 +14,7 @@ def build_launch_button(
     is_running: bool,
     on_launch: Callable,
 ) -> ft.Button:
-    """Create the PionLogin-style Launch ('🌐 Mở') / Stop ('✕ Đóng') / Loading button."""
+    """Create the Launch ('🌐 Mở') / Stop ('✕ Đóng') / Loading button."""
     is_dark = current_theme_mode() == "dark"
     shape = ft.RoundedRectangleBorder(radius=7)
     label_style = ft.TextStyle(font_family=FONT_SEMIBOLD, size=13)
@@ -32,7 +32,7 @@ def build_launch_button(
             ),
         )
     if is_running:
-        # In PionLogin dark mode, running stop button is crisp white with dark ink
+        # In dark mode, running stop button is crisp white with dark ink
         stop_bg = "#F9FAFB" if is_dark else COLORS["ink_button"]
         stop_fg = "#0B0C0E" if is_dark else "#FFFFFF"
         return ft.Button(

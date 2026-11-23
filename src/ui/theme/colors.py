@@ -1,7 +1,7 @@
 from ...core.config import THEME_MODE
 
 LIGHT_COLORS: dict[str, str] = {
-    # PionLogin Crisp Slate & White (Light theme)
+    # Crisp Slate & White (Light theme)
     "bg": "#F8FAFC",
     "card_bg": "#FFFFFF",
     "paper_sunk": "#F1F5F9",
@@ -12,13 +12,13 @@ LIGHT_COLORS: dict[str, str] = {
     "text_sub": "#475569",
     "text_dim": "#64748B",
     "input_bg": "#FFFFFF",
-    # Sidebar rail (PionLogin pure white sidebar)
+    # Sidebar rail (crisp white sidebar)
     "sidebar": "#FFFFFF",
     "cover_deep": "#F1F5F9",
     "cover_ink": "#0F172A",
     "cover_muted": "#64748B",
     "log_bg": "#F8FAFC",
-    # Action & buttons (PionLogin obsidian CTA + royal blue accent)
+    # Action & buttons (obsidian CTA + royal blue accent)
     "accent": "#2563EB",
     "accent_hover": "#1D4ED8",
     "accent_soft": "#EFF6FF",
@@ -42,7 +42,7 @@ LIGHT_COLORS: dict[str, str] = {
     "cover_line": "#E2E8F0",
     "scrollbar_bg": "#F8FAFC",
     "scrollbar_grab": "#CBD5E1",
-    # PionLogin pill accents
+    # Pill accents
     "proxy_pill_bg": "#EFF6FF",
     "proxy_pill_fg": "#1E40AF",
     "proxy_pill_border": "#BFDBFE",
@@ -50,7 +50,7 @@ LIGHT_COLORS: dict[str, str] = {
 }
 
 DARK_COLORS: dict[str, str] = {
-    # PionLogin Onyx Dark Theme
+    # Onyx Dark Theme
     "bg": "#0B0C0E",
     "card_bg": "#121418",
     "paper_sunk": "#181B21",
@@ -61,13 +61,13 @@ DARK_COLORS: dict[str, str] = {
     "text_sub": "#9CA3AF",
     "text_dim": "#6B7280",
     "input_bg": "#16191F",
-    # Sidebar rail (PionLogin matte obsidian)
+    # Sidebar rail (matte obsidian)
     "sidebar": "#0E1014",
     "cover_deep": "#171A21",
     "cover_ink": "#F3F4F6",
     "cover_muted": "#9CA3AF",
     "log_bg": "#0A0C0F",
-    # Action & buttons (PionLogin white CTA + vibrant accent)
+    # Action & buttons (white CTA + vibrant accent)
     "accent": "#3B82F6",
     "accent_hover": "#2563EB",
     "accent_soft": "#1E293B",
@@ -91,7 +91,7 @@ DARK_COLORS: dict[str, str] = {
     "cover_line": "#252A34",
     "scrollbar_bg": "#0B0C0E",
     "scrollbar_grab": "#2E3440",
-    # PionLogin pill accents (blue slate proxy badge)
+    # Pill accents (blue slate proxy badge)
     "proxy_pill_bg": "#1E293B",
     "proxy_pill_fg": "#93C5FD",
     "proxy_pill_border": "#334155",
