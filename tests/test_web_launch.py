@@ -20,6 +20,43 @@ def run_js(script):
     return json.loads(result.stdout)
 
 
+@pytest.mark.parametrize("action", ["launch", "stop"])
+def test_bulk_browser_action_refreshes_lists_once(action):
+    refresh = PANEL.split("async function refresh() {", 1)[1].split("\nconst FILTERS", 1)[0]
+    actions = PANEL.split("async function bulk(action) {", 1)[1].split("\nfunction modal", 1)[0]
+    result = run_js(
+        f"""
+        const action = {json.dumps(action)};
+        let profiles = ['One', 'Two', 'Three'].map(name => ({{ name }}));
+        const selected = new Set(profiles.map(p => p.name));
+        let running = action === 'stop' ? new Set(selected) : new Set();
+        let extensions = [];
+        const busy = new Map(), failed = new Map(), liveSince = new Map(), justLanded = new Set();
+        const calls = [];
+        const render = () => {{}}, toast = () => {{}}, $ = () => null;
+        const t = key => key, enc = encodeURIComponent, localizeLaunchError = text => text;
+        async function api(method, path) {{
+          calls.push([method, path]);
+          if (path === '/profiles?panel=true') return {{ profiles }};
+          if (path === '/browser') return {{ running: [...running] }};
+          if (path === '/extensions') return {{ extensions }};
+          if (path === `/browser/Two/${{action}}`) throw new Error('profile action failed');
+          return {{ message: 'started' }};
+        }}
+        async function refresh() {{{refresh}
+        async function bulk(action) {{{actions}
+        await bulk(action);
+        console.log(JSON.stringify(calls));
+        """
+    )
+    assert result == [
+        *[["POST", f"/browser/{name}/{action}"] for name in ("One", "Two", "Three")],
+        ["GET", "/profiles?panel=true"],
+        ["GET", "/browser"],
+        ["GET", "/extensions"],
+    ]
+
+
 @pytest.mark.parametrize("host", ["windows", "macos", "linux"])
 def test_editor_uses_server_host_for_chrome(host):
     handler = re.search(r"engine.onchange = \(\) => \{(.*?)\n    \};", PANEL, re.S)[1]
