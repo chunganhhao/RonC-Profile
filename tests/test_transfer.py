@@ -163,6 +163,26 @@ def test_failed_export_does_not_leave_partial_archive(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == [data]
 
 
+def test_export_fails_when_a_browser_storage_file_disappears(tmp_path, monkeypatch):
+    data = tmp_path / "IndexedDB"
+    data.mkdir()
+    manifest = data / "MANIFEST-000001"
+    manifest.write_text("references 000007.ldb", encoding="utf-8")
+    table = data / "000007.ldb"
+    table.write_bytes(b"fixture")
+    write = zipfile.ZipFile.write
+
+    def compact_before_copy(archive, filename, *args, **kwargs):
+        if Path(filename) == table:
+            table.unlink()
+        return write(archive, filename, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", compact_before_copy)
+    ok, error = export_to_zip(Profile(name="alice"), str(data), str(tmp_path))
+    assert not ok and table.name in error
+    assert list(tmp_path.iterdir()) == [data]
+
+
 @pytest.fixture
 def import_api(tmp_path, monkeypatch):
     from fastapi import FastAPI

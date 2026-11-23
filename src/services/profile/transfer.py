@@ -71,16 +71,12 @@ def export_to_zip(
                             relative_path = os.path.relpath(file_path, profile_data_dir)
                             if relative_path in exclude_files:
                                 continue
-                            try:
-                                source_stat = os.lstat(file_path)
-                                if not stat.S_ISREG(source_stat.st_mode) or os.path.samestat(
-                                    source_stat, archive_stat
-                                ):
-                                    continue
-                                zipf.write(file_path, os.path.join("data", relative_path))
-                            except FileNotFoundError as exc:
-                                if exc.filename != file_path:
-                                    raise
+                            source_stat = os.lstat(file_path)
+                            if not stat.S_ISREG(source_stat.st_mode) or os.path.samestat(
+                                source_stat, archive_stat
+                            ):
+                                continue
+                            zipf.write(file_path, os.path.join("data", relative_path))
                 else:
                     # The fingerprint is the profile's identity, not browser data.
                     for identity in IDENTITY_FILES:
