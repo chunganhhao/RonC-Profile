@@ -582,6 +582,13 @@ class ProfileManager:
                 self._check_store_current()
             return self._ordered_profiles()
 
+    def get_profile(self, name: str) -> Profile | None:
+        """The named profile, read from the shared store if another process changed it."""
+        with self._lock:
+            with contextlib.suppress(ProfileStoreChangedError):
+                self._check_store_current()
+            return self.profiles.get(name)
+
     def _ordered_profiles(self) -> list[Profile]:
         profiles = list(self.profiles.values())
         return [

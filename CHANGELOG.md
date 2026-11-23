@@ -6,6 +6,8 @@
 
 ### Sửa
 
+- Nhiều tiến trình dùng chung dữ liệu: hai lần sửa tiện ích cùng lúc không còn mất một thay đổi; Dừng ngâm tài khoản từ tiến trình khác thật sự dừng lượt chạy, tiến trình khác không chạy trùng tác vụ đang chạy; `GET /profiles/<name>` và MCP `get_profile` thấy ngay profile tiến trình khác vừa tạo. Thanh thao tác hàng loạt cho biết số profile đã chọn đang bị bộ lọc ẩn, và menu Giao diện/Ngôn ngữ trên web vừa màn hình 320 px.
+
 - Xuất ZIP profile Chromium đang chạy không còn vướng file khoá hay để lại bản sao lưu dở; các tiến trình không ghi đè proxy của nhau; cookie Netscape giữ nguyên giá trị rỗng; bộ tạo cũ và ô chọn CPU dùng số nhân phù hợp với GPU Apple Silicon.
 
 - Không chạy lịch ngâm tài khoản đã bị xoá từ tiến trình khác; web giữ ghi chú nhiều dòng và tiêu điểm ô chọn, đồng thời chỉ tải lại danh sách một lần khi mở hoặc dừng nhiều profile.

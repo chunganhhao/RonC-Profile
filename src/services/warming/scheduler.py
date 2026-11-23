@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from ...core import config as app_config
 from ...core.logging import get_logger
-from ..browser.lease import profile_lease
+from ..browser.lease import profile_lease, waiting_lease
 
 if TYPE_CHECKING:
     from ...interfaces.protocols import IBrowserLauncher, IProfileManager
@@ -43,6 +43,12 @@ WARMING_PRESETS: dict[str, list[str]] = {
 }
 
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+# How often a running task rereads the shared file for a Stop or Delete sent to another process.
+SHARED_STOP_POLL_SECONDS = 0.25
+# A navigation step can take 25 s before the owner sees a Stop; then it closes the browser.
+PEER_STOP_WAIT_SECONDS = 60.0
+# A run's result has no caller to retry it, so its save waits out another process's write.
+RESULT_SAVE_WAIT_SECONDS = 5.0
 
 
 class WarmingTargetSaveError(OSError):
@@ -50,6 +56,10 @@ class WarmingTargetSaveError(OSError):
 
 
 class WarmingTaskNotFound(LookupError):
+    pass
+
+
+class WarmingStopTimeout(TimeoutError):
     pass
 
 
@@ -198,12 +208,12 @@ class WarmingSchedulerService:
         return {tid: task.to_dict() for tid, task in self._tasks.items()}
 
     @contextlib.contextmanager
-    def _store_lease(self) -> Iterator[None]:
+    def _store_lease(self, *, timeout: float = 0.0) -> Iterator[None]:
         with self._lock:
             if self._store_locked:
                 yield
                 return
-            with profile_lease(self.file_path):
+            with waiting_lease(self.file_path, timeout):
                 self._store_locked = True
                 try:
                     yield
@@ -354,21 +364,66 @@ class WarmingSchedulerService:
             return True
 
     def stop_task(self, task_id: str) -> bool:
-        with self._lock:
+        """Stop a run, waiting for the process that owns it when that is another process."""
+        with self._store_lease():
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            previous_status = task.status
+            previous = task.status, self._saved_tasks.get(task_id)
+            saved = self._read_tasks().get(task_id)
+            if saved is not None and task_id in self._saved_tasks:
+                # Start from the shared status: this process may never have seen a peer's run start.
+                task.status = saved.status
+                self._saved_tasks[task_id] = {**self._saved_tasks[task_id], "status": saved.status}
             task.status = "idle"
             try:
                 self._save()
             except Exception:
-                task.status = previous_status
+                task.status = previous[0]
+                if previous[1] is not None:
+                    self._saved_tasks[task_id] = previous[1]
                 raise
             cancel = self._cancel_flags.get(task_id)
             if cancel:
                 cancel.set()
-            return True
+                return True
+        try:
+            with waiting_lease(self._run_lease_path(task_id), PEER_STOP_WAIT_SECONDS):
+                pass
+        except (BlockingIOError, PermissionError) as exc:
+            raise WarmingStopTimeout(task_id) from exc
+        return True
+
+    def _run_lease_path(self, task_id: str) -> str:
+        return f"{self.file_path}.run-{task_id}"
+
+    def _own_run(
+        self,
+        run_lease: contextlib.ExitStack,
+        task: WarmingTask,
+        cancel_ev: threading.Event,
+        *args,
+    ) -> bool:
+        """Run the task while holding its cross-process run lease, released after the result is saved."""
+        with run_lease:
+            threading.Thread(
+                target=self._watch_shared_stop, args=(task.id, cancel_ev), daemon=True
+            ).start()
+            return self._execute_task(task, cancel_ev, *args)
+
+    def _watch_shared_stop(self, task_id: str, cancel_ev: threading.Event) -> None:
+        """Carry a Stop or Delete that a peer process wrote to the shared file to this run."""
+        while True:
+            time.sleep(SHARED_STOP_POLL_SECONDS)
+            if cancel_ev.is_set() or self._cancel_flags.get(task_id) is not cancel_ev:
+                return
+            try:
+                saved = self._read_tasks().get(task_id)
+            except OSError:
+                continue
+            if saved is None or saved.status != "running":
+                cancel_ev.set()
+                return
 
     def execute_task_sync(
         self,
@@ -384,18 +439,26 @@ class WarmingSchedulerService:
             started = self._begin_task(task_id)
         if started is None:
             return False
-        task, cancel_ev, _ = started
-        return self._execute_task(task, cancel_ev, pm, bl, log_fn, step_dwell_seconds, on_update)
+        task, cancel_ev, _, run_lease = started
+        return self._own_run(
+            run_lease, task, cancel_ev, pm, bl, log_fn, step_dwell_seconds, on_update
+        )
 
     def _begin_task(
         self, task_id: str, *, scheduled_slot: str | None = None, require_exists: bool = False
-    ) -> tuple[WarmingTask, threading.Event, tuple[str, str]] | None:
+    ) -> tuple[WarmingTask, threading.Event, tuple[str, str], contextlib.ExitStack] | None:
         task = self._tasks.get(task_id)
         if task is None or task_id not in self._read_tasks():
             if require_exists:
                 raise WarmingTaskNotFound(task_id)
             return None
         if task.status == "running":
+            return None
+        run_lease = contextlib.ExitStack()
+        try:
+            run_lease.enter_context(profile_lease(self._run_lease_path(task_id)))
+        # Another process is running this task: it owns the result.
+        except (BlockingIOError, PermissionError):
             return None
         previous_state = task.status, task.last_triggered_slot
         task.status = "running"
@@ -408,8 +471,9 @@ class WarmingSchedulerService:
         except Exception:
             task.status, task.last_triggered_slot = previous_state
             self._cancel_flags.pop(task_id, None)
+            run_lease.close()
             raise
-        return replace(task), cancel_ev, previous_state
+        return replace(task), cancel_ev, previous_state, run_lease
 
     def _execute_task(
         self,
@@ -554,7 +618,8 @@ class WarmingSchedulerService:
                         task.last_result = f"Failed (0/{len(targets)} profiles)"
                     if not task.repeat_daily and task.schedule_time:
                         task.enabled = False
-                    self._save()
+                    with self._store_lease(timeout=RESULT_SAVE_WAIT_SECONDS):
+                        self._save()
 
         log(f"[Warming] Finished '{task_name}': {succeeded}/{len(targets)} profile(s) warmed")
         if on_update:
@@ -579,17 +644,18 @@ class WarmingSchedulerService:
             )
             if started is None:
                 return False
-            task, cancel_ev, previous_state = started
+            task, cancel_ev, previous_state, run_lease = started
             try:
                 threading.Thread(
-                    target=self._execute_task,
-                    args=(task, cancel_ev, pm, bl, log_fn, None, on_update),
+                    target=self._own_run,
+                    args=(run_lease, task, cancel_ev, pm, bl, log_fn, None, on_update),
                     daemon=True,
                 ).start()
             except RuntimeError:
                 current = self._tasks[task_id]
                 current.status, current.last_triggered_slot = previous_state
                 self._cancel_flags.pop(task_id, None)
+                run_lease.close()
                 self._save()
                 raise
         return True

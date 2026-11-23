@@ -971,7 +971,9 @@ def test_b2_f1_to_f4_warming_concurrency_duration_and_api_lifespan(tmp_path, mon
             return {}
 
     orig_threading = sched_mod.threading
-    monkeypatch.setattr(sched_mod, "threading", SimpleNamespace(Event=FakeEvent))
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=FakeEvent, Thread=orig_threading.Thread)
+    )
     assert ws.execute_task_sync(t_dur.id, pm, FastLauncher())
     assert sum(waits) >= 3600
     monkeypatch.setattr(sched_mod, "threading", orig_threading)

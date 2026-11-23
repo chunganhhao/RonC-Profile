@@ -4,7 +4,8 @@ import hashlib
 import os
 import tempfile
 import threading
-from contextlib import contextmanager
+import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 
@@ -104,13 +105,30 @@ _STORE_OWNER = threading.local()
 
 
 @contextmanager
-def store_lease(path):
+def waiting_lease(path, timeout: float):
+    """profile_lease, retried until `timeout` seconds pass while another process holds it."""
+    deadline = time.monotonic() + timeout
+    with ExitStack() as stack:
+        while True:
+            try:
+                stack.enter_context(profile_lease(path))
+                break
+            # flock reports a held lock as BlockingIOError, msvcrt.locking as PermissionError.
+            except (BlockingIOError, PermissionError):
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+        yield
+
+
+@contextmanager
+def store_lease(path, *, timeout: float = 0.0):
     key = str(Path(path).resolve())
     with _STORE_MUTEX:
         if getattr(_STORE_OWNER, "key", None) == key:
             yield
         else:
-            with profile_lease(path):
+            with waiting_lease(path, timeout):
                 previous = getattr(_STORE_OWNER, "key", None)
                 _STORE_OWNER.key = key
                 try:

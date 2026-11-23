@@ -12,17 +12,21 @@ import sys
 import tempfile
 import threading
 import zipfile
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from ...core import config as app_config
 from ...core.logging import get_logger
+from .lease import store_lease
 
 logger = get_logger("browser.extensions")
 
 PIN_MODES = ("custom", "force_pinned", "force_unpinned")
 _MSG_RE = re.compile(r"^__MSG_([A-Za-z0-9_@]+)__$")
+# Another process's write holds the store for milliseconds; wait for it instead of failing.
+STORE_WAIT_SECONDS = 5.0
 
 
 def compute_chrome_extension_id(ext_dir: str | Path, manifest: dict[str, Any] | None = None) -> str:
@@ -262,6 +266,13 @@ class ExtensionService:
             except Exception as e:
                 logger.warning("Could not load extensions pool %s: %s", path, e)
 
+    @contextlib.contextmanager
+    def _write_transaction(self) -> Iterator[None]:
+        """Reread the shared file and hold its lease so a peer's write cannot be overwritten."""
+        with self._lock, store_lease(self.file_path, timeout=STORE_WAIT_SECONDS):
+            self.reload()
+            yield
+
     def _save(self) -> None:
         path = self.file_path
         parent = os.path.dirname(os.path.abspath(path))
@@ -412,8 +423,7 @@ class ExtensionService:
         icon_rel = _pick_manifest_icon(manifest, stage_dir)
         chrome_id = compute_chrome_extension_id(target_dir, manifest)
 
-        with self._lock:
-            self.reload()
+        with self._write_transaction():
             existing = self._entries.get(ext_id)
             entry = ExtensionEntry(
                 id=ext_id,
@@ -464,8 +474,7 @@ class ExtensionService:
         apply_to_all: bool | None = None,
         apply_to_all_chrome: bool | None = None,
     ) -> ExtensionEntry | None:
-        with self._lock:
-            self.reload()
+        with self._write_transaction():
             entry = self._entries.get(ext_id)
             if entry is None:
                 return None
@@ -492,8 +501,7 @@ class ExtensionService:
         pm: Any = None,
     ) -> bool:
         target_pm = profile_manager if profile_manager is not None else pm
-        with self._lock:
-            self.reload()
+        with self._write_transaction():
             entry = self._entries.pop(ext_id, None)
             if entry is None:
                 return False
@@ -525,8 +533,7 @@ class ExtensionService:
         pin_mode: str | None = None,
         apply_to_all: bool | None = None,
     ) -> int:
-        with self._lock:
-            self.reload()
+        with self._write_transaction():
             entry = self._entries.get(ext_id)
             if entry is None:
                 return 0

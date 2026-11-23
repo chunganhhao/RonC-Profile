@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 def require_profile(name: str, pm: IProfileManager) -> Profile:
     """The profile, or 404. Use the returned object rather than indexing
     pm.profiles again: a concurrent delete can remove it in between."""
-    profile = pm.profiles.get(name)
+    profile = pm.get_profile(name)
     if profile is None:
         raise HTTPException(status_code=404, detail=f"Profile '{name}' not found")
     return profile

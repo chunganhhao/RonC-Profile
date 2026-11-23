@@ -16,7 +16,8 @@ from src.ui.actions import cookies
 @pytest.fixture
 def setup_reset(monkeypatch):
     bl = BrowserLauncher()
-    pm = SimpleNamespace(profiles={"p": Profile(name="p")})
+    by_name = {"p": Profile(name="p")}
+    pm = SimpleNamespace(profiles=by_name, get_profile=by_name.get)
     reset = Mock(return_value=True)
     monkeypatch.setattr(profiles.fingerprint, "reset", reset)
     monkeypatch.setattr(cookies.fingerprint, "summary", lambda path: None)

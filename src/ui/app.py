@@ -635,7 +635,7 @@ class App:
         rebuild_bulk_bar(
             r.bulk_bar,
             self.state,
-            page_profiles,
+            all_profiles,
             {
                 "launch": self.h.on_bulk_launch,
                 "stop": self.h.on_bulk_stop,
