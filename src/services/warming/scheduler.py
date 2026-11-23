@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from ...core import config as app_config
 from ...core.logging import get_logger
+from ..browser.lease import profile_lease
 
 if TYPE_CHECKING:
     from ...interfaces.protocols import IBrowserLauncher, IProfileManager
@@ -134,8 +136,10 @@ class WarmingSchedulerService:
     def __init__(self, file_path: str | None = None) -> None:
         self._explicit_path = file_path
         self._lock = threading.RLock()
+        self._store_locked = False
         self._lease_lock = threading.RLock()
         self._tasks: dict[str, WarmingTask] = {}
+        self._saved_tasks: dict[str, dict] = {}
         self._cancel_flags: dict[str, threading.Event] = {}
         self._profile_active_users: dict[str, int] = {}
         self._profile_launched_by_warming: set[str] = set()
@@ -151,39 +155,85 @@ class WarmingSchedulerService:
 
     def reload(self) -> None:
         with self._lock:
-            self._tasks.clear()
-            path = self.file_path
-            if not os.path.exists(path):
-                return
             try:
-                with open(path, encoding="utf-8") as f:
-                    raw = json.load(f)
-                items = raw if isinstance(raw, list) else raw.get("tasks", [])
-                for item in items:
-                    if isinstance(item, dict):
-                        task = WarmingTask.from_dict(item)
-                        if task:
-                            if task.status == "running":
-                                task.status = "idle"
-                            self._tasks[task.id] = task
-            except Exception as e:
-                logger.error("Failed to load warming tasks from %s: %s", path, e)
+                self._tasks = self._read_tasks()
+            except OSError as e:
+                logger.error("Failed to load warming tasks from %s: %s", self.file_path, e)
+                self._tasks = {}
+            for task in self._tasks.values():
+                if task.status == "running":
+                    task.status = "idle"
+            self._saved_tasks = self._snapshot()
+
+    def _read_tasks(self) -> dict[str, WarmingTask]:
+        try:
+            with open(self.file_path, encoding="utf-8") as f:
+                raw = json.load(f)
+        except FileNotFoundError:
+            return {}
+        except ValueError as exc:
+            raise OSError("Invalid warming task store") from exc
+        items = raw.get("tasks", []) if isinstance(raw, dict) else raw
+        if not isinstance(items, list):
+            raise OSError("Invalid warming task store")
+        tasks = {}
+        try:
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    continue
+                if not item.get("id"):
+                    payload = json.dumps([index, item], sort_keys=True).encode()
+                    item = {**item, "id": hashlib.sha256(payload).hexdigest()[:10]}
+                if (task := WarmingTask.from_dict(item)) is not None:
+                    tasks[task.id] = task
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise OSError("Invalid warming task store") from exc
+        return tasks
+
+    def _snapshot(self) -> dict[str, dict]:
+        return {tid: task.to_dict() for tid, task in self._tasks.items()}
+
+    @contextlib.contextmanager
+    def _store_lease(self) -> Iterator[None]:
+        with self._lock:
+            if self._store_locked:
+                yield
+                return
+            with profile_lease(self.file_path):
+                self._store_locked = True
+                try:
+                    yield
+                finally:
+                    self._store_locked = False
 
     def _save(self) -> None:
-        with self._lock:
+        with self._store_lease():
             path = self.file_path
+            disk = {tid: task.to_dict() for tid, task in self._read_tasks().items()}
+            current = self._snapshot()
+            # Persist only local changes so stale snapshots cannot undo another writer's edits.
+            for tid in self._saved_tasks.keys() - current.keys():
+                disk.pop(tid, None)
+            for tid, task in current.items():
+                previous = self._saved_tasks.get(tid)
+                if previous is None:
+                    disk[tid] = task
+                elif tid in disk:
+                    disk[tid].update(
+                        {key: value for key, value in task.items() if value != previous[key]}
+                    )
             parent = os.path.dirname(os.path.abspath(path))
             os.makedirs(parent, exist_ok=True)
-            payload = [t.to_dict() for t in self._tasks.values()]
             fd, tmp_path = tempfile.mkstemp(dir=parent, prefix=".warming_", suffix=".tmp")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                    json.dump(list(disk.values()), f, indent=2, ensure_ascii=False)
                 os.replace(tmp_path, path)
             except Exception:
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
                 raise
+            self._saved_tasks = current
 
     def list_tasks(self) -> list[WarmingTask]:
         with self._lock:
@@ -195,7 +245,20 @@ class WarmingSchedulerService:
 
     @contextlib.contextmanager
     def retarget_profile(self, old_name: str, new_name: str) -> Iterator[None]:
-        with self._lock:
+        with contextlib.ExitStack() as lease:
+            try:
+                lease.enter_context(self._store_lease())
+                latest = self._read_tasks()
+            except OSError as exc:
+                logger.exception("Could not read warming targets for rename")
+                raise WarmingTargetSaveError("Could not save renamed warming targets") from exc
+            for tid, task in latest.items():
+                if tid in self._tasks:
+                    current = self._tasks[tid]
+                    current.__dict__.update(vars(task))
+                    latest[tid] = current
+            self._tasks = latest
+            self._saved_tasks = self._snapshot()
             previous = [
                 (task, task.profile_names)
                 for task in self._tasks.values()

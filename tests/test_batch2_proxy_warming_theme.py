@@ -251,6 +251,47 @@ def test_profile_rename_retargets_saved_warming_task(tmp_path, monkeypatch):
     assert set(visited) == {"Other", "After"}
 
 
+def test_profile_rename_preserves_warming_tasks_written_by_another_scheduler(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    writer = Container()
+    assert writer.profile_manager.add_profile("Before", "", "linux", engine="chrome")
+    existing = writer.warming_scheduler.add_task("Existing", ["Before"])
+    deleted = writer.warming_scheduler.add_task("Deleted", ["Before"])
+
+    renamer = Container()
+    ws = renamer.warming_scheduler
+    assert ws.get_task(deleted.id) is not None
+    added = writer.warming_scheduler.add_task("New target", ["Other", "Before"])
+    unrelated = writer.warming_scheduler.add_task("Unrelated", ["Other"])
+    assert writer.warming_scheduler.delete_task(deleted.id)
+    assert ws.get_task(added.id) is None
+
+    with TestClient(create_app(renamer), base_url="http://127.0.0.1") as client:
+        assert client.patch("/api/v1/profiles/Before", json={"name": "After"}).status_code == 200
+
+    expected = {
+        existing.id: ["After"],
+        added.id: ["Other", "After"],
+        unrelated.id: ["Other"],
+    }
+    assert {
+        task.id: task.profile_names for task in WarmingSchedulerService().list_tasks()
+    } == expected
+    assert {task.id: task.profile_names for task in ws.list_tasks()} == expected
+
+    follow_up = writer.warming_scheduler.add_task("Follow-up", ["Other"])
+    assert writer.warming_scheduler.delete_task(unrelated.id)
+    del expected[unrelated.id]
+    expected[follow_up.id] = ["Other"]
+    assert {
+        task.id: task.profile_names for task in WarmingSchedulerService().list_tasks()
+    } == expected
+
+
 def test_warming_run_save_error_preserves_state_and_allows_retry(tmp_path, monkeypatch):
     from src.core import config as app_config
 
