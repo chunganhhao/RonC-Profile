@@ -5,12 +5,11 @@ import os
 import tempfile
 import threading
 import time
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 
-@contextmanager
-def profile_lease(profile_dir):
+def _lease_file(profile_dir) -> Path:
     root = Path(tempfile.gettempdir()) / f"ronc-core-leases-{getattr(os, 'getuid', lambda: 0)()}"
     if not root.exists():
         root.mkdir(mode=0o700, exist_ok=True)
@@ -19,8 +18,13 @@ def profile_lease(profile_dir):
     if root.is_symlink() or (os.name != "nt" and root.stat().st_mode & 0o077):
         raise RuntimeError("Unsafe core lease directory")
     key = hashlib.sha256(str(Path(profile_dir).resolve()).encode()).hexdigest()
+    return root / (key + ".lock")
+
+
+@contextmanager
+def profile_lease(profile_dir):
     fd = os.open(
-        root / (key + ".lock"), os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600
+        _lease_file(profile_dir), os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600
     )
     locked = False
     try:
@@ -102,6 +106,16 @@ def native_profile_guard(source: Path, engine: str):
 # metadata lease, never a profile's runner lease (which must remain exclusive).
 _STORE_MUTEX = threading.RLock()
 _STORE_OWNER = threading.local()
+
+
+def discard_lease(path) -> None:
+    """Delete a lease's lock file once what it guards is gone; keep it while anyone holds it.
+
+    Callers must make sure no process can take this lease meanwhile, or two processes
+    could end up holding different files under the same name.
+    """
+    with suppress(BlockingIOError, PermissionError), profile_lease(path), suppress(OSError):
+        os.unlink(_lease_file(path))
 
 
 @contextmanager

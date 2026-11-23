@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from ...core import config as app_config
 from ...core.logging import get_logger
-from ..browser.lease import profile_lease, waiting_lease
+from ..browser.lease import discard_lease, profile_lease, waiting_lease
 
 if TYPE_CHECKING:
     from ...interfaces.protocols import IBrowserLauncher, IProfileManager
@@ -348,7 +348,7 @@ class WarmingSchedulerService:
             return task
 
     def delete_task(self, task_id: str) -> bool:
-        with self._lock:
+        with self._store_lease():
             if task_id not in self._tasks:
                 return False
             previous_tasks = self._tasks.copy()
@@ -361,6 +361,9 @@ class WarmingSchedulerService:
             cancel = self._cancel_flags.pop(task_id, None)
             if cancel:
                 cancel.set()
+            else:
+                # Runs take this lease only under the store lease, after checking the task exists.
+                discard_lease(self._run_lease_path(task_id))
             return True
 
     def stop_task(self, task_id: str) -> bool:

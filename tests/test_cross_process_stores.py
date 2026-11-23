@@ -13,12 +13,20 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.dependencies import get_browser_launcher, get_profile_manager
+from src.api.dependencies import (
+    get_browser_launcher,
+    get_event_bus,
+    get_profile_manager,
+    get_warming_scheduler,
+)
 from src.api.routes.profiles import router as profiles_router
+from src.api.routes.warming import router as warming_router
 from src.models.profile import Profile
+from src.services.browser import lease
 from src.services.browser.extensions import ExtensionService
-from src.services.browser.lease import store_lease
+from src.services.browser.lease import profile_lease, store_lease
 from src.services.profile import manager
+from src.services.warming import scheduler
 from src.services.warming.scheduler import WarmingSchedulerService
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -154,6 +162,51 @@ def test_peer_process_refuses_a_duplicate_run_and_keeps_the_owners_state(tmp_pat
     assert peer.run_task_async(task.id, _Profiles(), peer_launcher)
     assert peer_launcher.visited.wait(10)
     assert peer.stop_task(task.id)
+
+
+def _add_task(service, name):
+    return service.add_task(
+        name, ["warm"], preset="custom", custom_urls=["https://example.com/"], duration_minutes=5
+    )
+
+
+def test_peer_stop_answers_504_while_the_owner_has_not_stopped(tmp_path, monkeypatch):
+    path = str(tmp_path / "warming.json")
+    owner = WarmingSchedulerService(file_path=path)
+    task = _add_task(owner, "Stuck")
+    owner._tasks[task.id].status = "running"
+    owner._save()
+    peer = WarmingSchedulerService(file_path=path)
+    monkeypatch.setattr(scheduler, "PEER_STOP_WAIT_SECONDS", 0.3)
+    app = FastAPI()
+    app.include_router(warming_router, prefix="/api/v1")
+    app.dependency_overrides[get_warming_scheduler] = lambda: peer
+    app.dependency_overrides[get_event_bus] = lambda: type("EB", (), {"emit": lambda *a: None})()
+
+    # The owner process holds the run lease and does not answer the Stop in time.
+    with profile_lease(owner._run_lease_path(task.id)):
+        response = TestClient(app).post(f"/api/v1/warming/tasks/{task.id}/stop")
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "Warming task is still stopping in another process"
+    assert _shared(path, task.id)["status"] == "idle"
+
+
+def test_deleting_a_task_removes_its_run_lease_unless_a_run_holds_it(tmp_path):
+    service = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    idle, held = _add_task(service, "Idle"), _add_task(service, "Held")
+    idle_lock = lease._lease_file(service._run_lease_path(idle.id))
+    held_lock = lease._lease_file(service._run_lease_path(held.id))
+    with profile_lease(service._run_lease_path(idle.id)):
+        pass
+    assert idle_lock.exists()
+
+    assert service.delete_task(idle.id)
+    with profile_lease(service._run_lease_path(held.id)):
+        assert service.delete_task(held.id)
+        assert held_lock.exists()
+
+    assert not idle_lock.exists()
 
 
 def test_named_lookup_sees_a_profile_another_process_created(tmp_path, monkeypatch):
