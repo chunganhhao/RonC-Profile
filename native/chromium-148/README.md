@@ -301,6 +301,13 @@ subtag whose `.lproj/locale.pak` directory is unbundled (for example `de-DE`,
 - `LocaleController::Init()` (`locale_controller.cc`) prefers `--fingerprint-locale`
   over `--lang`, preserving full region formatting (`de-DE`, `123.456,789`) across
   Window, Worker, SharedWorker, ServiceWorker, and popups.
+- `verify.py` waits up to `3000ms` for non-empty `speechSynthesis.getVoices()`
+  (ignoring empty intermediate `voiceschanged` events) and checks host macOS
+  `AVSpeechSynthesisVoice.speechVoices` parity without adding C++ voice spoofing:
+  when the host exposes voices (or cannot be probed), `localVoiceCount > 0` fails
+  closed; when a headless CI runner reports `0` OS voices, `googleVoices == []`
+  remains strictly enforced and `native-acceptance.json` records
+  `speech_voice_gate: "host_unavailable_on_runner"`.
 - Only two `.cc` files are modified (no header or `BUILD.gn` edits), allowing fast
   incremental resume from post-`028` checkpoints such as Run `45217857712`.
 
