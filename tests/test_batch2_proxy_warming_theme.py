@@ -292,6 +292,24 @@ def test_profile_rename_preserves_warming_tasks_written_by_another_scheduler(tmp
     } == expected
 
 
+def test_warming_retarget_keeps_unowned_running_status_on_disk_only(tmp_path):
+    path = tmp_path / "warming.json"
+    owner = WarmingSchedulerService(file_path=str(path))
+    task = owner.add_task("Existing", ["Before"])
+    task.status = "running"
+    owner._save()
+
+    renamer = WarmingSchedulerService(file_path=str(path))
+    assert renamer.get_task(task.id).status == "idle"
+    with renamer.retarget_profile("Before", "After"):
+        pass
+
+    assert renamer.get_task(task.id).status == "idle"
+    saved = json.loads(path.read_text(encoding="utf-8"))[0]
+    assert saved["profile_names"] == ["After"]
+    assert saved["status"] == "running"
+
+
 def test_warming_run_save_error_preserves_state_and_allows_retry(tmp_path, monkeypatch):
     from src.core import config as app_config
 

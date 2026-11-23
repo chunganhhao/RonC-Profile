@@ -253,6 +253,8 @@ class WarmingSchedulerService:
                 logger.exception("Could not read warming targets for rename")
                 raise WarmingTargetSaveError("Could not save renamed warming targets") from exc
             for tid, task in latest.items():
+                if task.status == "running" and tid not in self._cancel_flags:
+                    task.status = "idle"
                 if tid in self._tasks:
                     current = self._tasks[tid]
                     current.__dict__.update(vars(task))
