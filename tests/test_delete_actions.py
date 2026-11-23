@@ -1,4 +1,3 @@
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -7,6 +6,7 @@ import pytest
 from src.core.strings import get_string
 from src.services.profile.manager import ProfileStoreChangedError
 from src.ui.actions import bulk, profile
+from src.ui.dialogs.confirm import open_confirm_dialog
 
 
 @pytest.mark.parametrize("action", [bulk, profile])
@@ -75,10 +75,10 @@ def test_single_delete_confirmation_cancel(cancel_with_escape):
 
     if cancel_with_escape:
         enter = SimpleNamespace(key="Enter")
-        asyncio.run(page.on_keyboard_event(enter))
-        previous_keyboard_handler.assert_called_once_with(enter)
+        page.on_keyboard_event(enter)
+        previous_keyboard_handler.assert_not_called()
         page.pop_dialog.assert_not_called()
-        asyncio.run(page.on_keyboard_event(SimpleNamespace(key="Escape")))
+        page.on_keyboard_event(SimpleNamespace(key="Escape"))
     else:
         cancel_button = next(c for c in dialog.actions if c.content == get_string("cancel"))
         cancel_button.on_click(None)
@@ -102,3 +102,33 @@ def test_single_delete_confirmation_runs_before_close():
     pm.delete_profile.assert_called_once_with("first")
     page.pop_dialog.assert_called_once_with()
     assert page.on_keyboard_event is None
+
+
+def test_confirm_dialog_restores_keyboard_handler_if_confirmation_fails():
+    page = Mock()
+    previous_keyboard_handler = page.on_keyboard_event
+    page.show_dialog.side_effect = lambda dialog: setattr(dialog, "open", True)
+    confirm = Mock(side_effect=RuntimeError("confirmation failed"))
+    open_confirm_dialog(page, "first", confirm)
+    dialog = page.show_dialog.call_args.args[0]
+
+    with pytest.raises(RuntimeError, match="confirmation failed"):
+        dialog.actions[1].on_click(None)
+
+    page.pop_dialog.assert_called_once_with()
+    assert page.on_keyboard_event is previous_keyboard_handler
+
+
+@pytest.mark.parametrize("handler_replaced", [False, True])
+def test_confirm_dialog_dismiss_does_not_overwrite_a_new_keyboard_handler(handler_replaced):
+    page = Mock()
+    previous_keyboard_handler = page.on_keyboard_event
+    open_confirm_dialog(page, "first", Mock())
+    dialog = page.show_dialog.call_args.args[0]
+    if handler_replaced:
+        page.on_keyboard_event = Mock()
+    expected = page.on_keyboard_event if handler_replaced else previous_keyboard_handler
+
+    dialog.on_dismiss(None)
+
+    assert page.on_keyboard_event is expected

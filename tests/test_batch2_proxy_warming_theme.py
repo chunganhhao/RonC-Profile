@@ -738,6 +738,8 @@ def test_proxy_pool_long_text_has_bounded_space_and_masked_tooltips(tmp_path):
 
 
 def test_toast_visibility_does_not_change_toolbar_layout():
+    from src.ui.app import App
+
     subtitle = ft.Text("Profiles")
     toast = ft.Container(visible=False)
     content = build_content_area(
@@ -761,6 +763,14 @@ def test_toast_visibility_does_not_change_toolbar_layout():
     positioned = overlay.controls[1]
     assert positioned.content is toast
     assert positioned.left == positioned.right == 0
+    app = App.__new__(App)
+    app.refs = SimpleNamespace(content_subtitle=subtitle)
+    app._toast_banner = toast
+    for visible in (True, False):
+        app._set_toast_visible(visible)
+        assert toast.visible is visible
+        assert subtitle.visible is not visible
+        assert body.controls[2] is toolbar
 
 
 def test_proxy_pool_sidebar_tracks_import_and_delete(tmp_path, monkeypatch):

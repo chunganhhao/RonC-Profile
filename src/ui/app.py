@@ -159,7 +159,6 @@ class App:
         )
         self._toast_banner = ft.Container(
             key="action_toast_banner",
-            visible=time.monotonic() < self._toast_until and bool(self._toast_text.value),
             padding=ft.Padding.symmetric(horizontal=12, vertical=6),
             border_radius=8,
             bgcolor=COLORS["live_tint"],
@@ -173,6 +172,9 @@ class App:
                     self._toast_text,
                 ],
             ),
+        )
+        self._set_toast_visible(
+            time.monotonic() < self._toast_until and bool(self._toast_text.value)
         )
         self.page.title = get_string("window_title")
         self.page.controls.clear()
@@ -602,7 +604,7 @@ class App:
         )
 
         now = time.monotonic()
-        self._toast_banner.visible = now < self._toast_until and bool(self._toast_text.value)
+        self._set_toast_visible(now < self._toast_until and bool(self._toast_text.value))
         r.profile_list_area.controls = (
             [
                 build_profile_card(
@@ -765,6 +767,11 @@ class App:
                 else get_string("no_active_sessions")
             )
 
+    def _set_toast_visible(self, visible: bool) -> None:
+        self._toast_banner.visible = visible
+        if self.refs is not None:
+            self.refs.content_subtitle.visible = not visible
+
     def _log(self, message: str) -> None:
         logger.info(message)
         visible_message = localize_launch_error(message) if "LAUNCH_FAILED:" in message else message
@@ -773,7 +780,7 @@ class App:
             self._toast_text.value = visible_message
             self._toast_text.tooltip = visible_message
             self._toast_text.color = COLORS["live_ink"]
-            self._toast_banner.visible = True
+            self._set_toast_visible(True)
             for prefix in ("Updated:", "Đã cập nhật:", "Updated profile:", "Đã cập nhật hồ sơ:"):
                 if message.startswith(prefix):
                     if "->" in message:
@@ -814,7 +821,7 @@ class App:
                     del self._feedback_until[k]
                 toast_expired = self._toast_banner.visible and now >= self._toast_until
                 if toast_expired:
-                    self._toast_banner.visible = False
+                    self._set_toast_visible(False)
                 running_now = self.bl.running_profile_names()
                 changed = running_now != self.state._last_running_snapshot
                 if changed:

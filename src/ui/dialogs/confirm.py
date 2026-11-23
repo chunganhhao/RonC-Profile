@@ -1,5 +1,4 @@
 from collections.abc import Callable
-from inspect import isawaitable
 
 import flet as ft
 
@@ -26,22 +25,22 @@ def open_confirm_dialog(
             page.update()
 
     def _on_cancel(_: ft.ControlEvent) -> None:
-        if dlg.open:
-            page.pop_dialog()
+        try:
+            if dlg.open:
+                page.pop_dialog()
+        finally:
             _restore_keyboard_handler()
 
-    async def _on_key_down(event: ft.KeyboardEvent) -> None:
+    def _on_key_down(event: ft.KeyboardEvent) -> None:
         if dlg.open and event.key == "Escape":
             _on_cancel(event)
-        elif previous_keyboard_handler is not None:
-            result = previous_keyboard_handler(event)
-            if isawaitable(result):
-                await result
 
     def _on_confirm(event: ft.ControlEvent) -> None:
         if dlg.open:
-            on_confirm()
-            _on_cancel(event)
+            try:
+                on_confirm()
+            finally:
+                _on_cancel(event)
 
     dlg = ft.AlertDialog(
         modal=True,
