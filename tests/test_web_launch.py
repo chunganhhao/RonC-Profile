@@ -117,6 +117,33 @@ def test_editor_sends_concrete_os_and_keeps_chrome_seed_and_cores(editing, chang
     assert result == expected
 
 
+@pytest.mark.parametrize(
+    ("initial", "value", "expected"),
+    [
+        ("https://example.test/start", "https://example.test/start", {}),
+        ("https://example.test/start", "", {"start_url": ""}),
+        (
+            "https://example.test/start",
+            " https://example.test/new ",
+            {"start_url": "https://example.test/new"},
+        ),
+        ("", "https://example.test/start", {"start_url": "https://example.test/start"}),
+    ],
+)
+def test_editor_only_sends_changed_startup_url(initial, value, expected):
+    editor = PANEL.split("function openEditor(", 1)[1]
+    expression = re.search(r"^\s*start_url: (.*),$", editor, re.M)[1]
+    assert (
+        run_js(
+            f"""
+        const initialStartUrl = {json.dumps(initial)}, startUrl = {{value: {json.dumps(value)}}};
+        console.log(JSON.stringify({{start_url: {expression}}}));
+        """
+        )
+        == expected
+    )
+
+
 @pytest.mark.parametrize("language", ["en", "vi"])
 def test_panel_localizes_cross_os_error(language):
     function = re.search(r"function localizeLaunchError\(message\) \{.*?\n\}", PANEL, re.S)[0]

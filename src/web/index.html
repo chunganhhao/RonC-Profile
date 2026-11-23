@@ -770,6 +770,7 @@ function applyTheme() {
   document.querySelectorAll("[data-accent-btn]").forEach((b) => b.classList.toggle("active", b.dataset.accentBtn === accent));
 }
 Object.assign(I18N.en, {
+  start_url: "Startup URL",
   col_id: "ID", col_actions: "Actions", col_tags: "Tags", col_notes: "Notes / Device", copy_user: "Copy Gmail", copied_user: "Gmail copied", copy_failed: "Clipboard unavailable",
   edit_field: "Edit {field}", order_hint: "Position in the list (1 to {count}). Browser data and session stay unchanged.",
   name_hint: "Gmail stays unchanged. Stop the browser before renaming.", proxy_next: "Changes apply on the next launch.",
@@ -805,6 +806,7 @@ Object.assign(I18N.en, {
   toolbar_running: "Running ({r})"
 });
 Object.assign(I18N.vi, {
+  start_url: "URL mở mặc định",
   col_id: "ID", col_actions: "Thao tác", col_tags: "Nhãn", col_notes: "Ghi chú / Thiết bị", copy_user: "Sao chép Gmail", copied_user: "Đã sao chép Gmail", copy_failed: "Không thể sao chép vào clipboard",
   edit_field: "Chỉnh sửa {field}", order_hint: "Vị trí trong danh sách (1 đến {count}). Dữ liệu và phiên trình duyệt giữ nguyên.",
   name_hint: "Gmail giữ nguyên. Dừng trình duyệt trước khi đổi tên.", proxy_next: "Thay đổi áp dụng ở lần mở tiếp theo.",
@@ -843,7 +845,7 @@ const PAGE_SIZES = [5, 10, 20, 50, 100, 200];
 let pageSize = Number(store.get("foxprofile.pageSize")) || 20;
 if (!PAGE_SIZES.includes(pageSize)) pageSize = 20;
 let currentPage = 1;
-let profiles = [], running = new Set(), fingerprints = {}, extensions = [];
+let profiles = [], running = new Set(), extensions = [];
 let filter = "all";
 const busy = new Map();          // name -> "starting" | "stopping"
 const failed = new Map();        // name -> error message of the last failed launch
@@ -941,20 +943,12 @@ async function api(method, path, body, { raw = false, authToken = token } = {}) 
 }
 const enc = encodeURIComponent;
 
-function maskProxy(p) {
-  if (!p) return "";
-  let s = p.trim();
-  // host:port:user:pass from proxy sellers
-  const parts = s.split("://").pop().split(":");
-  if (!s.includes("@") && parts.length === 4 && /^\d+$/.test(parts[1])) s = (s.includes("://") ? s.split("://")[0] + "://" : "") + parts[0] + ":" + parts[1];
-  try { const u = new URL(s.includes("://") ? s : "http://" + s); return `${u.protocol}//${u.hostname}:${u.port}`; } catch { return ""; }
-}
 const hhmm = (d) => d.toTimeString().slice(0, 5);
 
 async function refresh() {
   try {
     const [list, run, extRes] = await Promise.all([
-      api("GET", "/profiles"),
+      api("GET", "/profiles?panel=true"),
       api("GET", "/browser"),
       api("GET", "/extensions").catch(() => ({ extensions: [] })),
     ]);
@@ -968,12 +962,8 @@ async function refresh() {
     running = now;
     for (const name of [...selected]) if (!profiles.some((p) => p.name === name)) selected.delete(name);
     for (const name of [...failed.keys()]) if (now.has(name) || !profiles.some((p) => p.name === name)) failed.delete(name);
-    await Promise.all(profiles.filter((p) => !(p.name in fingerprints)).map(loadFingerprint));
     render();
   } catch (e) { if (e.status !== 401) toast(e.message, true); }
-}
-async function loadFingerprint(p) {
-  try { fingerprints[p.name] = await api("GET", `/profiles/${enc(p.name)}/fingerprint`); } catch { fingerprints[p.name] = null; }
 }
 
 const FILTERS = [
@@ -1000,7 +990,7 @@ function render() {
   // Rebuilding the list replaces every button; skip it when nothing changed so a
   // periodic refresh cannot swap the button under the user's cursor mid-click.
   const key = JSON.stringify([lang, q, filter, pageSize, currentPage, profiles, [...running].sort(), [...busy], [...failed], [...selected].sort(),
-    [...justLanded], [...copyFeedback.keys()], pageItems.map((p) => fingerprints[p.name] || null)]);
+    [...justLanded], [...copyFeedback.keys()]]);
   if (key === lastRender) return;
   lastRender = key;
 
@@ -1131,14 +1121,14 @@ function stamp(p) {
 
 function row(p) {
   const on = running.has(p.name);
-  const fp = fingerprints[p.name];
+  const fp = p.fingerprint;
   const isBusy = busy.has(p.name);
   const os = { windows: "WIN", macos: "MAC", linux: "LIN" }[p.os_type] || "OS";
   const engine = p.engine === "chrome" ? "Chrome" : "Camoufox";
   const box = h("input", { type: "checkbox", "aria-label": t("select_row", { name: p.name }),
     onchange: (e) => { e.target.checked ? selected.add(p.name) : selected.delete(p.name); render(); } });
   box.checked = selected.has(p.name);
-  const proxy = maskProxy(p.proxy);
+  const proxy = p.proxy_display;
   const main = on
     ? h("button", { class: "btn btn-ink main", disabled: isBusy, onclick: () => toggle(p) }, icon("stop", true), t("stop"))
     : h("button", { class: "btn btn-line main", disabled: isBusy, onclick: () => toggle(p) }, icon("globe", true), t("launch"));
@@ -1321,7 +1311,7 @@ async function bulk(action) {
     if (!stopped.length) return toast(t("stop_first"), true);
     if (!(await confirmDialog(t("confirm_bulk_delete", { n: stopped.length }), t("bulk_delete"), true))) return;
     let deleted = 0;
-    for (const n of stopped) { try { await api("DELETE", `/profiles/${enc(n)}`); deleted++; selected.delete(n); delete fingerprints[n]; } catch (e) { toast(`${n}: ${e.message}`, true); } }
+    for (const n of stopped) { try { await api("DELETE", `/profiles/${enc(n)}`); deleted++; selected.delete(n); } catch (e) { toast(`${n}: ${e.message}`, true); } }
     const skipped = names.length - deleted;
     if (deleted) toast(t("deleted_n", { n: deleted }) + (skipped ? " · " + t("bulk_skip_running", { n: skipped }) : ""));
     return refresh();
@@ -1342,7 +1332,6 @@ async function toggle(p, { quiet = false } = {}) {
     } else {
       if (!quiet) toast(t("launching", { name: p.name }));
       const r = await api("POST", `/browser/${enc(p.name)}/launch`);
-      delete fingerprints[p.name];
       liveSince.set(p.name, new Date());
       justLanded.add(p.name);
       if (!quiet) toast(r && r.message && !/started/i.test(r.message) ? r.message : t("started", { name: p.name }));
@@ -1414,7 +1403,7 @@ function openEditor(p) {
       [["camoufox", t("engine_camoufox")], ["chrome", t("engine_chrome")]].map(([v, label]) =>
         h("option", { value: v, selected: (p ? p.engine : "camoufox") === v }, label)));
     const engineNote = h("div", { class: "note" }, icon("alert", true), h("span", {}, t("engine_note")));
-    const existingFp = p && fingerprints[p.name];
+    const existingFp = p?.fingerprint;
     let currentSeed = p
       ? (existingFp && existingFp.seed ? existingFp.seed : null)
       : Math.floor(100000000 + Math.random() * 2000000000);
@@ -1477,6 +1466,8 @@ function openEditor(p) {
     const proxy = h("input", { id: "f-proxy", value: p && p.proxy ? p.proxy : "", placeholder: "socks5://user:pass@host:port", autocomplete: "off", class: "data" });
     const tz = h("input", { id: "f-tz", value: p && p.timezone ? p.timezone : "", placeholder: t("tz_hint"), autocomplete: "off", class: "data" });
     const loc = h("input", { id: "f-locale", value: p && p.locale ? p.locale : "", placeholder: t("locale_hint"), autocomplete: "off", class: "data" });
+    const initialStartUrl = p?.start_url || "";
+    const startUrl = h("input", { id: "f-start-url", value: initialStartUrl, placeholder: "https://mail.google.com", inputmode: "url", autocomplete: "off", class: "data" });
     const recovery = h("input", { id: "f-recovery", value: p && p.recovery_email ? p.recovery_email : "", placeholder: t("recovery_hint"), autocomplete: "off", class: "data" });
     const notesInput = h("input", { id: "f-notes", value: p && p.notes ? p.notes : "", placeholder: t("empty_notes"), autocomplete: "off" });
     let backupLoaded = !p, initialBackupCodes = "", backupDirty = false;
@@ -1582,6 +1573,7 @@ function openEditor(p) {
         proxy: proxy.value.trim() || null,
         timezone: tz.value.trim(),
         locale: loc.value.trim(),
+        start_url: startUrl.value.trim() !== initialStartUrl ? startUrl.value.trim() : undefined,
         recovery_email: recovery.value.trim(),
         backup_codes: p ? (backupLoaded && rawBackup !== initialBackupCodes ? rawBackup : undefined) : (rawBackup || undefined),
         notes: notesInput.value.trim(),
@@ -1591,7 +1583,7 @@ function openEditor(p) {
       };
       if (!p) body.engine = engine.value;
       try {
-        if (p) { await api("PATCH", `/profiles/${enc(p.name)}`, body); delete fingerprints[p.name]; flashFeedback(body.name, "edit_profile"); toast(t("saved")); }
+        if (p) { await api("PATCH", `/profiles/${enc(p.name)}`, body); flashFeedback(body.name, "edit_profile"); toast(t("saved")); }
         else { await api("POST", "/profiles", body); toast(t("created", { name: body.name })); }
         close(); refresh();
       } catch (ex) { say("err", ex.message); }
@@ -1609,6 +1601,7 @@ function openEditor(p) {
         h("div", { class: "hint", style: "margin-top:6px;font-size:12px;color:var(--ink-3)" }, t("geo_hint")),
         geo,
         h("div", { class: "field-row" }, field(t("recovery_email"), recovery), field(t("notes"), notesInput)),
+        field(t("start_url"), startUrl),
         backupSection,
         h("div", { class: "where-row", style: "margin-top:16px" }, h("b", {}, t("hw_section_title")), rollBtn),
         h("div", { class: "field-row" }, field(t("cpu_cores"), coresSelect), field(t("webrtc_mode"), webrtcSelect)),
@@ -1657,7 +1650,7 @@ function geoLines(r, useLocale, useTz, useBoth, curTz = "", curLoc = "") {
 async function removeProfile(p) {
   if (running.has(p.name)) return toast(t("stop_first"), true);
   if (!(await confirmDialog(t("confirm_delete", { name: p.name }), t("delete"), true))) return;
-  try { await api("DELETE", `/profiles/${enc(p.name)}`); selected.delete(p.name); toast(t("deleted", { name: p.name })); delete fingerprints[p.name]; refresh(); }
+  try { await api("DELETE", `/profiles/${enc(p.name)}`); selected.delete(p.name); toast(t("deleted", { name: p.name })); refresh(); }
   catch (e) { toast(e.message, true); }
 }
 
@@ -1673,8 +1666,7 @@ function openCookies(p) {
   modal((close) => {
     const msg = h("div", { class: "msg", role: "status" });
     const fpSection = h("div");
-    const renderFp = () => {
-      const fp = fingerprints[p.name];
+    const renderFp = (fp) => {
       fpSection.replaceChildren(
         h("div", { class: "field" }, h("label", {}, t("fp_title"))),
         fp && fp.exists
@@ -1684,7 +1676,7 @@ function openCookies(p) {
               h("dt", {}, t("fp_cpu")), h("dd", { class: "data" }, String(fp.hardware_concurrency || "?")))
           : h("div", { class: "note calm" }, icon("fingerprint", true), h("span", {}, t("no_fp"))));
     };
-    renderFp();
+    renderFp(p.fingerprint);
     const actions = [];
     const run = async (fn) => {
       if (actions.some((b) => b.disabled)) return;
@@ -1724,7 +1716,7 @@ function openCookies(p) {
             if (!(await confirmDialog(t("confirm_reset", { name: p.name }), t("reset_fp"), true))) return;
             await run(async () => {
               await api("DELETE", `/profiles/${enc(p.name)}/fingerprint`);
-              fingerprints[p.name] = null; renderFp(); toast(t("fp_reset")); refresh();
+              renderFp(null); toast(t("fp_reset")); refresh();
             });
           })),
         msg),

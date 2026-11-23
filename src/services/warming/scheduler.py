@@ -9,8 +9,8 @@ import secrets
 import tempfile
 import threading
 import time
-from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from collections.abc import Callable, Iterator
+from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from ...core import config as app_config
@@ -41,6 +41,10 @@ WARMING_PRESETS: dict[str, list[str]] = {
 }
 
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+class WarmingTargetSaveError(OSError):
+    pass
 
 
 def validate_schedule_time(value: str) -> bool:
@@ -189,6 +193,37 @@ class WarmingSchedulerService:
         with self._lock:
             return self._tasks.get(task_id)
 
+    @contextlib.contextmanager
+    def retarget_profile(self, old_name: str, new_name: str) -> Iterator[None]:
+        with self._lock:
+            previous = [
+                (task, task.profile_names)
+                for task in self._tasks.values()
+                if old_name in task.profile_names
+            ]
+            if not previous:
+                yield
+                return
+            for task, names in previous:
+                task.profile_names = [new_name if name == old_name else name for name in names]
+            try:
+                try:
+                    self._save()
+                except OSError as exc:
+                    logger.exception("Could not save renamed warming targets")
+                    raise WarmingTargetSaveError("Could not save renamed warming targets") from exc
+            except Exception:
+                for task, names in previous:
+                    task.profile_names = names
+                raise
+            try:
+                yield
+            except Exception:
+                for task, names in previous:
+                    task.profile_names = names
+                self._save()
+                raise
+
     def add_task(
         self,
         name: str,
@@ -275,20 +310,46 @@ class WarmingSchedulerService:
         step_dwell_seconds: float | None = None,
         on_update: Callable[[], None] | None = None,
     ) -> bool:
-        """Execute a warming task synchronously (can be called directly or in a worker thread)."""
-        log = log_fn or (lambda m: logger.info(m))
+        """Execute a warming task synchronously."""
         with self._lock:
-            task = self._tasks.get(task_id)
-            if not task or task.status == "running":
-                return False
-            task.status = "running"
-            cancel_ev = threading.Event()
-            self._cancel_flags[task_id] = cancel_ev
-            urls = task.resolved_urls()
-            targets = list(task.profile_names)
-            dur_mins = task.duration_minutes
-            task_name = task.name
+            started = self._begin_task(task_id)
+        if started is None:
+            return False
+        task, cancel_ev, _ = started
+        return self._execute_task(task, cancel_ev, pm, bl, log_fn, step_dwell_seconds, on_update)
+
+    def _begin_task(self, task_id: str) -> tuple[WarmingTask, threading.Event, str] | None:
+        task = self._tasks.get(task_id)
+        if not task or task.status == "running":
+            return None
+        previous_status = task.status
+        task.status = "running"
+        cancel_ev = threading.Event()
+        self._cancel_flags[task_id] = cancel_ev
+        try:
             self._save()
+        except Exception:
+            task.status = previous_status
+            self._cancel_flags.pop(task_id, None)
+            raise
+        return replace(task), cancel_ev, previous_status
+
+    def _execute_task(
+        self,
+        task: WarmingTask,
+        cancel_ev: threading.Event,
+        pm: IProfileManager,
+        bl: IBrowserLauncher,
+        log_fn: Callable[[str], None] | None,
+        step_dwell_seconds: float | None,
+        on_update: Callable[[], None] | None,
+    ) -> bool:
+        log = log_fn or (lambda m: logger.info(m))
+        task_id = task.id
+        urls = task.resolved_urls()
+        targets = task.profile_names
+        dur_mins = task.duration_minutes
+        task_name = task.name
 
         if on_update:
             with contextlib.suppress(Exception):
@@ -433,14 +494,21 @@ class WarmingSchedulerService:
         on_update: Callable[[], None] | None = None,
     ) -> bool:
         with self._lock:
-            task = self._tasks.get(task_id)
-            if not task or task.status == "running":
+            started = self._begin_task(task_id)
+            if started is None:
                 return False
-        threading.Thread(
-            target=self.execute_task_sync,
-            args=(task_id, pm, bl, log_fn, None, on_update),
-            daemon=True,
-        ).start()
+            task, cancel_ev, previous_status = started
+            try:
+                threading.Thread(
+                    target=self._execute_task,
+                    args=(task, cancel_ev, pm, bl, log_fn, None, on_update),
+                    daemon=True,
+                ).start()
+            except RuntimeError:
+                self._tasks[task_id].status = previous_status
+                self._cancel_flags.pop(task_id, None)
+                self._save()
+                raise
         return True
 
     def check_due_tasks(

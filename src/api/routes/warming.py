@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from ...core.logging import get_logger
 from ...services.warming.scheduler import WARMING_PRESETS
 from ..dependencies import (
     get_browser_launcher,
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
     from ...services.warming.scheduler import WarmingSchedulerService
 
 router = APIRouter(prefix="/warming", tags=["warming"])
+logger = get_logger("api.warming")
 
 
 class WarmingCreateRequest(BaseModel):
@@ -75,7 +77,11 @@ def run_warming_task(
 ) -> dict:
     if ws.get_task(task_id) is None:
         raise HTTPException(status_code=404, detail="Warming task not found")
-    started = ws.run_task_async(task_id, pm, bl, on_update=eb.emit)
+    try:
+        started = ws.run_task_async(task_id, pm, bl, on_update=eb.emit)
+    except OSError as exc:
+        logger.exception("Could not save warming task start")
+        raise HTTPException(status_code=500, detail="Could not save warming task start") from exc
     return {"started": started, "task_id": task_id}
 
 

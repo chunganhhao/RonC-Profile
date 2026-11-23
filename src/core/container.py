@@ -33,7 +33,7 @@ class Container:
     def profile_manager(self) -> IProfileManager:
         from ..services.profile.manager import ProfileManager
 
-        return self._get("pm", ProfileManager)
+        return self._get("pm", lambda: ProfileManager(warming_scheduler=self.warming_scheduler))
 
     @property
     def browser_launcher(self) -> IBrowserLauncher:

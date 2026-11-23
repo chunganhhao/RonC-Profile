@@ -107,15 +107,21 @@ def open_warming_dialog(
             content=ft.Text(label, size=11.5, font_family=FONT_DATA, color=fg),
         )
 
-    def _run_task(tid: str) -> None:
-        warming_service.run_task_async(
-            tid,
-            pm,
-            bl,
-            log_fn=log,
-            on_update=lambda: _rebuild_tasks(notify=True),
-        )
+    def _run_task(tid: str) -> bool:
+        try:
+            warming_service.run_task_async(
+                tid,
+                pm,
+                bl,
+                log_fn=log,
+                on_update=lambda: _rebuild_tasks(notify=True),
+            )
+        except OSError:
+            _rebuild_tasks()
+            _show_error(get_string("warming_start_save_error"))
+            return False
         _rebuild_tasks(notify=True)
+        return True
 
     def _stop_task(tid: str) -> None:
         try:
@@ -240,7 +246,9 @@ def open_warming_dialog(
                 page.update()
 
     def _show_save_error(exc: OSError) -> None:
-        err = get_string("warming_save_error_msg", error=str(exc))
+        _show_error(get_string("warming_save_error_msg", error=str(exc)))
+
+    def _show_error(err: str) -> None:
         feedback_text.value = err
         feedback_text.color = COLORS["error"]
         feedback_text.visible = True
@@ -279,12 +287,14 @@ def open_warming_dialog(
             return
 
         if run_immediately:
+            if not _run_task(task.id):
+                return
             msg = get_string("warming_started_msg", name=task.name, count=len(targets))
             feedback_text.value = msg
             feedback_text.color = COLORS["success"]
             feedback_text.visible = True
             log(msg)
-            _run_task(task.id)
+            _rebuild_tasks(notify=True)
         else:
             msg = get_string(
                 "warming_saved_msg",

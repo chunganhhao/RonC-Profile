@@ -404,6 +404,7 @@ class App:
 
     def _on_edit_field(self, name: str, field: str, row_index: int = 1) -> None:
         from ..services.profile.manager import ProfileStoreChangedError
+        from ..services.warming.scheduler import WarmingTargetSaveError
         from .dialogs.profile_field import open_profile_field_dialog
 
         profile = self.pm.profiles.get(name)
@@ -427,6 +428,8 @@ class App:
                     current.locale,
                     **({field: value} if field not in ("name", "proxy") else {}),
                 )
+            except WarmingTargetSaveError:
+                return get_string("warming_rename_save_error")
             except (ProfileStoreChangedError, OSError, ValueError) as exc:
                 return str(exc) or get_string("update_failed")
             if not ok:

@@ -220,6 +220,99 @@ def test_warming_scheduler_execution_and_due_slots(tmp_path, monkeypatch):
     assert ws.check_due_tasks(pm, bl, now=dt) == []
 
 
+def test_profile_rename_retargets_saved_warming_task(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    container = Container()
+    pm, ws = container.profile_manager, container.warming_scheduler
+    for name in ("Before", "Other"):
+        assert pm.add_profile(name, "", "linux", engine="chrome")
+    task = ws.add_task("Warm", ["Other", "Before"])
+    untouched = ws.add_task("Unrelated", ["Other"])
+
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        assert client.patch("/api/v1/profiles/Before", json={"name": "After"}).status_code == 200
+        assert client.get("/api/v1/profiles/Before").status_code == 404
+        tasks = client.get("/api/v1/warming/tasks").json()["tasks"]
+    assert {t["id"]: t["profile_names"] for t in tasks} == {
+        task.id: ["Other", "After"],
+        untouched.id: ["Other"],
+    }
+    reloaded = WarmingSchedulerService()
+    assert reloaded.get_task(task.id).profile_names == ["Other", "After"]
+    visited = []
+    launcher = SimpleNamespace(
+        is_running=lambda _: True, control=lambda name, *_args, **_kwargs: visited.append(name)
+    )
+    assert reloaded.execute_task_sync(task.id, pm, launcher, step_dwell_seconds=0)
+    assert set(visited) == {"Other", "After"}
+
+
+def test_warming_run_save_error_preserves_state_and_allows_retry(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    container = Container()
+    ws = container.warming_scheduler
+    task = ws.add_task("Warm", ["Missing profile"])
+    snapshot = task.to_dict()
+    saved = (tmp_path / "warming.json").read_bytes()
+    done = threading.Event()
+    container.event_bus.subscribe(
+        lambda: done.set() if ws.get_task(task.id).status == "failed" else None
+    )
+
+    def fail_write():
+        raise PermissionError(errno.EACCES, "read-only store")
+
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        url = f"/api/v1/warming/tasks/{task.id}/run"
+        with monkeypatch.context() as patch:
+            patch.setattr(ws, "_save", fail_write)
+            response = client.post(url)
+        assert response.status_code == 500
+        assert task.to_dict() == snapshot
+        assert task.id not in ws._cancel_flags
+        assert (tmp_path / "warming.json").read_bytes() == saved
+        assert client.post(url).json()["started"] is True
+        assert done.wait(5)
+        assert ws.get_task(task.id).last_result == "Failed (0/1 profiles)"
+
+
+def test_profile_rename_rolls_back_when_warming_targets_cannot_be_saved(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    container = Container()
+    pm, ws = container.profile_manager, container.warming_scheduler
+    assert pm.add_profile("Before", "", "linux", engine="chrome")
+    task = ws.add_task("Warm", ["Before"])
+    profiles_file = tmp_path / "profiles.json"
+    warming_file = tmp_path / "warming.json"
+    old_profiles, old_tasks = profiles_file.read_bytes(), warming_file.read_bytes()
+
+    def fail_write():
+        raise PermissionError(errno.EACCES, "read-only store")
+
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        monkeypatch.setattr(ws, "_save", fail_write)
+        assert client.patch("/api/v1/profiles/Before", json={"name": "After"}).status_code == 500
+        assert client.get("/api/v1/profiles/Before").status_code == 200
+        assert client.get("/api/v1/profiles/After").status_code == 404
+    assert profiles_file.read_bytes() == old_profiles
+    assert warming_file.read_bytes() == old_tasks
+    assert task.profile_names == ["Before"]
+    assert (tmp_path / "data" / "Before").is_dir()
+    assert not (tmp_path / "data" / "After").exists()
+
+
 def test_batch2_api_endpoints(tmp_path, monkeypatch):
     from src.core import config as app_config
 
@@ -1095,6 +1188,49 @@ def test_warming_ui_mutation_save_feedback(tmp_path, monkeypatch, operation, out
         assert logs == []
         assert refreshed == ([True] if operation == "delete_task" else [])
         assert (ws.get_task(task.id) is None) == (operation == "delete_task")
+
+
+@pytest.mark.parametrize("run_immediately", [False, True])
+def test_warming_ui_displays_start_save_error(tmp_path, monkeypatch, run_immediately):
+    from src.core.strings import get_string
+
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    if not run_immediately:
+        ws.add_task("Saved task", ["profile"])
+
+    def fail_start(*args, **kwargs):
+        raise PermissionError(errno.EACCES, "read-only store")
+
+    monkeypatch.setattr(ws, "run_task_async", fail_start)
+    page = _DummyPage()
+    logs = []
+    open_warming_dialog(
+        page,
+        ws,
+        SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name="profile")]),
+        SimpleNamespace(),
+        log_fn=logs.append,
+    )
+    controls = list(_walk_controls(page.dialog))
+    feedback = next(
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    )
+    if run_immediately:
+        button = next(
+            c for c in controls if getattr(c, "content", None) == get_string("warming_run_now_btn")
+        )
+    else:
+        button = next(
+            c
+            for c in controls
+            if isinstance(c, ft.IconButton) and c.tooltip == get_string("launch")
+        )
+    button.on_click(None)
+    assert feedback.visible
+    assert feedback.color == COLORS["error"]
+    assert feedback.value == get_string("warming_start_save_error")
+    assert logs == [feedback.value]
+    assert [task.status for task in ws.list_tasks()] == ["idle"]
 
 
 @pytest.mark.parametrize("run_immediately", [False, True])
