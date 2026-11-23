@@ -1,4 +1,5 @@
 import os
+import sys
 
 import flet as ft
 
@@ -107,10 +108,31 @@ def apply_page_theme(page: ft.Page) -> None:
     page.theme = build_page_theme()
 
 
+def _macos_work_area() -> tuple[float, float, float, float] | None:
+    from AppKit import NSScreen
+
+    screens = NSScreen.screens()
+    if not screens:
+        return None
+    primary = screens[0]
+    area = primary.visibleFrame()
+    if area.size.width <= 0 or area.size.height <= 0:
+        return None
+    # AppKit's origin is bottom-left; Flet positions windows from the top-left.
+    top = primary.frame().size.height - (area.origin.y + area.size.height)
+    return area.origin.x, top, area.size.width, area.size.height
+
+
 def configure_page(page: ft.Page) -> None:
     page.title = get_string("window_title")
-    page.window.width, page.window.height = 1440, 880
-    page.window.min_width, page.window.min_height = 900, 600
+    width, height = 1440, 880
+    if sys.platform == "darwin" and (area := _macos_work_area()) is not None:
+        left, top, available_width, available_height = area
+        width, height = min(width, available_width), min(height, available_height)
+        page.window.left = left + (available_width - width) / 2
+        page.window.top = top + (available_height - height) / 2
+    page.window.width, page.window.height = width, height
+    page.window.min_width, page.window.min_height = min(900, width), min(600, height)
 
     icon_name = "icon.ico" if os.name == "nt" else "icon.png"
     icon_path = os.path.abspath(

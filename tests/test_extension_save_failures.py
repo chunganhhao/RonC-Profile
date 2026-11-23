@@ -2,7 +2,9 @@ import asyncio
 import io
 import json
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -89,6 +91,38 @@ def test_assignment_rollback_preserves_untouched_profile_changes(state, monkeypa
         ext.assign_profiles(entry.id, ["alice"], pm)
     assert pm.profiles["alice"].extension_ids == []
     assert pm.profiles["bob"].extension_ids == ["another-extension"]
+
+
+@pytest.mark.parametrize("assign", [True, False], ids=["add", "remove"])
+def test_assignment_preserves_an_extension_saved_during_registry_write(state, monkeypatch, assign):
+    ext, pm, entry = state
+    other = ext.install_from_zip(archive("another"), filename="other.zip")
+    initial = [] if assign else [entry.id]
+    assert pm.update_profile("alice", "alice", "", "windows", extension_ids=initial)
+
+    writing, resume = Event(), Event()
+    save_registry = ext._save
+
+    def pause_registry_write():
+        writing.set()
+        assert resume.wait(5), "profile edit did not release registry write"
+        save_registry()
+
+    monkeypatch.setattr(ext, "_save", pause_registry_write)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assignment = pool.submit(ext.assign_profiles, entry.id, ["alice"] if assign else [], pm)
+        try:
+            assert writing.wait(5), "assignment never reached the registry write"
+            assert pm.update_profile(
+                "alice", "alice", "", "windows", extension_ids=[*initial, other.id]
+            )
+        finally:
+            resume.set()
+        assert assignment.result(timeout=5) == 1
+
+    expected = [other.id, entry.id] if assign else [other.id]
+    assert json.loads(Path(manager.PROFILES_FILE).read_text())["alice"]["extension_ids"] == expected
+    assert pm.get_profile("alice").extension_ids == expected
 
 
 def test_update_restores_memory(state, monkeypatch):

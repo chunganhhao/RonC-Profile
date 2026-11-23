@@ -15,11 +15,14 @@ import zipfile
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...core import config as app_config
 from ...core.logging import get_logger
 from .lease import waiting_lease
+
+if TYPE_CHECKING:
+    from ..profile.manager import ProfileManager
 
 logger = get_logger("browser.extensions")
 
@@ -541,7 +544,7 @@ class ExtensionService:
         self,
         ext_id: str,
         profile_names: list[str],
-        profile_manager: Any,
+        profile_manager: ProfileManager | None,
         *,
         pin_mode: str | None = None,
         apply_to_all: bool | None = None,
@@ -551,9 +554,6 @@ class ExtensionService:
             if entry is None:
                 return 0
             previous = (entry.pin_mode, entry.apply_to_all)
-            profiles = profile_manager.list_profiles() if profile_manager is not None else []
-            snapshots = [(prof, list(prof.extension_ids or [])) for prof in profiles]
-            changed_profiles = []
             registry_saved = False
             try:
                 if pin_mode is not None and pin_mode in PIN_MODES:
@@ -562,25 +562,10 @@ class ExtensionService:
                     entry.apply_to_all = bool(apply_to_all)
                 self._save()
                 registry_saved = True
-                target_set = set(profile_names)
-                updated_count = 0
-                for prof, cur_ids in snapshots:
-                    has_ext = ext_id in cur_ids
-                    should_have = prof.name in target_set
-                    if should_have and not has_ext:
-                        changed_profiles.append((prof, cur_ids))
-                        prof.extension_ids = [*cur_ids, ext_id]
-                        updated_count += 1
-                    elif not should_have and has_ext:
-                        changed_profiles.append((prof, cur_ids))
-                        prof.extension_ids = [x for x in cur_ids if x != ext_id]
-                        updated_count += 1
-                if updated_count:
-                    profile_manager.save_profiles(strict=True)
-                return updated_count
+                if profile_manager is None:
+                    return 0
+                return profile_manager.set_extension_assignments(ext_id, set(profile_names))
             except Exception:
-                for prof, ids in changed_profiles:
-                    prof.extension_ids = ids
                 entry.pin_mode, entry.apply_to_all = previous
                 if registry_saved:
                     with contextlib.suppress(Exception):

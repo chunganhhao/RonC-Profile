@@ -582,6 +582,28 @@ class ProfileManager:
                 self._check_store_current()
             return self._ordered_profiles()
 
+    def set_extension_assignments(self, extension_id: str, profile_names: set[str]) -> int:
+        """Apply one extension's membership without overwriting other profile edits."""
+        with self._lock:
+            changed = []
+            for profile in self.list_profiles():
+                ids = profile.extension_ids
+                should_have = profile.name in profile_names
+                if should_have == (extension_id in ids):
+                    continue
+                changed.append((profile, ids))
+                profile.extension_ids = (
+                    [*ids, extension_id] if should_have else [x for x in ids if x != extension_id]
+                )
+            if changed:
+                try:
+                    self.save_profiles(strict=True)
+                except Exception:
+                    for profile, ids in changed:
+                        profile.extension_ids = ids
+                    raise
+            return len(changed)
+
     def get_profile(self, name: str) -> Profile | None:
         """The named profile, read from the shared store if another process changed it."""
         with self._lock:

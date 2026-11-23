@@ -1,5 +1,6 @@
 """Resizing keeps real controls and their actions instead of hiding profile data."""
 
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -9,6 +10,40 @@ import pytest
 from src.models.profile import Profile
 from src.ui.components.content_area import build_content_area
 from src.ui.components.profile_card import build_header_row, build_profile_card
+from src.ui.theme import page as page_theme
+
+
+@pytest.mark.parametrize(
+    ("screen_height", "visible", "expected"),
+    [
+        (1200, (0, 82, 1600, 1088), (80, 134, 1440, 880, 900, 600)),
+        (600, (72, 40, 800, 530), (72, 30, 800, 530, 800, 530)),
+    ],
+    ids=["center", "clamp"],
+)
+def test_macos_startup_window_fits_the_work_area(monkeypatch, screen_height, visible, expected):
+    x, y, width, height = visible
+    screen = SimpleNamespace(
+        frame=lambda: SimpleNamespace(size=SimpleNamespace(height=screen_height)),
+        visibleFrame=lambda: SimpleNamespace(
+            origin=SimpleNamespace(x=x, y=y), size=SimpleNamespace(width=width, height=height)
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules, "AppKit", SimpleNamespace(NSScreen=SimpleNamespace(screens=lambda: [screen]))
+    )
+    monkeypatch.setattr(page_theme, "sys", SimpleNamespace(platform="darwin"), raising=False)
+    page = SimpleNamespace(window=ft.Window())
+    page_theme.configure_page(page)
+    window = page.window
+    assert (
+        window.left,
+        window.top,
+        window.width,
+        window.height,
+        window.min_width,
+        window.min_height,
+    ) == expected
 
 
 def walk(control):
