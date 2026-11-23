@@ -8,6 +8,7 @@ from ...core.strings import get_string
 from ...interfaces.protocols import IBrowserLauncher, IProfileManager, IProxyService
 from ...services.browser import chrome_prefetch
 from ...services.profile.manager import ProfileStoreChangedError
+from ...services.warming.scheduler import WarmingTargetSaveError
 from ..dialogs import open_confirm_dialog, open_profile_dialog
 
 
@@ -16,6 +17,8 @@ def _store_conflict(on_save):
     def guarded(*args, **kwargs):
         try:
             return on_save(*args, **kwargs)
+        except WarmingTargetSaveError:
+            return get_string("warming_rename_save_error")
         except (ProfileStoreChangedError, OSError, ValueError) as exc:
             return str(exc) or "Profile/store is busy; refresh and retry"
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import hashlib
 import json
@@ -8,7 +10,7 @@ import tempfile
 import threading
 import time
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...core.config import DATA_DIR, PROFILES_FILE
 from ...core.logging import get_logger
@@ -33,6 +35,9 @@ from ...utils.validation import (
 from ..browser import fingerprint as fp_service
 from ..browser.lease import native_profile_guard, profile_lease, store_lease
 from .transfer import export_to_zip, import_from_zip, read_profile_meta
+
+if TYPE_CHECKING:
+    from ..warming.scheduler import WarmingSchedulerService
 
 logger = get_logger("profile.manager")
 
@@ -92,8 +97,9 @@ def _restore_chrome_persona_file(
 
 
 class ProfileManager:
-    def __init__(self) -> None:
+    def __init__(self, warming_scheduler: WarmingSchedulerService | None = None) -> None:
         self._lock = threading.RLock()
+        self._warming_scheduler = warming_scheduler
         self.profiles: dict[str, Profile] = {}
         self._store_digest = None
         self._load_profiles()
@@ -505,7 +511,12 @@ class ProfileManager:
             try:
                 if built_chrome is not None:
                     fp_service._write_chrome_persona(target_dir, *built_chrome)
-                self.save_profiles(strict=True)
+                with (
+                    self._warming_scheduler.retarget_profile(original_name, new_name)
+                    if self._warming_scheduler is not None and new_name != original_name
+                    else contextlib.nullcontext()
+                ):
+                    self.save_profiles(strict=True)
             except Exception as exc:
                 if not isinstance(exc, ProfileStoreChangedError):
                     for name, original in originals.items():

@@ -220,6 +220,180 @@ def test_warming_scheduler_execution_and_due_slots(tmp_path, monkeypatch):
     assert ws.check_due_tasks(pm, bl, now=dt) == []
 
 
+def test_due_warming_task_retries_in_same_minute_after_store_contention(tmp_path, monkeypatch):
+    path = str(tmp_path / "warming.json")
+    ws = WarmingSchedulerService(file_path=path)
+    due = ws.add_task("Due", ["Profile"], schedule_time="14:15")
+    peer = WarmingSchedulerService(file_path=path)
+    started = threading.Event()
+    monkeypatch.setattr(ws, "_execute_task", lambda *_args: started.set())
+    dt = datetime.datetime(2026, 11, 8, 14, 15, 10)
+
+    with peer._store_lease(), pytest.raises(OSError):
+        ws.check_due_tasks(None, None, now=dt)
+
+    assert not started.is_set()
+    assert ws.get_task(due.id).last_triggered_slot == ""
+    assert ws.check_due_tasks(None, None, now=dt) == [due.id]
+    assert started.wait(5)
+    assert ws.check_due_tasks(None, None, now=dt) == []
+    assert WarmingSchedulerService(file_path=path).get_task(due.id).last_triggered_slot == (
+        "2026-11-08 14:15"
+    )
+
+
+def test_profile_rename_retargets_saved_warming_task(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    container = Container()
+    pm, ws = container.profile_manager, container.warming_scheduler
+    for name in ("Before", "Other"):
+        assert pm.add_profile(name, "", "linux", engine="chrome")
+    task = ws.add_task("Warm", ["Other", "Before"])
+    untouched = ws.add_task("Unrelated", ["Other"])
+
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        assert client.patch("/api/v1/profiles/Before", json={"name": "After"}).status_code == 200
+        assert client.get("/api/v1/profiles/Before").status_code == 404
+        tasks = client.get("/api/v1/warming/tasks").json()["tasks"]
+    assert {t["id"]: t["profile_names"] for t in tasks} == {
+        task.id: ["Other", "After"],
+        untouched.id: ["Other"],
+    }
+    reloaded = WarmingSchedulerService()
+    assert reloaded.get_task(task.id).profile_names == ["Other", "After"]
+    visited = []
+    launcher = SimpleNamespace(
+        is_running=lambda _: True, control=lambda name, *_args, **_kwargs: visited.append(name)
+    )
+    assert reloaded.execute_task_sync(task.id, pm, launcher, step_dwell_seconds=0)
+    assert set(visited) == {"Other", "After"}
+
+
+def test_profile_rename_preserves_warming_tasks_written_by_another_scheduler(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    writer = Container()
+    assert writer.profile_manager.add_profile("Before", "", "linux", engine="chrome")
+    existing = writer.warming_scheduler.add_task("Existing", ["Before"])
+    deleted = writer.warming_scheduler.add_task("Deleted", ["Before"])
+
+    renamer = Container()
+    ws = renamer.warming_scheduler
+    assert ws.get_task(deleted.id) is not None
+    added = writer.warming_scheduler.add_task("New target", ["Other", "Before"])
+    unrelated = writer.warming_scheduler.add_task("Unrelated", ["Other"])
+    assert writer.warming_scheduler.delete_task(deleted.id)
+    assert ws.get_task(added.id) is None
+
+    with TestClient(create_app(renamer), base_url="http://127.0.0.1") as client:
+        assert client.patch("/api/v1/profiles/Before", json={"name": "After"}).status_code == 200
+
+    expected = {
+        existing.id: ["After"],
+        added.id: ["Other", "After"],
+        unrelated.id: ["Other"],
+    }
+    assert {
+        task.id: task.profile_names for task in WarmingSchedulerService().list_tasks()
+    } == expected
+    assert {task.id: task.profile_names for task in ws.list_tasks()} == expected
+
+    follow_up = writer.warming_scheduler.add_task("Follow-up", ["Other"])
+    assert writer.warming_scheduler.delete_task(unrelated.id)
+    del expected[unrelated.id]
+    expected[follow_up.id] = ["Other"]
+    assert {
+        task.id: task.profile_names for task in WarmingSchedulerService().list_tasks()
+    } == expected
+
+
+def test_warming_retarget_keeps_unowned_running_status_on_disk_only(tmp_path):
+    path = tmp_path / "warming.json"
+    owner = WarmingSchedulerService(file_path=str(path))
+    task = owner.add_task("Existing", ["Before"])
+    task.status = "running"
+    owner._save()
+
+    renamer = WarmingSchedulerService(file_path=str(path))
+    assert renamer.get_task(task.id).status == "idle"
+    with renamer.retarget_profile("Before", "After"):
+        pass
+
+    assert renamer.get_task(task.id).status == "idle"
+    saved = json.loads(path.read_text(encoding="utf-8"))[0]
+    assert saved["profile_names"] == ["After"]
+    assert saved["status"] == "running"
+
+
+def test_warming_run_save_error_preserves_state_and_allows_retry(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    container = Container()
+    ws = container.warming_scheduler
+    task = ws.add_task("Warm", ["Missing profile"])
+    snapshot = task.to_dict()
+    saved = (tmp_path / "warming.json").read_bytes()
+    done = threading.Event()
+    container.event_bus.subscribe(
+        lambda: done.set() if ws.get_task(task.id).status == "failed" else None
+    )
+
+    def fail_write():
+        raise PermissionError(errno.EACCES, "read-only store")
+
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        url = f"/api/v1/warming/tasks/{task.id}/run"
+        with monkeypatch.context() as patch:
+            patch.setattr(ws, "_save", fail_write)
+            response = client.post(url)
+        assert response.status_code == 500
+        assert task.to_dict() == snapshot
+        assert task.id not in ws._cancel_flags
+        assert (tmp_path / "warming.json").read_bytes() == saved
+        assert client.post(url).json()["started"] is True
+        assert done.wait(5)
+        assert ws.get_task(task.id).last_result == "Failed (0/1 profiles)"
+
+
+def test_profile_rename_rolls_back_when_warming_targets_cannot_be_saved(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    container = Container()
+    pm, ws = container.profile_manager, container.warming_scheduler
+    assert pm.add_profile("Before", "", "linux", engine="chrome")
+    task = ws.add_task("Warm", ["Before"])
+    profiles_file = tmp_path / "profiles.json"
+    warming_file = tmp_path / "warming.json"
+    old_profiles, old_tasks = profiles_file.read_bytes(), warming_file.read_bytes()
+
+    def fail_write():
+        raise PermissionError(errno.EACCES, "read-only store")
+
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        monkeypatch.setattr(ws, "_save", fail_write)
+        assert client.patch("/api/v1/profiles/Before", json={"name": "After"}).status_code == 500
+        assert client.get("/api/v1/profiles/Before").status_code == 200
+        assert client.get("/api/v1/profiles/After").status_code == 404
+    assert profiles_file.read_bytes() == old_profiles
+    assert warming_file.read_bytes() == old_tasks
+    assert task.profile_names == ["Before"]
+    assert (tmp_path / "data" / "Before").is_dir()
+    assert not (tmp_path / "data" / "After").exists()
+
+
 def test_batch2_api_endpoints(tmp_path, monkeypatch):
     from src.core import config as app_config
 
@@ -1095,6 +1269,49 @@ def test_warming_ui_mutation_save_feedback(tmp_path, monkeypatch, operation, out
         assert logs == []
         assert refreshed == ([True] if operation == "delete_task" else [])
         assert (ws.get_task(task.id) is None) == (operation == "delete_task")
+
+
+@pytest.mark.parametrize("run_immediately", [False, True])
+def test_warming_ui_displays_start_save_error(tmp_path, monkeypatch, run_immediately):
+    from src.core.strings import get_string
+
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    if not run_immediately:
+        ws.add_task("Saved task", ["profile"])
+
+    def fail_start(*args, **kwargs):
+        raise PermissionError(errno.EACCES, "read-only store")
+
+    monkeypatch.setattr(ws, "run_task_async", fail_start)
+    page = _DummyPage()
+    logs = []
+    open_warming_dialog(
+        page,
+        ws,
+        SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name="profile")]),
+        SimpleNamespace(),
+        log_fn=logs.append,
+    )
+    controls = list(_walk_controls(page.dialog))
+    feedback = next(
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    )
+    if run_immediately:
+        button = next(
+            c for c in controls if getattr(c, "content", None) == get_string("warming_run_now_btn")
+        )
+    else:
+        button = next(
+            c
+            for c in controls
+            if isinstance(c, ft.IconButton) and c.tooltip == get_string("launch")
+        )
+    button.on_click(None)
+    assert feedback.visible
+    assert feedback.color == COLORS["error"]
+    assert feedback.value == get_string("warming_start_save_error")
+    assert logs == [feedback.value]
+    assert [task.status for task in ws.list_tasks()] == ["idle"]
 
 
 @pytest.mark.parametrize("run_immediately", [False, True])

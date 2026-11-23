@@ -24,6 +24,42 @@ class Page:
         pass
 
 
+@pytest.mark.parametrize("field_editor", [False, True])
+def test_rename_warming_save_error_is_localized(monkeypatch, field_editor):
+    from src.core.strings import get_string
+    from src.services.warming.scheduler import WarmingTargetSaveError
+    from src.ui.actions import profile as profile_actions
+    from src.ui.app import App
+    from src.ui.dialogs import profile_field
+
+    def reject(*_args, **_kwargs):
+        raise WarmingTargetSaveError("read-only warming store")
+
+    profile = Profile(name="Before")
+    pm = SimpleNamespace(
+        profiles={profile.name: profile}, update_profile=reject, list_profiles=lambda: [profile]
+    )
+    bl = SimpleNamespace(is_running=lambda _: False)
+    callbacks = []
+    if field_editor:
+
+        def capture(_page, _profile, _field, save, **_kwargs):
+            callbacks.append(save)
+
+        monkeypatch.setattr(profile_field, "open_profile_field_dialog", capture)
+        App._on_edit_field(SimpleNamespace(pm=pm, bl=bl, page=Page()), profile.name, "name")
+        error = callbacks[0]("After")
+    else:
+
+        def capture(_page, _ps, save, *_args, **_kwargs):
+            callbacks.append(save)
+
+        monkeypatch.setattr(profile_actions, "open_profile_dialog", capture)
+        profile_actions.edit_profile(Page(), profile.name, pm, bl, None, None, None)
+        error = callbacks[0]("After", "", "linux", "", "", "chrome")
+    assert error == get_string("warming_rename_save_error")
+
+
 def walk(control):
     yield control
     for child in getattr(control, "controls", []) or []:

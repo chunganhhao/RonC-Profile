@@ -150,3 +150,13 @@ class FingerprintResponse(BaseModel):
     screen: str | None = None
     hardware_concurrency: int | None = None
     seed: int | None = None
+
+
+class PanelProfileResponse(ProfileResponse):
+    proxy_display: str
+    fingerprint: FingerprintResponse | None
+
+
+class PanelProfileListResponse(BaseModel):
+    profiles: list[PanelProfileResponse]
+    total: int

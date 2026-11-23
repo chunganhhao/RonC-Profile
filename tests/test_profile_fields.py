@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.dependencies import get_browser_launcher, get_event_bus, get_profile_manager
+from src.api.routes import profiles as profiles_route
 from src.api.routes.profiles import router
 from src.models.profile import (
     Profile,
@@ -33,6 +34,90 @@ def pm(tmp_path, monkeypatch):
 def update(pm, name, **extra):
     p = pm.profiles[name]
     return pm.update_profile(name, name, p.proxy or "", p.os_type, p.timezone, p.locale, **extra)
+
+
+def test_panel_profile_list_sees_fingerprint_updates_and_reset(pm, tmp_path, monkeypatch):
+    monkeypatch.setattr(profiles_route, "DATA_DIR", str(tmp_path / "data"))
+    assert pm.add_profile(
+        "Hardware",
+        "",
+        "linux",
+        engine="chrome",
+        initial_fingerprint={"platform": "linux", "seed": 100000020, "hardware_concurrency": 16},
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_profile_manager] = lambda: pm
+    app.dependency_overrides[get_browser_launcher] = lambda: SimpleNamespace(
+        is_running=lambda _: False
+    )
+    app.dependency_overrides[get_event_bus] = lambda: SimpleNamespace(emit=lambda: None)
+    with TestClient(app) as client:
+        assert "fingerprint" not in client.get("/profiles").json()["profiles"][0]
+        url = "/profiles?panel=true"
+        assert client.get(url).json()["profiles"][0]["fingerprint"]["hardware_concurrency"] == 16
+        response = client.patch(
+            "/profiles/Hardware", json={"initial_fingerprint": {"hardware_concurrency": 8}}
+        )
+        assert response.status_code == 200
+        assert client.get(url).json()["profiles"][0]["fingerprint"]["hardware_concurrency"] == 8
+        profiles_route.fingerprint.reset(str(tmp_path / "data" / "Hardware"))
+        assert client.get(url).json()["profiles"][0]["fingerprint"] is None
+
+
+def test_panel_profile_list_omits_only_invalid_fingerprint(pm, tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(profiles_route, "DATA_DIR", str(data_dir))
+    for name in ("Invalid", "Valid"):
+        assert pm.add_profile(
+            name,
+            "",
+            "linux",
+            engine="chrome",
+            initial_fingerprint={"platform": "linux", "hardware_concurrency": 16},
+        )
+    persona = data_dir / "Invalid" / profiles_route.fingerprint.CHROME_PERSONA_FILE
+    saved = json.loads(persona.read_text(encoding="utf-8"))
+    saved["hardware_concurrency"] = "not a number"
+    persona.write_text(json.dumps(saved), encoding="utf-8")
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_profile_manager] = lambda: pm
+    app.dependency_overrides[get_browser_launcher] = lambda: SimpleNamespace(
+        is_running=lambda _: False
+    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/profiles?panel=true")
+    assert response.status_code == 200
+    result = response.json()
+    assert result["total"] == 2
+    by_name = {profile["name"]: profile["fingerprint"] for profile in result["profiles"]}
+    assert by_name["Invalid"] is None
+    assert by_name["Valid"]["hardware_concurrency"] == 16
+
+
+@pytest.mark.parametrize(
+    ("proxy", "display"),
+    [
+        ("http://192.0.2.23:80", "http://192.0.2.23:80"),
+        ("http://192.0.2.23:8080", "http://192.0.2.23:8080"),
+        ("https://user:pass@[2001:db8::1]:443", "https://[2001:db8::1]:443"),
+        ("192.0.2.23:80:user:p@ss", "http://192.0.2.23:80"),
+        ("", ""),
+    ],
+)
+def test_panel_proxy_display_keeps_port_without_credentials(pm, proxy, display):
+    assert pm.add_profile("Proxy", proxy, "linux", engine="chrome")
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_profile_manager] = lambda: pm
+    app.dependency_overrides[get_browser_launcher] = lambda: SimpleNamespace(
+        is_running=lambda _: False
+    )
+    with TestClient(app) as client:
+        profile = client.get("/profiles?panel=true").json()["profiles"][0]
+    assert profile["proxy_display"] == display
 
 
 def test_tags_normalize_and_legacy_group_survives_reload(pm):

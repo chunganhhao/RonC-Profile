@@ -389,6 +389,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "warming_started_msg": "[Warming] Started task '{name}' for {count} profile(s)",
         "warming_saved_msg": "[Warming] Saved schedule '{name}' ({sched})",
         "warming_save_error_msg": "[Warming] Could not save task: {error}",
+        "warming_start_save_error": "[Warming] Could not save the start. Check storage and try again.",
+        "warming_rename_save_error": "Could not update warming tasks for the rename. Check storage and try again.",
         "warming_invalid_msg": "Please enter a valid task name, HH:MM time (if scheduled), and target profiles.",
     },
     "vi": {
@@ -777,6 +779,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "warming_started_msg": "[Ngâm TK] Đã bắt đầu chiến dịch '{name}' cho {count} hồ sơ",
         "warming_saved_msg": "[Ngâm TK] Đã lưu lịch hẹn '{name}' ({sched})",
         "warming_save_error_msg": "[Ngâm TK] Không thể lưu tác vụ: {error}",
+        "warming_start_save_error": "[Ngâm TK] Không thể lưu trạng thái bắt đầu. Hãy kiểm tra nơi lưu trữ rồi thử lại.",
+        "warming_rename_save_error": "Không thể cập nhật tác vụ ngâm tài khoản khi đổi tên. Hãy kiểm tra nơi lưu trữ rồi thử lại.",
         "warming_invalid_msg": "Vui lòng kiểm tra tên tác vụ, định dạng giờ HH:MM và hồ sơ mục tiêu.",
     },
 }

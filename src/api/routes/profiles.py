@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import pathlib
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import PlainTextResponse
+from pydantic import ValidationError
 
 from ...core.config import DATA_DIR
 from ...core.logging import get_logger
@@ -19,6 +21,8 @@ from ...models.profile import (
 from ...services.browser import chrome_prefetch, cookies, fingerprint
 from ...services.browser.launcher import ProfileBusyError
 from ...services.proxy.geo_check import check_geo
+from ...services.warming.scheduler import WarmingTargetSaveError
+from ...utils.proxy_parser import mask_proxy
 from ...utils.totp import clean_totp_secret
 from ...utils.validation import (
     validate_locale,
@@ -40,6 +44,8 @@ from ..schemas.profiles import (
     FingerprintResponse,
     ImportRequest,
     ImportResponse,
+    PanelProfileListResponse,
+    PanelProfileResponse,
     ProfileCreate,
     ProfileListResponse,
     ProfileResponse,
@@ -99,12 +105,29 @@ def _require_geo(timezone: str | None, locale: str | None) -> None:
             raise HTTPException(status_code=400, detail=msg)
 
 
-@router.get("", response_model=ProfileListResponse)
+@router.get("", response_model=PanelProfileListResponse | ProfileListResponse)
 def list_profiles(
     pm: IProfileManager = Depends(get_profile_manager),
     bl: IBrowserLauncher = Depends(get_browser_launcher),
-) -> ProfileListResponse:
+    panel: bool = False,
+) -> PanelProfileListResponse | ProfileListResponse:
     profiles = [profile_response(p, bl) for p in pm.list_profiles()]
+    if panel:
+        rows = []
+        for profile in profiles:
+            info = fingerprint.summary(os.path.join(DATA_DIR, profile.name))
+            preview = None
+            if info is not None:
+                with contextlib.suppress(ValidationError):
+                    preview = FingerprintResponse(name=profile.name, exists=True, **info)
+            rows.append(
+                PanelProfileResponse(
+                    **profile.model_dump(),
+                    proxy_display=mask_proxy(profile.proxy),
+                    fingerprint=preview,
+                )
+            )
+        return PanelProfileListResponse(profiles=rows, total=len(rows))
     return ProfileListResponse(profiles=profiles, total=len(profiles))
 
 
@@ -321,6 +344,8 @@ def update_profile(
             new_locale or None,
             **extra_update,
         )
+    except WarmingTargetSaveError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not updated:

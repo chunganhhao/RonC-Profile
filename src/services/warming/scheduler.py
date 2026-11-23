@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -9,12 +10,13 @@ import secrets
 import tempfile
 import threading
 import time
-from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from collections.abc import Callable, Iterator
+from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from ...core import config as app_config
 from ...core.logging import get_logger
+from ..browser.lease import profile_lease
 
 if TYPE_CHECKING:
     from ...interfaces.protocols import IBrowserLauncher, IProfileManager
@@ -41,6 +43,10 @@ WARMING_PRESETS: dict[str, list[str]] = {
 }
 
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+class WarmingTargetSaveError(OSError):
+    pass
 
 
 def validate_schedule_time(value: str) -> bool:
@@ -130,8 +136,10 @@ class WarmingSchedulerService:
     def __init__(self, file_path: str | None = None) -> None:
         self._explicit_path = file_path
         self._lock = threading.RLock()
+        self._store_locked = False
         self._lease_lock = threading.RLock()
         self._tasks: dict[str, WarmingTask] = {}
+        self._saved_tasks: dict[str, dict] = {}
         self._cancel_flags: dict[str, threading.Event] = {}
         self._profile_active_users: dict[str, int] = {}
         self._profile_launched_by_warming: set[str] = set()
@@ -147,39 +155,85 @@ class WarmingSchedulerService:
 
     def reload(self) -> None:
         with self._lock:
-            self._tasks.clear()
-            path = self.file_path
-            if not os.path.exists(path):
-                return
             try:
-                with open(path, encoding="utf-8") as f:
-                    raw = json.load(f)
-                items = raw if isinstance(raw, list) else raw.get("tasks", [])
-                for item in items:
-                    if isinstance(item, dict):
-                        task = WarmingTask.from_dict(item)
-                        if task:
-                            if task.status == "running":
-                                task.status = "idle"
-                            self._tasks[task.id] = task
-            except Exception as e:
-                logger.error("Failed to load warming tasks from %s: %s", path, e)
+                self._tasks = self._read_tasks()
+            except OSError as e:
+                logger.error("Failed to load warming tasks from %s: %s", self.file_path, e)
+                self._tasks = {}
+            for task in self._tasks.values():
+                if task.status == "running":
+                    task.status = "idle"
+            self._saved_tasks = self._snapshot()
+
+    def _read_tasks(self) -> dict[str, WarmingTask]:
+        try:
+            with open(self.file_path, encoding="utf-8") as f:
+                raw = json.load(f)
+        except FileNotFoundError:
+            return {}
+        except ValueError as exc:
+            raise OSError("Invalid warming task store") from exc
+        items = raw.get("tasks", []) if isinstance(raw, dict) else raw
+        if not isinstance(items, list):
+            raise OSError("Invalid warming task store")
+        tasks = {}
+        try:
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    continue
+                if not item.get("id"):
+                    payload = json.dumps([index, item], sort_keys=True).encode()
+                    item = {**item, "id": hashlib.sha256(payload).hexdigest()[:10]}
+                if (task := WarmingTask.from_dict(item)) is not None:
+                    tasks[task.id] = task
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise OSError("Invalid warming task store") from exc
+        return tasks
+
+    def _snapshot(self) -> dict[str, dict]:
+        return {tid: task.to_dict() for tid, task in self._tasks.items()}
+
+    @contextlib.contextmanager
+    def _store_lease(self) -> Iterator[None]:
+        with self._lock:
+            if self._store_locked:
+                yield
+                return
+            with profile_lease(self.file_path):
+                self._store_locked = True
+                try:
+                    yield
+                finally:
+                    self._store_locked = False
 
     def _save(self) -> None:
-        with self._lock:
+        with self._store_lease():
             path = self.file_path
+            disk = {tid: task.to_dict() for tid, task in self._read_tasks().items()}
+            current = self._snapshot()
+            # Persist only local changes so stale snapshots cannot undo another writer's edits.
+            for tid in self._saved_tasks.keys() - current.keys():
+                disk.pop(tid, None)
+            for tid, task in current.items():
+                previous = self._saved_tasks.get(tid)
+                if previous is None:
+                    disk[tid] = task
+                elif tid in disk:
+                    disk[tid].update(
+                        {key: value for key, value in task.items() if value != previous[key]}
+                    )
             parent = os.path.dirname(os.path.abspath(path))
             os.makedirs(parent, exist_ok=True)
-            payload = [t.to_dict() for t in self._tasks.values()]
             fd, tmp_path = tempfile.mkstemp(dir=parent, prefix=".warming_", suffix=".tmp")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                    json.dump(list(disk.values()), f, indent=2, ensure_ascii=False)
                 os.replace(tmp_path, path)
             except Exception:
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
                 raise
+            self._saved_tasks = current
 
     def list_tasks(self) -> list[WarmingTask]:
         with self._lock:
@@ -188,6 +242,52 @@ class WarmingSchedulerService:
     def get_task(self, task_id: str) -> WarmingTask | None:
         with self._lock:
             return self._tasks.get(task_id)
+
+    @contextlib.contextmanager
+    def retarget_profile(self, old_name: str, new_name: str) -> Iterator[None]:
+        with contextlib.ExitStack() as lease:
+            try:
+                lease.enter_context(self._store_lease())
+                latest = self._read_tasks()
+            except OSError as exc:
+                logger.exception("Could not read warming targets for rename")
+                raise WarmingTargetSaveError("Could not save renamed warming targets") from exc
+            for tid, task in latest.items():
+                if task.status == "running" and tid not in self._cancel_flags:
+                    task.status = "idle"
+                if tid in self._tasks:
+                    current = self._tasks[tid]
+                    current.__dict__.update(vars(task))
+                    latest[tid] = current
+            self._tasks = latest
+            self._saved_tasks = self._snapshot()
+            previous = [
+                (task, task.profile_names)
+                for task in self._tasks.values()
+                if old_name in task.profile_names
+            ]
+            if not previous:
+                yield
+                return
+            for task, names in previous:
+                task.profile_names = [new_name if name == old_name else name for name in names]
+            try:
+                try:
+                    self._save()
+                except OSError as exc:
+                    logger.exception("Could not save renamed warming targets")
+                    raise WarmingTargetSaveError("Could not save renamed warming targets") from exc
+            except Exception:
+                for task, names in previous:
+                    task.profile_names = names
+                raise
+            try:
+                yield
+            except Exception:
+                for task, names in previous:
+                    task.profile_names = names
+                self._save()
+                raise
 
     def add_task(
         self,
@@ -275,20 +375,46 @@ class WarmingSchedulerService:
         step_dwell_seconds: float | None = None,
         on_update: Callable[[], None] | None = None,
     ) -> bool:
-        """Execute a warming task synchronously (can be called directly or in a worker thread)."""
-        log = log_fn or (lambda m: logger.info(m))
+        """Execute a warming task synchronously."""
         with self._lock:
-            task = self._tasks.get(task_id)
-            if not task or task.status == "running":
-                return False
-            task.status = "running"
-            cancel_ev = threading.Event()
-            self._cancel_flags[task_id] = cancel_ev
-            urls = task.resolved_urls()
-            targets = list(task.profile_names)
-            dur_mins = task.duration_minutes
-            task_name = task.name
+            started = self._begin_task(task_id)
+        if started is None:
+            return False
+        task, cancel_ev, _ = started
+        return self._execute_task(task, cancel_ev, pm, bl, log_fn, step_dwell_seconds, on_update)
+
+    def _begin_task(self, task_id: str) -> tuple[WarmingTask, threading.Event, str] | None:
+        task = self._tasks.get(task_id)
+        if not task or task.status == "running":
+            return None
+        previous_status = task.status
+        task.status = "running"
+        cancel_ev = threading.Event()
+        self._cancel_flags[task_id] = cancel_ev
+        try:
             self._save()
+        except Exception:
+            task.status = previous_status
+            self._cancel_flags.pop(task_id, None)
+            raise
+        return replace(task), cancel_ev, previous_status
+
+    def _execute_task(
+        self,
+        task: WarmingTask,
+        cancel_ev: threading.Event,
+        pm: IProfileManager,
+        bl: IBrowserLauncher,
+        log_fn: Callable[[str], None] | None,
+        step_dwell_seconds: float | None,
+        on_update: Callable[[], None] | None,
+    ) -> bool:
+        log = log_fn or (lambda m: logger.info(m))
+        task_id = task.id
+        urls = task.resolved_urls()
+        targets = task.profile_names
+        dur_mins = task.duration_minutes
+        task_name = task.name
 
         if on_update:
             with contextlib.suppress(Exception):
@@ -433,14 +559,21 @@ class WarmingSchedulerService:
         on_update: Callable[[], None] | None = None,
     ) -> bool:
         with self._lock:
-            task = self._tasks.get(task_id)
-            if not task or task.status == "running":
+            started = self._begin_task(task_id)
+            if started is None:
                 return False
-        threading.Thread(
-            target=self.execute_task_sync,
-            args=(task_id, pm, bl, log_fn, None, on_update),
-            daemon=True,
-        ).start()
+            task, cancel_ev, previous_status = started
+            try:
+                threading.Thread(
+                    target=self._execute_task,
+                    args=(task, cancel_ev, pm, bl, log_fn, None, on_update),
+                    daemon=True,
+                ).start()
+            except RuntimeError:
+                self._tasks[task_id].status = previous_status
+                self._cancel_flags.pop(task_id, None)
+                self._save()
+                raise
         return True
 
     def check_due_tasks(
@@ -465,13 +598,24 @@ class WarmingSchedulerService:
                 and t.status != "running"
                 and t.last_triggered_slot != slot
             ]
-            for t in due:
-                t.last_triggered_slot = slot
-            if due:
-                self._save()
-        for t in due:
-            if self.run_task_async(t.id, pm, bl, log_fn=log_fn, on_update=on_update):
-                triggered.append(t.id)
+            if not due:
+                return triggered
+            with self._store_lease():
+                for task in due:
+                    previous_slot = task.last_triggered_slot
+                    task.last_triggered_slot = slot
+                    started = False
+                    try:
+                        started = self.run_task_async(
+                            task.id, pm, bl, log_fn=log_fn, on_update=on_update
+                        )
+                    finally:
+                        if not started:
+                            task.last_triggered_slot = previous_slot
+                            if self._saved_tasks[task.id]["last_triggered_slot"] == slot:
+                                self._save()
+                    if started:
+                        triggered.append(task.id)
         return triggered
 
     def start_daemon(
