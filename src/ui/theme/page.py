@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import sys
 
 import flet as ft
@@ -108,19 +110,31 @@ def apply_page_theme(page: ft.Page) -> None:
     page.theme = build_page_theme()
 
 
-def _macos_work_area() -> tuple[float, float, float, float] | None:
-    from AppKit import NSScreen
+_MACOS_WORK_AREA_SCRIPT = """
+ObjC.import("AppKit");
+function run() {
+    const screens = $.NSScreen.screens;
+    if (!screens.count) return "[]";
+    const screen = screens.objectAtIndex(0);
+    const area = screen.visibleFrame;
+    // AppKit's origin is bottom-left; Flet positions windows from the top-left.
+    const top = screen.frame.size.height - (area.origin.y + area.size.height);
+    return JSON.stringify([area.origin.x, top, area.size.width, area.size.height]);
+}
+"""
 
-    screens = NSScreen.screens()
-    if not screens:
+
+def _macos_work_area() -> tuple[float, float, float, float] | None:
+    try:
+        output = subprocess.check_output(
+            ["/usr/bin/osascript", "-l", "JavaScript", "-e", _MACOS_WORK_AREA_SCRIPT],
+            timeout=2,
+            stderr=subprocess.DEVNULL,
+        )
+        left, top, width, height = map(float, json.loads(output))
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
         return None
-    primary = screens[0]
-    area = primary.visibleFrame()
-    if area.size.width <= 0 or area.size.height <= 0:
-        return None
-    # AppKit's origin is bottom-left; Flet positions windows from the top-left.
-    top = primary.frame().size.height - (area.origin.y + area.size.height)
-    return area.origin.x, top, area.size.width, area.size.height
+    return (left, top, width, height) if width > 0 and height > 0 else None
 
 
 def configure_page(page: ft.Page) -> None:

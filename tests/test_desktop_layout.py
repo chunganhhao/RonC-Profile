@@ -1,5 +1,7 @@
 """Resizing keeps real controls and their actions instead of hiding profile data."""
 
+import json
+import subprocess
 import sys
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,27 +16,40 @@ from src.ui.theme import page as page_theme
 
 
 @pytest.mark.parametrize(
-    ("screen_height", "visible", "expected"),
+    ("probe_output", "probe_error"),
+    [(b"[]", None), (None, FileNotFoundError()), (None, subprocess.TimeoutExpired("osascript", 2))],
+    ids=["no-display", "unavailable", "timeout"],
+)
+def test_macos_startup_without_appkit_or_work_area_probe(monkeypatch, probe_output, probe_error):
+    monkeypatch.setitem(sys.modules, "AppKit", None)
+    monkeypatch.setattr(page_theme, "sys", SimpleNamespace(platform="darwin"))
+    page = SimpleNamespace(window=ft.Window())
+    with patch("subprocess.check_output", return_value=probe_output, side_effect=probe_error):
+        page_theme.configure_page(page)
+    window = page.window
+    assert (window.left, window.top) == (None, None)
+    assert (window.width, window.height, window.min_width, window.min_height) == (
+        1440,
+        880,
+        900,
+        600,
+    )
+
+
+@pytest.mark.parametrize(
+    ("work_area", "expected"),
     [
-        (1200, (0, 82, 1600, 1088), (80, 134, 1440, 880, 900, 600)),
-        (600, (72, 40, 800, 530), (72, 30, 800, 530, 800, 530)),
+        ((0, 30, 1600, 1088), (80, 134, 1440, 880, 900, 600)),
+        ((72, 30, 800, 530), (72, 30, 800, 530, 800, 530)),
     ],
     ids=["center", "clamp"],
 )
-def test_macos_startup_window_fits_the_work_area(monkeypatch, screen_height, visible, expected):
-    x, y, width, height = visible
-    screen = SimpleNamespace(
-        frame=lambda: SimpleNamespace(size=SimpleNamespace(height=screen_height)),
-        visibleFrame=lambda: SimpleNamespace(
-            origin=SimpleNamespace(x=x, y=y), size=SimpleNamespace(width=width, height=height)
-        ),
-    )
-    monkeypatch.setitem(
-        sys.modules, "AppKit", SimpleNamespace(NSScreen=SimpleNamespace(screens=lambda: [screen]))
-    )
-    monkeypatch.setattr(page_theme, "sys", SimpleNamespace(platform="darwin"), raising=False)
+def test_macos_startup_window_fits_the_work_area(monkeypatch, work_area, expected):
+    monkeypatch.setitem(sys.modules, "AppKit", None)
+    monkeypatch.setattr(page_theme, "sys", SimpleNamespace(platform="darwin"))
     page = SimpleNamespace(window=ft.Window())
-    page_theme.configure_page(page)
+    with patch("subprocess.check_output", return_value=json.dumps(work_area).encode()):
+        page_theme.configure_page(page)
     window = page.window
     assert (
         window.left,
