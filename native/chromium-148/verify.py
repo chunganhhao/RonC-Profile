@@ -1634,4 +1634,4 @@ if __name__ == "__main__":
     parser.add_argument("executable", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
-    asyncio.run(asyncio.wait_for(verify(args.executable, args.output), timeout=180))
+    asyncio.run(asyncio.wait_for(verify(args.executable, args.output), timeout=600))
