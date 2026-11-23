@@ -133,8 +133,10 @@ class App:
             font_family=FONT_SEMIBOLD,
             color=COLORS["text_main"],
         )
+        proxy_count = len(self.proxy_pool.list_entries())
+        self._sidebar_proxy_badge = ft.Text(str(proxy_count))
         self._footer_proxy_text = ft.Text(
-            get_string("footer_proxy_pool", count=len(self.proxy_pool.list_entries())),
+            get_string("footer_proxy_pool", count=proxy_count),
             size=11.5,
             font_family=FONT_DATA,
             color=COLORS["text_sub"],
@@ -151,10 +153,12 @@ class App:
             size=12,
             font_family=FONT_SEMIBOLD,
             color=COLORS["live_ink"],
+            max_lines=2,
+            overflow=ft.TextOverflow.ELLIPSIS,
+            tooltip=self._toast_text.value or None,
         )
         self._toast_banner = ft.Container(
             key="action_toast_banner",
-            visible=time.monotonic() < self._toast_until and bool(self._toast_text.value),
             padding=ft.Padding.symmetric(horizontal=12, vertical=6),
             border_radius=8,
             bgcolor=COLORS["live_tint"],
@@ -168,6 +172,9 @@ class App:
                     self._toast_text,
                 ],
             ),
+        )
+        self._set_toast_visible(
+            time.monotonic() < self._toast_until and bool(self._toast_text.value)
         )
         self.page.title = get_string("window_title")
         self.page.controls.clear()
@@ -219,12 +226,7 @@ class App:
         )
 
     def _trigger_feedback(self, name: str, key: str, toast_msg: str) -> None:
-        now = time.monotonic()
-        self._feedback_until[(name, key)] = now + 2.0
-        self._toast_until = now + 2.4
-        self._toast_text.value = toast_msg
-        self._toast_text.color = COLORS["live_ink"]
-        self._toast_banner.visible = True
+        self._feedback_until[(name, key)] = time.monotonic() + 2.0
         self._log(toast_msg)
         self._refresh_profiles()
 
@@ -296,7 +298,7 @@ class App:
             on_open_extensions=self._open_extensions,
             on_open_warming=self._open_warming,
             on_toggle_theme=self._set_theme,
-            proxy_pool_count=len(self.proxy_pool.list_entries()),
+            proxy_pool_count=self._sidebar_proxy_badge,
             extension_count=len(self.extensions.list_entries()),
             warming_task_count=len(self.warming.list_tasks()),
         )
@@ -602,7 +604,7 @@ class App:
         )
 
         now = time.monotonic()
-        self._toast_banner.visible = now < self._toast_until and bool(self._toast_text.value)
+        self._set_toast_visible(now < self._toast_until and bool(self._toast_text.value))
         r.profile_list_area.controls = (
             [
                 build_profile_card(
@@ -647,9 +649,9 @@ class App:
         )
         self._set_subtitle(r.content_subtitle)
         self._total_count_text.value = get_string("footer_total", count=len(all_profiles))
-        self._footer_proxy_text.value = get_string(
-            "footer_proxy_pool", count=len(self.proxy_pool.list_entries())
-        )
+        proxy_count = len(self.proxy_pool.list_entries())
+        self._sidebar_proxy_badge.value = str(proxy_count)
+        self._footer_proxy_text.value = get_string("footer_proxy_pool", count=proxy_count)
         self._footer_warming_text.value = get_string(
             "footer_warming_tasks", count=len(self.warming.list_tasks())
         )
@@ -765,14 +767,20 @@ class App:
                 else get_string("no_active_sessions")
             )
 
+    def _set_toast_visible(self, visible: bool) -> None:
+        self._toast_banner.visible = visible
+        if self.refs is not None:
+            self.refs.content_subtitle.visible = not visible
+
     def _log(self, message: str) -> None:
         logger.info(message)
         visible_message = localize_launch_error(message) if "LAUNCH_FAILED:" in message else message
         if self.refs is not None:
             self._toast_until = time.monotonic() + 2.4
             self._toast_text.value = visible_message
+            self._toast_text.tooltip = visible_message
             self._toast_text.color = COLORS["live_ink"]
-            self._toast_banner.visible = True
+            self._set_toast_visible(True)
             for prefix in ("Updated:", "Đã cập nhật:", "Updated profile:", "Đã cập nhật hồ sơ:"):
                 if message.startswith(prefix):
                     if "->" in message:
@@ -813,7 +821,7 @@ class App:
                     del self._feedback_until[k]
                 toast_expired = self._toast_banner.visible and now >= self._toast_until
                 if toast_expired:
-                    self._toast_banner.visible = False
+                    self._set_toast_visible(False)
                 running_now = self.bl.running_profile_names()
                 changed = running_now != self.state._last_running_snapshot
                 if changed:

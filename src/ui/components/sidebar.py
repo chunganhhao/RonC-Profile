@@ -87,7 +87,7 @@ def _filter_row(
 def _nav_action_row(
     icon: str,
     label: str,
-    badge: str | None,
+    badge: str | ft.Text | None,
     on_click: Callable,
 ) -> ft.Container:
     controls: list[ft.Control] = [
@@ -106,17 +106,16 @@ def _nav_action_row(
         ),
     ]
     if badge is not None:
+        badge_text = ft.Text(badge) if isinstance(badge, str) else badge
+        badge_text.size = 11
+        badge_text.font_family = FONT_DATA
+        badge_text.color = COLORS["cover_muted"]
         controls.append(
             ft.Container(
                 padding=ft.Padding.symmetric(horizontal=6, vertical=1),
                 border_radius=4,
                 bgcolor=COLORS["cover_deep"],
-                content=ft.Text(
-                    badge,
-                    size=11,
-                    font_family=FONT_DATA,
-                    color=COLORS["cover_muted"],
-                ),
+                content=badge_text,
             )
         )
     return ft.Container(
@@ -201,7 +200,7 @@ def build_sidebar(
     on_open_extensions: Callable | None = None,
     on_open_warming: Callable | None = None,
     on_toggle_theme: Callable[[str], None] | None = None,
-    proxy_pool_count: int = 0,
+    proxy_pool_count: int | ft.Text = 0,
     extension_count: int = 0,
     warming_task_count: int = 0,
     on_open_cores: Callable | None = None,
@@ -242,7 +241,9 @@ def build_sidebar(
                     _nav_action_row(
                         ft.Icons.WIFI_FIND_OUTLINED,
                         get_string("nav_proxy_pool"),
-                        str(proxy_pool_count),
+                        str(proxy_pool_count)
+                        if isinstance(proxy_pool_count, int)
+                        else proxy_pool_count,
                         on_open_proxy_pool,
                     )
                 ]
