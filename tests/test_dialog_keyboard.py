@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
+from weakref import ref
 
 import flet as ft
 import pytest
@@ -8,6 +9,7 @@ from src.models.profile import Profile
 from src.ui.actions.profile import edit_profile
 from src.ui.app import App
 from src.ui.dialogs import cores
+from src.ui.dialogs.modal import show_modal_dialog, show_profile_editor
 from src.ui.dialogs.profile import open_profile_dialog
 from src.ui.dialogs.profile_field import open_profile_field_dialog
 from src.ui.dialogs.proxy_pool import open_proxy_pool_dialog
@@ -15,8 +17,9 @@ from src.ui.dialogs.warming import open_warming_dialog
 
 
 class DialogPage:
-    def __init__(self):
+    def __init__(self, notify_dismiss=True):
         self.dialogs = []
+        self.notify_dismiss = notify_dismiss
         self.update = Mock()
         self.on_resize = Mock()
         self.on_keyboard_event = Mock()
@@ -28,9 +31,76 @@ class DialogPage:
     def pop_dialog(self):
         dialog = self.dialogs.pop()
         dialog.open = False
-        if dialog.on_dismiss:
+        if self.notify_dismiss and dialog.on_dismiss:
             dialog.on_dismiss(None)
         return dialog
+
+
+def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handler():
+    page = DialogPage()
+    original_keyboard = page.on_keyboard_event
+    first, second = ft.AlertDialog(), ft.AlertDialog()
+    close_first = show_modal_dialog(page, first)
+    first_keyboard = page.on_keyboard_event
+    show_modal_dialog(page, second)
+    parent = ft.Column(controls=[first, second, ft.Text("Not a dialog")])
+    first._parent = second._parent = ref(parent)
+
+    close_first(None)
+    assert page.dialogs == [first, second]
+    page.on_keyboard_event(SimpleNamespace(key="Escape"))
+    assert page.dialogs == [first]
+    assert page.on_keyboard_event is first_keyboard
+    page.on_keyboard_event(SimpleNamespace(key="Escape"))
+    assert not page.dialogs
+    assert page.on_keyboard_event is original_keyboard
+
+
+def test_failed_editor_open_does_not_block_retry(monkeypatch):
+    page = DialogPage()
+    original_keyboard = page.on_keyboard_event
+    failed, retry = ft.AlertDialog(), ft.AlertDialog()
+
+    def fail_show(dialog):
+        dialog.open = True
+        raise RuntimeError("render failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(page, "show_dialog", fail_show)
+        with pytest.raises(RuntimeError, match="render failed"):
+            show_profile_editor(page, failed, Mock())
+    assert page.on_keyboard_event is original_keyboard
+    assert show_profile_editor(page, retry, Mock()) is not None
+    assert page.dialogs == [retry]
+
+
+@pytest.mark.parametrize("kind", ["edit", "tag"])
+@pytest.mark.parametrize("action", ["cancel", "save", "escape"])
+def test_editor_closes_and_reopens_without_client_dismiss_event(kind, action):
+    page = DialogPage(notify_dismiss=False)
+    originals = (page.on_keyboard_event, page.on_resize)
+    profile = Profile("Chromium demo", engine="chrome")
+    save = Mock(return_value=None)
+
+    def open_editor():
+        if kind == "tag":
+            open_profile_field_dialog(page, profile, "tags", save)
+        else:
+            open_profile_dialog(page, None, save, profile)
+
+    open_editor()
+    (dialog,) = page.dialogs
+    if action == "escape":
+        page.on_keyboard_event(SimpleNamespace(key="Escape"))
+    else:
+        dialog.actions[action == "save"].on_click(None)
+    assert not page.dialogs
+    assert (page.on_keyboard_event, page.on_resize) == originals
+    assert save.call_count == (action == "save")
+
+    open_editor()
+    assert len(page.dialogs) == 1
+    page.dialogs[-1].actions[0].on_click(None)
 
 
 @pytest.mark.parametrize("kind", ["create", "edit", "tag", "cores", "proxy_pool", "warming"])

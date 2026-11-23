@@ -159,13 +159,17 @@ def open_profile_field_dialog(
                 report(str(exc))
                 return
             if draft == initial_backup_codes:
-                page.pop_dialog()
+                cancel()
                 return
         message = on_save(draft)
         if message:
             report(message)
             return
-        page.pop_dialog()
+        cancel()
+
+    def cancel(_: ft.ControlEvent | None = None) -> None:
+        if close is not None:
+            close(None)
 
     entry.on_submit = (lambda _: add(entry.value or "")) if field == "tags" else submit
     controls: list[ft.Control] = []
@@ -271,7 +275,7 @@ def open_profile_field_dialog(
         title=ft.Text(get_string("edit_field", field=label), size=19, font_family=FONT_SEMIBOLD),
         content=body_container,
         actions=[
-            ft.TextButton(get_string("cancel"), on_click=lambda _: page.pop_dialog()),
+            ft.TextButton(get_string("cancel"), on_click=cancel),
             ft.Button(get_string("save_changes"), style=ACCENT_STYLE, on_click=submit),
         ],
     )
@@ -291,4 +295,4 @@ def open_profile_field_dialog(
             max_height=420,
         )
 
-    show_profile_editor(page, dlg, prepare_dialog)
+    close = show_profile_editor(page, dlg, prepare_dialog)

@@ -16,9 +16,11 @@ class Page:
         self.closed = False
 
     def show_dialog(self, dialog):
+        dialog.open = True
         self.dialog = dialog
 
     def pop_dialog(self):
+        self.dialog.open = False
         self.closed = True
 
     def update(self):

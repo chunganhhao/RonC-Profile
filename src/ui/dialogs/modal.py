@@ -31,7 +31,9 @@ def show_modal_dialog(
             return
         parent = dialog.parent
         if parent is not None:
-            top = next((item for item in reversed(parent.controls) if item.open), None)
+            top = next(
+                (item for item in reversed(parent.controls) if getattr(item, "open", False)), None
+            )
             if top is not dialog:
                 return
         try:
@@ -58,11 +60,11 @@ def show_profile_editor(
     page: ft.Page,
     dialog: ft.AlertDialog,
     prepare: Callable[[], None],
-) -> bool:
+) -> Callable[[ft.ControlEvent | None], None] | None:
     with _editor_lock:
         active = getattr(page, "_ronc_profile_editor", None)
         if isinstance(active, ft.AlertDialog) and active.open:
-            return False
+            return None
         prepare()
         previous_dismiss = dialog.on_dismiss
 
@@ -75,6 +77,6 @@ def show_profile_editor(
                     page._ronc_profile_editor = None
 
         dialog.on_dismiss = dismiss
+        close = show_modal_dialog(page, dialog)
         page._ronc_profile_editor = dialog
-        show_modal_dialog(page, dialog)
-        return True
+        return close

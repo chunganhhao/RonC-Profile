@@ -877,8 +877,7 @@ def open_profile_dialog(
             name_error.visible = True
             page.update()
         else:
-            _stop_totp_timer()
-            page.pop_dialog()
+            _close_dialog()
 
     name_field.on_submit = on_submit
 
@@ -1155,8 +1154,8 @@ def open_profile_dialog(
             ]
 
     def _close_dialog(_: object = None) -> None:
-        _stop_totp_timer()
-        page.pop_dialog()
+        if close is not None:
+            close(None)
 
     dlg = ft.AlertDialog(
         modal=True,
@@ -1206,7 +1205,8 @@ def open_profile_dialog(
             on_resize_extra=_on_dialog_resize,
         )
 
-    if show_profile_editor(page, dlg, prepare_dialog):
+    close = show_profile_editor(page, dlg, prepare_dialog)
+    if close is not None:
         _schedule_totp_tick()
 
 
