@@ -14,6 +14,7 @@ from ...models.profile import (
 from ...utils.validation import validate_profile_name, validate_proxy_format
 from ..theme.colors import COLORS, FONT_DATA, FONT_SEMIBOLD
 from ..theme.styles import ACCENT_STYLE, DLG_FIELD_KWARGS, OUTLINE_STYLE
+from .modal import show_profile_editor
 from .responsive import bind_responsive_dialog
 
 FIELD_LABELS = {
@@ -274,17 +275,20 @@ def open_profile_field_dialog(
             ft.Button(get_string("save_changes"), style=ACCENT_STYLE, on_click=submit),
         ],
     )
-    bind_responsive_dialog(
-        page,
-        dlg,
-        body_container,
-        base_width=480,
-        base_height=base_h,
-        width_ratio=0.58,
-        height_ratio=0.50,
-        min_width=360,
-        max_width=640,
-        min_height=base_h,
-        max_height=420,
-    )
-    page.show_dialog(dlg)
+
+    def prepare_dialog() -> None:
+        bind_responsive_dialog(
+            page,
+            dlg,
+            body_container,
+            base_width=480,
+            base_height=base_h,
+            width_ratio=0.58,
+            height_ratio=0.50,
+            min_width=360,
+            max_width=640,
+            min_height=base_h,
+            max_height=420,
+        )
+
+    show_profile_editor(page, dlg, prepare_dialog)

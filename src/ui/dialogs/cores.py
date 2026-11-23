@@ -5,6 +5,7 @@ import flet as ft
 from ...core.strings import get_string
 from ...services.browser import cores
 from ..theme.colors import COLORS, FONT_BOLD
+from .modal import show_modal_dialog
 from .responsive import bind_responsive_dialog
 
 
@@ -225,4 +226,4 @@ def open_core_manager(page: ft.Page, pm=None, bl=None) -> None:
         max_width=860,
     )
     render()
-    page.show_dialog(dialog)
+    show_modal_dialog(page, dialog)
