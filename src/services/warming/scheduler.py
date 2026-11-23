@@ -390,21 +390,13 @@ class WarmingSchedulerService:
     def _begin_task(
         self, task_id: str, *, scheduled_slot: str | None = None, require_exists: bool = False
     ) -> tuple[WarmingTask, threading.Event, tuple[str, str]] | None:
-        latest = self._read_tasks().get(task_id)
-        if latest is None:
+        task = self._tasks.get(task_id)
+        if task is None or task_id not in self._read_tasks():
             if require_exists:
                 raise WarmingTaskNotFound(task_id)
             return None
-        task = self._tasks.get(task_id)
-        if task and task.status == "running":
+        if task.status == "running":
             return None
-        if latest.status == "running":
-            latest.status = "idle"
-        if task is None:
-            task = self._tasks[task_id] = latest
-        else:
-            task.__dict__.update(vars(latest))
-        self._saved_tasks[task_id] = task.to_dict()
         previous_state = task.status, task.last_triggered_slot
         task.status = "running"
         if scheduled_slot is not None:
@@ -616,11 +608,17 @@ class WarmingSchedulerService:
         slot = dt.strftime("%Y-%m-%d %H:%M")
         triggered: list[str] = []
         with self._store_lease():
-            for task in self._read_tasks().values():
+            latest = self._read_tasks()
+            for task in self._tasks.values():
+                saved = latest.get(task.id)
                 if (
-                    not task.enabled
+                    saved is None
+                    or not task.enabled
+                    or not saved.enabled
                     or task.schedule_time != hhmm
+                    or saved.schedule_time != hhmm
                     or task.last_triggered_slot == slot
+                    or saved.last_triggered_slot == slot
                 ):
                     continue
                 if self.run_task_async(

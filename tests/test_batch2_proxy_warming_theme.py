@@ -260,9 +260,12 @@ def test_due_warming_uses_shared_store_after_peer_deletes_task(tmp_path, monkeyp
         finished.set()
 
     monkeypatch.setattr(dispatching, "_execute_task", execute)
+    monkeypatch.setattr(writer, "_execute_task", execute)
     dt = datetime.datetime(2026, 11, 8, 14, 15, 10)
 
-    assert dispatching.check_due_tasks(None, None, now=dt) == [added.id]
+    assert dispatching.check_due_tasks(None, None, now=dt) == []
+    assert not executed
+    assert writer.check_due_tasks(None, None, now=dt) == [added.id]
     assert finished.wait(5)
     assert executed == [added.id]
     assert writer.check_due_tasks(None, None, now=dt) == []
@@ -280,14 +283,15 @@ def test_manual_warming_run_of_peer_deleted_task_returns_not_found(tmp_path, mon
     dispatching = container.warming_scheduler
     assert dispatching.get_task(deleted.id) is not None
     assert deleting.delete_task(deleted.id)
+    added = deleting.add_task("Peer only", ["Profile"])
     executed = []
     monkeypatch.setattr(dispatching, "_execute_task", lambda task, *_: executed.append(task.id))
 
     with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
-        res = client.post(f"/api/v1/warming/tasks/{deleted.id}/run")
-
-    assert res.status_code == 404
-    assert res.json() == {"detail": "Warming task not found"}
+        for task in (deleted, added):
+            res = client.post(f"/api/v1/warming/tasks/{task.id}/run")
+            assert res.status_code == 404
+            assert res.json() == {"detail": "Warming task not found"}
     assert not executed
 
 
