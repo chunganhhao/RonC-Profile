@@ -1,0 +1,74 @@
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index 6f49f9f..0ed0a12 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -211,6 +211,7 @@
+ #include "third_party/blink/public/public_buildflags.h"
+ #include "third_party/perfetto/include/perfetto/tracing/traced_proto.h"
+ #include "ui/accessibility/accessibility_switches.h"
++#include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/ui_base_features.h"
+ #include "ui/base/ui_base_switches.h"
+ #include "ui/display/display_switches.h"
+@@ -3640,15 +3641,42 @@ void RenderProcessHostImpl::AppendRendererCommandLine(
+       *base::CommandLine::ForCurrentProcess();
+   PropagateBrowserCommandLineToRenderer(browser_command_line, command_line);
+ 
+-  // Pass on the browser locale, preserving explicit --lang when fingerprinting.
++  // Pass on a bundled-pak-resolvable --lang for ResourceBundle while
++  // forwarding the exact requested BCP-47 tag via --fingerprint-locale for
++  // Blink LocaleController::Init().
+   std::string locale =
+       GetContentClient()->browser()->GetApplicationLocale();
++  const bool locale_spoofing_disabled =
++      browser_command_line.HasSwitch(switches::kDisableSpoofing) &&
++      browser_command_line.GetSwitchValueASCII(switches::kDisableSpoofing)
++              .find("locale") != std::string::npos;
+   if (browser_command_line.HasSwitch(switches::kFingerprint) &&
++      !locale_spoofing_disabled &&
+       browser_command_line.HasSwitch(switches::kLang)) {
+     const std::string requested_lang =
+         browser_command_line.GetSwitchValueASCII(switches::kLang);
+     if (!requested_lang.empty()) {
+-      locale = requested_lang;
++      command_line->AppendSwitchASCII("fingerprint-locale", requested_lang);
++      std::string pak_candidate = base::ToLowerASCII(requested_lang);
++      for (char& ch : pak_candidate) {
++        if (ch == '_') {
++          ch = '-';
++        }
++      }
++      const size_t dash = pak_candidate.find('-');
++      if (dash != std::string::npos &&
++          pak_candidate.find('-', dash + 1) == std::string::npos) {
++        for (size_t i = dash + 1; i < pak_candidate.size(); ++i) {
++          pak_candidate[i] = base::ToUpperASCII(pak_candidate[i]);
++        }
++      }
++      if (std::optional<std::string> resolved =
++              l10n_util::CheckAndResolveLocale(
++                  pak_candidate,
++                  l10n_util::CheckLocaleMode::kUseKnownLocalesList);
++          resolved && !resolved->empty()) {
++        locale = std::move(*resolved);
++      }
+     }
+   }
+   command_line->AppendSwitchASCII(switches::kLang, locale);
+diff --git a/third_party/blink/renderer/core/inspector/locale_controller.cc b/third_party/blink/renderer/core/inspector/locale_controller.cc
+index cb76a2e..86f37c5 100644
+--- a/third_party/blink/renderer/core/inspector/locale_controller.cc
++++ b/third_party/blink/renderer/core/inspector/locale_controller.cc
+@@ -55,7 +55,11 @@ void LocaleController::Init() {
+               .find("locale") != std::string::npos) {
+     return;
+   }
+-  const std::string requested = command_line->GetSwitchValueASCII("lang");
++  std::string requested =
++      command_line->GetSwitchValueASCII("fingerprint-locale");
++  if (requested.empty()) {
++    requested = command_line->GetSwitchValueASCII("lang");
++  }
+   if (requested.empty()) {
+     return;
+   }

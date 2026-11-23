@@ -45,6 +45,15 @@ PIXELSCAN_COHERENCE_PATCH_SHA256 = (
     "20a3147b46a11a8e27b8c912ba64bf2457ed5aa5b9c571c403a5b4a01a84de05"
 )
 PIXELSCAN_COHERENCE_SERIES_ENTRY = "extra/fingerprint/028-pixelscan-noise-font-coherence.patch"
+MACOS_RENDERER_LOCALE_PAK_PATCH = (
+    Path(__file__).with_name("patches") / "029-macos-renderer-locale-pak-coherence.patch"
+)
+MACOS_RENDERER_LOCALE_PAK_PATCH_SHA256 = (
+    "1344c45970b4ee5038fe550dd64fb60ada6261788e33fc90dee9dcdcfdd98f61"
+)
+MACOS_RENDERER_LOCALE_PAK_SERIES_ENTRY = (
+    "extra/fingerprint/029-macos-renderer-locale-pak-coherence.patch"
+)
 
 
 def verify_checkout(path: Path, revision: str) -> None:
@@ -97,6 +106,11 @@ def prepare(root: Path) -> None:
         != PIXELSCAN_COHERENCE_PATCH_SHA256
     ):
         raise ValueError("Pixelscan coherence patch checksum mismatch")
+    if (
+        hashlib.sha256(MACOS_RENDERER_LOCALE_PAK_PATCH.read_bytes()).hexdigest()
+        != MACOS_RENDERER_LOCALE_PAK_PATCH_SHA256
+    ):
+        raise ValueError("macOS renderer locale pak patch checksum mismatch")
     # Check every input before modifying either checkout.
     rust_ini = root / "downloads-arm64.ini"
     before = rust_ini.read_text()
@@ -112,6 +126,7 @@ def prepare(root: Path) -> None:
     apple_silicon_target = fork / "patches" / APPLE_SILICON_SERIES_ENTRY
     locale_speech_font_target = fork / "patches" / LOCALE_SPEECH_FONT_SERIES_ENTRY
     pixelscan_coherence_target = fork / "patches" / PIXELSCAN_COHERENCE_SERIES_ENTRY
+    macos_renderer_locale_pak_target = fork / "patches" / MACOS_RENDERER_LOCALE_PAK_SERIES_ENTRY
     if NATIVE_SERIES_ENTRY in series or native_target.exists():
         raise ValueError("Native patch already staged; use a fresh checkout")
     if MACOS_ANTIDETECT_SERIES_ENTRY in series or macos_target.exists():
@@ -126,6 +141,11 @@ def prepare(root: Path) -> None:
         raise ValueError("Locale/speech/font coherence patch already staged; use a fresh checkout")
     if PIXELSCAN_COHERENCE_SERIES_ENTRY in series or pixelscan_coherence_target.exists():
         raise ValueError("Pixelscan coherence patch already staged; use a fresh checkout")
+    if (
+        MACOS_RENDERER_LOCALE_PAK_SERIES_ENTRY in series
+        or macos_renderer_locale_pak_target.exists()
+    ):
+        raise ValueError("macOS renderer locale pak patch already staged; use a fresh checkout")
     if not series.rstrip().endswith("extra/fingerprint/021-device-memory-cap.patch"):
         raise ValueError("Unexpected native patch-series order")
     subprocess.run(["git", "-C", str(fork), "apply", "--check", str(PATCH.resolve())], check=True)
@@ -140,6 +160,7 @@ def prepare(root: Path) -> None:
     apple_silicon_target.write_bytes(APPLE_SILICON_PATCH.read_bytes())
     locale_speech_font_target.write_bytes(LOCALE_SPEECH_FONT_PATCH.read_bytes())
     pixelscan_coherence_target.write_bytes(PIXELSCAN_COHERENCE_PATCH.read_bytes())
+    macos_renderer_locale_pak_target.write_bytes(MACOS_RENDERER_LOCALE_PAK_PATCH.read_bytes())
     series_path.write_text(
         series.rstrip()
         + "\n"
@@ -157,6 +178,8 @@ def prepare(root: Path) -> None:
         + "\n"
         + PIXELSCAN_COHERENCE_SERIES_ENTRY
         + "\n"
+        + MACOS_RENDERER_LOCALE_PAK_SERIES_ENTRY
+        + "\n"
     )
     provenance = {
         "platform_revision": PLATFORM_REV,
@@ -169,6 +192,7 @@ def prepare(root: Path) -> None:
         "apple_silicon_coherence_patch_sha256": APPLE_SILICON_PATCH_SHA256,
         "locale_speech_font_patch_sha256": LOCALE_SPEECH_FONT_PATCH_SHA256,
         "pixelscan_coherence_patch_sha256": PIXELSCAN_COHERENCE_PATCH_SHA256,
+        "macos_renderer_locale_pak_patch_sha256": MACOS_RENDERER_LOCALE_PAK_PATCH_SHA256,
         "rust_archive_sha256": RUST_SHA256,
         "acceptance": "EXPERIMENTAL_SOURCE_ONLY",
         "open_findings": ["native WebGPU realm coverage", "strict-CSP Blob worker compatibility"],
@@ -225,7 +249,7 @@ def _verify_skipped_patches(src_dir: Path, patches: list[tuple[str, str]]) -> No
 
 
 def apply_incremental_patches(src_dir: Path, saved_source: dict | None = None) -> bool:
-    """Apply pending incremental patches (023..028) onto an unpacked src tree."""
+    """Apply pending incremental patches (023..029) onto an unpacked src tree."""
     patches = (
         (
             MACOS_ANTIDETECT_PATCH,
@@ -258,6 +282,12 @@ def apply_incremental_patches(src_dir: Path, saved_source: dict | None = None) -
             "028",
             "pixelscan_coherence_patch_sha256",
         ),
+        (
+            MACOS_RENDERER_LOCALE_PAK_PATCH,
+            MACOS_RENDERER_LOCALE_PAK_PATCH_SHA256,
+            "029",
+            "macos_renderer_locale_pak_patch_sha256",
+        ),
     )
     resolved: list[tuple[str, str]] = []
     for patch_path, expected_sha, label, prov_key in patches:
@@ -267,7 +297,7 @@ def apply_incremental_patches(src_dir: Path, saved_source: dict | None = None) -
             continue
         resolved.append((str(patch_path.resolve()), label))
 
-    # Later patches (e.g., 024/028) replace hunks from earlier ones (023/024/027), so only the
+    # Later patches (e.g., 024/028/029) replace hunks from earlier ones (023/024/027), so only the
     # latest already-applied patch cleanly passes `patch -R -C`; skip everything up to it.
     skip_until = -1
     for idx in range(len(resolved) - 1, -1, -1):

@@ -2135,3 +2135,477 @@ int main() {
         timeout=60,
     )
     subprocess.run([str(exe)], check=True, capture_output=True, timeout=10)
+
+
+def test_029_patch_applies_cleanly_and_compiles_under_strict_cpp20(tmp_path):
+    import hashlib
+
+    compiler = shutil.which("clang++") or shutil.which("c++")
+    if not compiler:
+        pytest.skip("C++ compiler required")
+
+    expected_shas = {
+        "022-native-gpu-realms.patch": "e197fd91382ccf39dd1f43b36b9b89042331f09021344ee7d661133e1bc3420c",
+        "023-macos-antidetect-complete.patch": "98e2131461e38c290d67f929e0729cc187c741b31838c3515da1194ddbd57e4d",
+        "024-webgl-readback-parity.patch": "78ff843b4586c5452b8987dc9ecea0b52b16e1ccbcdc5e472597dd77d36d21c3",
+        "025-audio-clientrects-parity.patch": "9a369414029f7b3b7811d01a31d8cbfb915b381ad08876e4b39e87cf7128f881",
+        "026-apple-silicon-device-coherence.patch": "558b84bbec096583a5253889a06b4c31f5c5efa31a79fde5d42e29fce908d75f",
+        "027-macos-locale-speech-font-coherence.patch": "ec47709cbe9a96390cb78f76c329ec6d9e3636bf31f5a44812d1e0c69c2aa726",
+        "028-pixelscan-noise-font-coherence.patch": "20a3147b46a11a8e27b8c912ba64bf2457ed5aa5b9c571c403a5b4a01a84de05",
+        "029-macos-renderer-locale-pak-coherence.patch": "1344c45970b4ee5038fe550dd64fb60ada6261788e33fc90dee9dcdcfdd98f61",
+        "109-canvas-pixel-addressing.patch": "df190001a4ab19a97acad9758a0c0dd03a800584e9b96c81c33484a5bedd6ce2",
+    }
+    for name, expected in expected_shas.items():
+        assert hashlib.sha256((KIT / "patches" / name).read_bytes()).hexdigest() == expected
+
+    patch027 = (KIT / "patches/027-macos-locale-speech-font-coherence.patch").read_text()
+    patch029 = (KIT / "patches/029-macos-renderer-locale-pak-coherence.patch").read_text()
+
+    touched_files = [
+        line.removeprefix("+++ b/") for line in patch029.splitlines() if line.startswith("+++ b/")
+    ]
+    assert touched_files == [
+        "content/browser/renderer_host/render_process_host_impl.cc",
+        "third_party/blink/renderer/core/inspector/locale_controller.cc",
+    ]
+    assert all(path.endswith(".cc") for path in touched_files)
+
+    def _apply_hunks(base_text: str, section_text: str) -> str:
+        hunks = ("\n" + section_text).split("\n@@ ")[1:]
+        assert hunks
+        cur = base_text
+        for raw_hunk in hunks:
+            body = raw_hunk.splitlines()[1:]
+            old_blk = "\n".join(line[1:] for line in body if line.startswith((" ", "-")))
+            new_blk = "\n".join(line[1:] for line in body if line.startswith((" ", "+")))
+            assert cur.count(old_blk) == 1, f"Hunk mismatch:\n{old_blk}"
+            cur = cur.replace(old_blk, new_blk, 1)
+        return cur
+
+    # Reconstruct exact post-027 render_process_host_impl.cc context and apply 029 verbatim.
+    rph_027_sec = patch027.split(
+        "+++ b/content/browser/renderer_host/render_process_host_impl.cc\n", 1
+    )[1].split("\ndiff --git ", 1)[0]
+    rph_post027_body = "\n".join(
+        line[1:]
+        for line in rph_027_sec.splitlines()
+        if line.startswith(("+", " ")) and not line.startswith("+++")
+    )
+    rph_post027 = (
+        '#include "third_party/blink/public/public_buildflags.h"\n'
+        '#include "third_party/perfetto/include/perfetto/tracing/traced_proto.h"\n'
+        '#include "ui/accessibility/accessibility_switches.h"\n'
+        '#include "ui/base/ui_base_features.h"\n'
+        '#include "ui/base/ui_base_switches.h"\n'
+        '#include "ui/display/display_switches.h"\n'
+        "void RenderProcessHostImpl::AppendRendererCommandLine(\n"
+        "    base::CommandLine* command_line) {\n" + rph_post027_body
+    )
+    rph_029_sec = patch029.split(
+        "+++ b/content/browser/renderer_host/render_process_host_impl.cc\n", 1
+    )[1].split("\ndiff --git ", 1)[0]
+    rph_post029 = _apply_hunks(rph_post027, rph_029_sec)
+    assert '#include "ui/base/l10n/l10n_util.h"' in rph_post029
+
+    rph_start = rph_post029.index("  std::string locale =")
+    rph_end_marker = "command_line->AppendSwitchASCII(switches::kLang, locale);"
+    rph_end = rph_post029.index(rph_end_marker, rph_start) + len(rph_end_marker)
+    rph_block = rph_post029[rph_start:rph_end]
+
+    # Reconstruct exact post-027 locale_controller.cc Init() and apply 029 verbatim.
+    lc_027_sec = patch027.split(
+        "+++ b/third_party/blink/renderer/core/inspector/locale_controller.cc\n", 1
+    )[1].split("\ndiff --git ", 1)[0]
+    lc_027_added = "\n".join(
+        line[1:]
+        for line in lc_027_sec.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    lc_027_init = (
+        "void LocaleController::Init()" + lc_027_added.split("void LocaleController::Init()", 1)[1]
+    )
+    lc_029_sec = patch029.split(
+        "+++ b/third_party/blink/renderer/core/inspector/locale_controller.cc\n", 1
+    )[1]
+    lc_029_init = _apply_hunks(lc_027_init, lc_029_sec)
+
+    cpp_src = r"""#include <algorithm>
+#include <cassert>
+#include <cctype>
+#include <cstddef>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace base {
+struct CommandLine {
+  std::map<std::string, std::string> values;
+  static CommandLine* ForCurrentProcess() {
+    static CommandLine* c = new CommandLine();
+    return c;
+  }
+  bool HasSwitch(const char* k) const { return values.count(k) > 0; }
+  std::string GetSwitchValueASCII(const char* k) const {
+    auto it = values.find(k);
+    return it == values.end() ? std::string() : it->second;
+  }
+  void AppendSwitchASCII(const char* k, const std::string& v) { values[k] = v; }
+};
+inline std::string ToLowerASCII(std::string_view s) {
+  std::string out(s);
+  std::transform(out.begin(), out.end(), out.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return out;
+}
+inline char ToUpperASCII(char c) {
+  return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c;
+}
+inline bool EqualsCaseInsensitiveASCII(std::string_view a, std::string_view b) {
+  return ToLowerASCII(a) == ToLowerASCII(b);
+}
+struct __attribute__((capability("mutex"))) Lock {};
+struct __attribute__((scoped_lockable)) AutoLock {
+  explicit AutoLock(Lock& m) __attribute__((acquire_capability(m))) {}
+  ~AutoLock() __attribute__((release_capability())) {}
+};
+}  // namespace base
+
+namespace switches {
+inline constexpr char kFingerprint[] = "fingerprint";
+inline constexpr char kDisableSpoofing[] = "disable-spoofing";
+inline constexpr char kLang[] = "lang";
+}  // namespace switches
+
+namespace l10n_util {
+enum class CheckLocaleMode {
+  kVerifyLocalizationDataExists,
+  kUseKnownLocalesList,
+};
+
+inline const std::set<std::string>& KnownMacPlatformLocales() {
+  // Exact macOS official-build `locales_for_platform_list` from build/config/locales.gni
+  // and ui/base/BUILD.gn (55 platform_pak_locales + "en").
+  static const std::set<std::string>& locales = *new std::set<std::string>{
+      "af",    "am",    "ar",    "bg",    "bn",    "ca",    "cs",    "da",
+      "de",    "el",    "en",    "en-GB", "en-US", "es",    "es-419","et",
+      "fa",    "fi",    "fil",   "fr",    "gu",    "he",    "hi",    "hr",
+      "hu",    "id",    "it",    "ja",    "kn",    "ko",    "lt",    "lv",
+      "ml",    "mr",    "ms",    "nb",    "nl",    "pl",    "pt-BR", "pt-PT",
+      "ro",    "ru",    "sk",    "sl",    "sr",    "sv",    "sw",    "ta",
+      "te",    "th",    "tr",    "uk",    "ur",    "vi",    "zh-CN", "zh-TW",
+  };
+  return locales;
+}
+
+inline std::string ToAppleBundleLproj(std::string_view locale) {
+  if (locale == "en-US") return "en";
+  std::string out(locale);
+  std::replace(out.begin(), out.end(), '-', '_');
+  return out;
+}
+
+inline bool HasStringsForLocale(std::string_view locale, CheckLocaleMode) {
+  return KnownMacPlatformLocales().count(std::string(locale)) > 0;
+}
+
+inline std::string_view GetLanguage(std::string_view locale) {
+  return locale.substr(0, locale.find('-'));
+}
+
+// Faithful mirror of Chromium 148.0.7778.215 ui/base/l10n/l10n_util.cc:408-489.
+inline std::optional<std::string> CheckAndResolveLocale(
+    std::string_view locale,
+    CheckLocaleMode mode = CheckLocaleMode::kVerifyLocalizationDataExists) {
+  if (HasStringsForLocale(locale, mode)) {
+    return std::optional<std::string>(locale);
+  }
+  if (locale.find('@') != std::string::npos) {
+    return std::nullopt;
+  }
+  const std::string_view lang = GetLanguage(locale);
+  if (lang.size() < locale.size()) {
+    const std::string_view region = locale.substr(lang.size() + 1);
+    std::string tmp_locale(lang);
+    if (base::EqualsCaseInsensitiveASCII(lang, "es") &&
+        !base::EqualsCaseInsensitiveASCII(region, "es")) {
+      tmp_locale.append("-419");
+    } else if (base::EqualsCaseInsensitiveASCII(lang, "pt") &&
+               !base::EqualsCaseInsensitiveASCII(region, "br")) {
+      tmp_locale.append("-PT");
+    } else if (base::EqualsCaseInsensitiveASCII(lang, "zh")) {
+      if (base::EqualsCaseInsensitiveASCII(region, "hk") ||
+          base::EqualsCaseInsensitiveASCII(region, "mo")) {
+        tmp_locale.append("-TW");
+      } else {
+        tmp_locale.append("-CN");
+      }
+    } else if (base::EqualsCaseInsensitiveASCII(lang, "en")) {
+      if (base::EqualsCaseInsensitiveASCII(region, "lr") ||
+          base::EqualsCaseInsensitiveASCII(region, "ph")) {
+        tmp_locale.append("-US");
+      } else {
+        tmp_locale.append("-GB");
+      }
+    }
+    if (HasStringsForLocale(tmp_locale, mode)) {
+      return tmp_locale;
+    }
+  }
+  struct Alias {
+    const char* source;
+    const char* dest;
+  };
+  static constexpr Alias kAliasMap[] = {
+      {"en", "en-US"}, {"iw", "he"},  {"no", "nb"},
+      {"pt", "pt-BR"}, {"tl", "fil"}, {"zh", "zh-CN"},
+  };
+  for (const auto& alias : kAliasMap) {
+    if (base::EqualsCaseInsensitiveASCII(lang, alias.source)) {
+      if (HasStringsForLocale(alias.dest, mode)) {
+        return std::optional<std::string>(alias.dest);
+      }
+    }
+  }
+  return std::nullopt;
+}
+}  // namespace l10n_util
+
+struct AsciiWrap {
+  std::string v;
+  const char* data() const { return v.c_str(); }
+};
+struct String {
+  std::string s;
+  bool empty() const { return s.empty(); }
+  std::string Utf8() const { return s; }
+  AsciiWrap Ascii() const { return {s}; }
+  static String FromUtf8(const std::string& in) { return {in}; }
+  bool operator==(const String& o) const { return s == o.s; }
+};
+namespace icu {
+struct Locale {
+  std::string tag;
+  explicit Locale(const char* t) : tag(t ? t : "") {}
+  const char* getLanguage() const {
+    if (tag.empty() || !std::isalpha(static_cast<unsigned char>(tag[0]))) return "";
+    return tag.c_str();
+  }
+};
+}  // namespace icu
+
+struct LocaleController {
+  base::Lock lock_;
+  String embedder_locale_{"en-US"};
+  String locale_override_ __attribute__((guarded_by(lock_)));
+  std::vector<std::string> updates;
+  void SetEmbedderLocale(const String& locale);
+  void UpdateLocale(const String& l) { updates.push_back(l.s); }
+  static LocaleController& instance() {
+    static LocaleController* inst = new LocaleController();
+    return *inst;
+  }
+  static void Init();
+  void Reset() {
+    base::AutoLock locker(lock_);
+    embedder_locale_ = {"en-US"};
+    locale_override_ = {};
+    updates.clear();
+  }
+  void SetOverrideForTest(const String& l) {
+    base::AutoLock locker(lock_);
+    locale_override_ = l;
+  }
+};
+__LC_029_INIT__
+
+struct MockBrowserClient {
+  std::string app_locale = "en-US";
+  std::string GetApplicationLocale() const { return app_locale; }
+};
+struct MockContentClient {
+  MockBrowserClient b;
+  const MockBrowserClient* browser() const { return &b; }
+};
+static MockContentClient* GetContentClient() {
+  static MockContentClient* c = new MockContentClient();
+  return c;
+}
+
+static base::CommandLine BuildChildCommandLine(
+    const base::CommandLine& browser_command_line) {
+  base::CommandLine child;
+  base::CommandLine* command_line = &child;
+__RPH_BLOCK__
+  return child;
+}
+
+int main() {
+  // Bundled .lproj set derived from official Chromium 148 macOS locales.gni (55 dirs).
+  std::set<std::string> bundled_lprojs;
+  for (const auto& loc : l10n_util::KnownMacPlatformLocales()) {
+    bundled_lprojs.insert(l10n_util::ToAppleBundleLproj(loc));
+  }
+  assert(bundled_lprojs.size() == 55);
+
+  // 1. Without --fingerprint, with --disable-spoofing=locale, or with empty --lang:
+  //    keeps GetApplicationLocale() and does not emit --fingerprint-locale.
+  {
+    base::CommandLine browser;
+    auto child = BuildChildCommandLine(browser);
+    assert(child.GetSwitchValueASCII(switches::kLang) == "en-US");
+    assert(!child.HasSwitch("fingerprint-locale"));
+
+    browser.values = {{"lang", "de-DE"}};
+    child = BuildChildCommandLine(browser);
+    assert(child.GetSwitchValueASCII(switches::kLang) == "en-US");
+    assert(!child.HasSwitch("fingerprint-locale"));
+
+    browser.values = {{"fingerprint", "3006"}, {"disable-spoofing", "locale"}, {"lang", "de-DE"}};
+    child = BuildChildCommandLine(browser);
+    assert(child.GetSwitchValueASCII(switches::kLang) == "en-US");
+    assert(!child.HasSwitch("fingerprint-locale"));
+
+    browser.values = {{"fingerprint", "3006"}, {"lang", ""}};
+    child = BuildChildCommandLine(browser);
+    assert(child.GetSwitchValueASCII(switches::kLang) == "en-US");
+    assert(!child.HasSwitch("fingerprint-locale"));
+  }
+
+  // 2. End-to-end parent AppendRendererCommandLine -> child LocaleController::Init().
+  struct Case {
+    const char* input;
+    const char* expected_pak_lang;
+    const char* expected_blink_locale;
+  };
+  const Case cases[] = {
+      {"de-DE", "de", "de-DE"},
+      {"de_DE", "de", "de_DE"},
+      {"DE-de", "de", "DE-de"},
+      {"de", "de", "de"},
+      {"vi-VN", "vi", "vi-VN"},
+      {"ja-JP", "ja", "ja-JP"},
+      {"fr-FR", "fr", "fr-FR"},
+      {"ko-KR", "ko", "ko-KR"},
+      {"en-US", "en-US", "en-US"},
+      {"en-us", "en-US", "en-us"},
+      {"en_US", "en-US", "en_US"},
+      {"en-GB", "en-GB", "en-GB"},
+      {"en-AU", "en-GB", "en-AU"},
+      {"en-CA", "en-GB", "en-CA"},
+      {"en-PH", "en-US", "en-PH"},
+      {"en", "en", "en"},
+      {"zh-CN", "zh-CN", "zh-CN"},
+      {"zh-cn", "zh-CN", "zh-cn"},
+      {"zh-SG", "zh-CN", "zh-SG"},
+      {"zh-Hans-CN", "zh-CN", "zh-Hans-CN"},
+      {"zh-TW", "zh-TW", "zh-TW"},
+      {"zh-HK", "zh-TW", "zh-HK"},
+      {"zh-MO", "zh-TW", "zh-MO"},
+      {"es-MX", "es-419", "es-MX"},
+      {"es-ES", "es", "es-ES"},
+      {"es-419", "es-419", "es-419"},
+      {"pt-BR", "pt-BR", "pt-BR"},
+      {"pt-br", "pt-BR", "pt-br"},
+      {"pt-PT", "pt-PT", "pt-PT"},
+      {"pt-AO", "pt-PT", "pt-AO"},
+      {"pt", "pt-BR", "pt"},
+      {"nb-NO", "nb", "nb-NO"},
+      {"no-NO", "nb", "no-NO"},
+      {"he-IL", "he", "he-IL"},
+      {"iw-IL", "he", "iw-IL"},
+      {"tl-PH", "fil", "tl-PH"},
+      {"fil-PH", "fil", "fil-PH"},
+      {"xx-YY", "en-US", "xx-YY"},
+      {"is-IS", "en-US", "is-IS"},
+      {"../en", "en-US", "../en"},
+      {"de-DE@foo", "en-US", "de-DE@foo"},
+  };
+  auto* child_cmd = base::CommandLine::ForCurrentProcess();
+  auto& lc = LocaleController::instance();
+  for (const Case& tc : cases) {
+    base::CommandLine browser;
+    browser.values = {{"fingerprint", "3006"}, {"lang", tc.input}};
+    base::CommandLine child = BuildChildCommandLine(browser);
+    const std::string pak_lang = child.GetSwitchValueASCII(switches::kLang);
+    assert(pak_lang == tc.expected_pak_lang);
+    assert(bundled_lprojs.count(l10n_util::ToAppleBundleLproj(pak_lang)) == 1);
+    assert(child.GetSwitchValueASCII("fingerprint-locale") == tc.expected_blink_locale);
+
+    child_cmd->values = child.values;
+    child_cmd->values["fingerprint"] = "3006";
+    lc.Reset();
+    LocaleController::Init();
+    if (std::isalpha(static_cast<unsigned char>(tc.input[0]))) {
+      assert(lc.embedder_locale_.s == tc.expected_blink_locale);
+      assert(lc.updates == std::vector<std::string>{tc.expected_blink_locale});
+    } else {
+      assert(lc.embedder_locale_.s == "en-US");
+      assert(lc.updates.empty());
+    }
+  }
+
+  // 3. LocaleController::Init() direct edge cases:
+  //    prefers --fingerprint-locale over --lang, falls back to --lang when absent,
+  //    ignores when spoofing disabled or un-fingerprinted, keeps CDP override active.
+  lc.Reset();
+  child_cmd->values = {{"fingerprint", "3003"}, {"lang", "en-US"}, {"fingerprint-locale", "vi-VN"}};
+  LocaleController::Init();
+  assert(lc.embedder_locale_.s == "vi-VN");
+  assert(lc.updates == std::vector<std::string>{"vi-VN"});
+
+  lc.Reset();
+  child_cmd->values = {{"fingerprint", "3003"}, {"lang", "fr"}};
+  LocaleController::Init();
+  assert(lc.embedder_locale_.s == "fr");
+  assert(lc.updates == std::vector<std::string>{"fr"});
+
+  lc.Reset();
+  child_cmd->values = {{"fingerprint", "3003"}, {"disable-spoofing", "locale"}, {"lang", "en-US"}, {"fingerprint-locale", "de-DE"}};
+  LocaleController::Init();
+  assert(lc.embedder_locale_.s == "en-US" && lc.updates.empty());
+
+  lc.Reset();
+  child_cmd->values = {{"lang", "de"}, {"fingerprint-locale", "de-DE"}};
+  LocaleController::Init();
+  assert(lc.embedder_locale_.s == "en-US" && lc.updates.empty());
+
+  lc.Reset();
+  lc.SetOverrideForTest({"ja-JP"});
+  child_cmd->values = {{"fingerprint", "3003"}, {"lang", "de"}, {"fingerprint-locale", "de-DE"}};
+  LocaleController::Init();
+  assert(lc.embedder_locale_.s == "de-DE" && lc.updates.empty());
+
+  return 0;
+}
+"""
+    cpp_src = cpp_src.replace("__LC_029_INIT__", lc_029_init).replace("__RPH_BLOCK__", rph_block)
+
+    test_cc = tmp_path / "test_029.cc"
+    test_cc.write_text(cpp_src)
+    exe = tmp_path / "test_029"
+    subprocess.run(
+        [
+            compiler,
+            "-std=c++20",
+            "-O2",
+            "-fno-threadsafe-statics",
+            "-Werror",
+            "-Wthread-safety",
+            "-Wexit-time-destructors",
+            "-Wglobal-constructors",
+            "-Wunsafe-buffer-usage",
+            "-Wsign-compare",
+            str(test_cc),
+            "-o",
+            str(exe),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    subprocess.run([str(exe)], check=True, capture_output=True, timeout=10)

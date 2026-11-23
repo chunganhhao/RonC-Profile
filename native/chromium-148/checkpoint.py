@@ -61,6 +61,17 @@ def validate(root: Path) -> None:
         raise ValueError("Resumed build requires >=7 GiB RAM and >=8 GiB free disk")
 
 
+INCREMENTAL_SOURCE_KEYS = (
+    "macos_antidetect_patch_sha256",
+    "webgl_readback_patch_sha256",
+    "audio_clientrects_patch_sha256",
+    "apple_silicon_coherence_patch_sha256",
+    "locale_speech_font_patch_sha256",
+    "pixelscan_coherence_patch_sha256",
+    "macos_renderer_locale_pak_patch_sha256",
+)
+
+
 def compatible_identity(saved: dict, current: dict) -> bool:
     if saved == current:
         return True
@@ -75,16 +86,9 @@ def compatible_identity(saved: dict, current: dict) -> bool:
         return False
     saved_src = dict(saved["source"])
     curr_src = dict(current["source"])
-    # Allow resuming older Run #9/#11 checkpoints before 023/024/025 were added.
+    # Allow resuming older checkpoints when newer incremental patches are added.
     migrating_incremental = False
-    for key in (
-        "macos_antidetect_patch_sha256",
-        "webgl_readback_patch_sha256",
-        "audio_clientrects_patch_sha256",
-        "apple_silicon_coherence_patch_sha256",
-        "locale_speech_font_patch_sha256",
-        "pixelscan_coherence_patch_sha256",
-    ):
+    for key in INCREMENTAL_SOURCE_KEYS:
         if key not in saved_src and key in curr_src:
             curr_src.pop(key, None)
             migrating_incremental = True
@@ -370,17 +374,7 @@ def main() -> int:
         context = identity(root)
         unpack(root / "build", args.checkpoint, context)
         saved_src = saved_identity.get("source", {})
-        if any(
-            key not in saved_src
-            for key in (
-                "macos_antidetect_patch_sha256",
-                "webgl_readback_patch_sha256",
-                "audio_clientrects_patch_sha256",
-                "apple_silicon_coherence_patch_sha256",
-                "locale_speech_font_patch_sha256",
-                "pixelscan_coherence_patch_sha256",
-            )
-        ):
+        if any(key not in saved_src for key in INCREMENTAL_SOURCE_KEYS):
             _apply_incremental_patches(root / "build/src", saved_src)
         (root / "native-ready.json").write_text(json.dumps(context, indent=2) + "\n")
         validate(root)
