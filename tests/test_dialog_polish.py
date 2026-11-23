@@ -34,7 +34,8 @@ def walk(control):
         yield from walk(content)
 
 
-def test_create_chrome_uses_host_os():
+@pytest.mark.parametrize("explicit_os", [None, "windows", "macos", "linux"])
+def test_create_chrome_uses_host_os_unless_user_picked_os(explicit_os):
     from chrome_engine.release import host_os
 
     page = page_fake()
@@ -47,12 +48,15 @@ def test_create_chrome_uses_host_os():
     )
     try:
         assert os_picker.value == "macos"
+        if explicit_os is not None:
+            os_picker.value = explicit_os
+            os_picker.on_select(None)
         engine.value = "chrome"
         engine.on_select(None)
-        assert os_picker.value == host_os()
+        assert os_picker.value == (explicit_os or host_os())
         engine.value = "camoufox"
         engine.on_select(None)
-        assert os_picker.value == "macos"
+        assert os_picker.value == (explicit_os or "macos")
     finally:
         dialog.on_dismiss(None)
 

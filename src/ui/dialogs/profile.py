@@ -585,7 +585,14 @@ def open_profile_dialog(
         with contextlib.suppress(Exception):
             page.update()
 
-    os_dropdown.on_select = lambda _: _rebuild_fp(roll_new=True, os_changed=True)
+    os_changed_by_user = False
+
+    def on_os_change(_: ft.ControlEvent) -> None:
+        nonlocal os_changed_by_user
+        os_changed_by_user = True
+        _rebuild_fp(roll_new=True, os_changed=True)
+
+    os_dropdown.on_select = on_os_change
     screen_dropdown.on_select = lambda _: _rebuild_fp(roll_new=False)
     cores_dropdown.on_select = lambda _: _rebuild_fp(roll_new=False)
     gpu_dropdown.on_select = lambda _: _rebuild_fp(roll_new=False)
@@ -614,7 +621,8 @@ def open_profile_dialog(
 
     def on_engine_change(_: ft.ControlEvent) -> None:
         if not is_edit:
-            os_dropdown.value = host_os() if engine_dropdown.value == "chrome" else "macos"
+            if not os_changed_by_user:
+                os_dropdown.value = host_os() if engine_dropdown.value == "chrome" else "macos"
             _rebuild_fp(roll_new=True, os_changed=True)
         engine_note.visible = engine_dropdown.value == "chrome" and not is_edit
         _sync_hardware_controls_for_engine()

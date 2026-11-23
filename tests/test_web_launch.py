@@ -28,7 +28,7 @@ def test_editor_uses_server_host_for_chrome(host):
     result = run_js(
         f"""
         const hostOS = {json.dumps(host)}, os = {{value: 'macos'}}, engine = {{value: 'chrome'}};
-        let p = null, hwChanged = false;
+        let p = null, hwChanged = false, osChanged = false;
         function renderHwNote() {{}}
         function change() {{{handler}}}
         change();
@@ -43,6 +43,28 @@ def test_editor_uses_server_host_for_chrome(host):
     assert "os_type: os.value," in PANEL
     assert '[["", t("geo_auto")], ["windows", "Windows"]' not in PANEL
     assert "initial_fingerprint: (isChrome && (!p || hwChanged)) ? fpPayload : undefined" in PANEL
+
+
+def test_engine_change_preserves_explicit_os():
+    engine_handler = re.search(r"engine.onchange = \(\) => \{(.*?)\n    \};", PANEL, re.S)[1]
+    os_handler = re.search(r"os.onchange = \(\) => \{(.*?)\n    \};", PANEL, re.S)[1]
+    result = run_js(
+        f"""
+        const hostOS = 'linux', os = {{value: 'windows'}}, engine = {{value: 'camoufox'}};
+        const p = null, coresSelect = {{value: ''}};
+        let osChanged = false, hwChanged = false, seedRolled = false;
+        let coresOverridden = false, currentSeed = 123456789;
+        function renderHwNote() {{}}
+        function pickOS() {{{os_handler}}}
+        function changeEngine() {{{engine_handler}}}
+        pickOS();
+        engine.value = 'chrome'; changeEngine();
+        const chromeOS = os.value;
+        engine.value = 'camoufox'; changeEngine();
+        console.log(JSON.stringify([chromeOS, os.value]));
+        """
+    )
+    assert result == ["windows", "windows"]
 
 
 @pytest.mark.parametrize("failure", ["network", "http", "json"])

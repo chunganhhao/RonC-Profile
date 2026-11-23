@@ -1448,6 +1448,7 @@ function openEditor(p) {
       );
     };
     let hwChanged = false;
+    let osChanged = false;
     const rollBtn = h("button", { type: "button", class: "btn btn-line", id: "f-roll-fp", onclick: () => {
       hwChanged = true;
       seedRolled = true;
@@ -1457,11 +1458,12 @@ function openEditor(p) {
       renderHwNote();
     } }, icon("reload", true), t("roll_fp"));
     engine.onchange = () => {
-      if (!p) os.value = engine.value === "chrome" ? hostOS : "macos";
+      if (!p && !osChanged) os.value = engine.value === "chrome" ? hostOS : "macos";
       hwChanged = true;
       renderHwNote();
     };
     os.onchange = () => {
+      osChanged = true;
       hwChanged = true;
       seedRolled = true;
       coresOverridden = false;
