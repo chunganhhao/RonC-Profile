@@ -738,9 +738,10 @@ def test_proxy_pool_long_text_has_bounded_space_and_masked_tooltips(tmp_path):
 
 
 def test_toast_visibility_does_not_change_toolbar_layout():
+    subtitle = ft.Text("Profiles")
     toast = ft.Container(visible=False)
     content = build_content_area(
-        ft.Text("Profiles"),
+        subtitle,
         ft.Column(),
         ft.IconButton(),
         ft.IconButton(),
@@ -752,11 +753,14 @@ def test_toast_visibility_does_not_change_toolbar_layout():
         for c in _walk_controls(content)
         if any(ctrl.key == "profiles_toolbar" for ctrl in getattr(c, "controls", []))
     )
-    slot = next((c for c in body.controls if getattr(c, "content", None) is toast), None)
-    assert slot is not None and slot.visible and slot.height > 0
-    height = slot.height
-    toast.visible = True
-    assert slot.visible and slot.height == height
+    header, spacing, toolbar = body.controls[:3]
+    assert spacing.height == 12
+    assert toolbar.key == "profiles_toolbar"
+    overlay = next(c for c in _walk_controls(header) if isinstance(c, ft.Stack))
+    assert overlay.controls[0] is subtitle
+    positioned = overlay.controls[1]
+    assert positioned.content is toast
+    assert positioned.left == positioned.right == 0
 
 
 def test_proxy_pool_sidebar_tracks_import_and_delete(tmp_path, monkeypatch):

@@ -1,7 +1,7 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import flet as ft
 import pytest
 
 from src.core.strings import get_string
@@ -67,21 +67,38 @@ def test_single_delete_confirmation_cancel(cancel_with_escape):
     pm = SimpleNamespace(delete_profile=Mock())
     log, refresh = Mock(), Mock()
     page = Mock()
+    previous_keyboard_handler = page.on_keyboard_event
+    page.show_dialog.side_effect = lambda dialog: setattr(dialog, "open", True)
     profile.delete_profile(page, "first", pm, log, refresh)
     dialog = page.show_dialog.call_args.args[0]
-    dialog.open = True
     assert dialog.modal
-    listener = next((c for c in dialog.actions if isinstance(c, ft.KeyboardListener)), None)
 
     if cancel_with_escape:
-        assert listener is not None and listener.autofocus
-        listener.on_key_down(SimpleNamespace(key="Enter"))
+        enter = SimpleNamespace(key="Enter")
+        asyncio.run(page.on_keyboard_event(enter))
+        previous_keyboard_handler.assert_called_once_with(enter)
         page.pop_dialog.assert_not_called()
-        listener.on_key_down(SimpleNamespace(key="Escape"))
+        asyncio.run(page.on_keyboard_event(SimpleNamespace(key="Escape")))
     else:
-        actions = listener.content.controls if listener else dialog.actions
-        cancel_button = next(c for c in actions if c.content == get_string("cancel"))
+        cancel_button = next(c for c in dialog.actions if c.content == get_string("cancel"))
         cancel_button.on_click(None)
     page.pop_dialog.assert_called_once_with()
+    assert page.on_keyboard_event is previous_keyboard_handler
     for callback in (pm.delete_profile, log, refresh):
         callback.assert_not_called()
+
+
+def test_single_delete_confirmation_runs_before_close():
+    page = Mock(on_keyboard_event=None)
+    page.show_dialog.side_effect = lambda dialog: setattr(dialog, "open", True)
+    pm = SimpleNamespace(delete_profile=Mock())
+    pm.delete_profile.side_effect = lambda _: page.pop_dialog.assert_not_called()
+    profile.delete_profile(page, "first", pm, Mock(), Mock())
+    dialog = page.show_dialog.call_args.args[0]
+    delete_button = next(c for c in dialog.actions if c.content == get_string("delete"))
+
+    delete_button.on_click(None)
+
+    pm.delete_profile.assert_called_once_with("first")
+    page.pop_dialog.assert_called_once_with()
+    assert page.on_keyboard_event is None

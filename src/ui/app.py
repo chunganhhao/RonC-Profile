@@ -133,9 +133,13 @@ class App:
             font_family=FONT_SEMIBOLD,
             color=COLORS["text_main"],
         )
-        self._sidebar_proxy_badge = ft.Text()
+        proxy_count = len(self.proxy_pool.list_entries())
+        self._sidebar_proxy_badge = ft.Text(str(proxy_count))
         self._footer_proxy_text = ft.Text(
-            size=11.5, font_family=FONT_DATA, color=COLORS["text_sub"]
+            get_string("footer_proxy_pool", count=proxy_count),
+            size=11.5,
+            font_family=FONT_DATA,
+            color=COLORS["text_sub"],
         )
         self._footer_warming_text = ft.Text(
             get_string("footer_warming_tasks", count=len(self.warming.list_tasks())),

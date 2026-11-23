@@ -283,6 +283,20 @@ def build_content_area(
         ),
     )
 
+    header_status = ft.Stack(
+        expand=True,
+        height=36,
+        alignment=ft.Alignment.CENTER_LEFT,
+        clip_behavior=ft.ClipBehavior.NONE,
+        controls=[
+            subtitle,
+            *(
+                [ft.Container(left=0, right=0, content=toast_banner)]
+                if toast_banner is not None
+                else []
+            ),
+        ],
+    )
     main_body = ft.Container(
         expand=True,
         padding=ft.Padding.only(left=24, right=24, top=18, bottom=10),
@@ -297,9 +311,7 @@ def build_content_area(
                         ft.Row(
                             expand=True,
                             spacing=12,
-                            wrap=True,
-                            run_spacing=4,
-                            vertical_alignment=ft.CrossAxisAlignment.BASELINE,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
                             controls=[
                                 ft.Text(
                                     get_string("your_profiles"),
@@ -307,18 +319,13 @@ def build_content_area(
                                     font_family=FONT_BOLD,
                                     color=COLORS["text_main"],
                                 ),
-                                subtitle,
+                                header_status,
                             ],
                         ),
                         ft.Row(spacing=8, controls=top_right_controls),
                     ],
                 ),
                 ft.Container(height=12),
-                *(
-                    [ft.Container(height=48, alignment=ft.Alignment.CENTER, content=toast_banner)]
-                    if toast_banner is not None
-                    else []
-                ),
                 ft.Row(
                     key="profiles_toolbar",
                     wrap=True,
