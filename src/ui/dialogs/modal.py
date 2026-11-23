@@ -58,10 +58,10 @@ def show_modal_dialog(
         ]
 
         async def restore_focus(event: ft.KeyboardEvent) -> None:
-            ft.context.disable_auto_update()
             # Flutter may move focus off the dialog's controls when closing a menu.
             if event.key == "Escape" and is_topmost():
                 await body.focus()
+            ft.context.disable_auto_update()
 
         keyboard_handler = restore_focus
 

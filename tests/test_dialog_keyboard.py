@@ -219,6 +219,22 @@ def test_dropdown_escape_seen_only_by_page_preserves_the_unsaved_profile(monkeyp
     assert page.on_keyboard_event is original_keyboard
 
 
+def test_modal_focus_failure_does_not_disable_auto_update(monkeypatch):
+    page = DialogPage()
+    dialog = ft.AlertDialog(content=ft.Text("Dialog"))
+    show_modal_dialog(page, dialog, local_keyboard=True)
+    focus = AsyncMock(side_effect=RuntimeError("focus failed"))
+    monkeypatch.setattr(dialog.content, "focus", focus)
+    disable_auto_update = Mock()
+    monkeypatch.setattr(type(ft.context), "disable_auto_update", disable_auto_update)
+
+    with pytest.raises(RuntimeError, match="focus failed"):
+        asyncio.run(page.on_keyboard_event(SimpleNamespace(key="Escape")))
+
+    focus.assert_awaited_once()
+    disable_auto_update.assert_not_called()
+
+
 @pytest.mark.parametrize("action", ["cancel", "save", "escape", "dismiss"])
 def test_profile_close_stops_totp_timer(monkeypatch, action):
     page = DialogPage(notify_dismiss=False)
