@@ -4,14 +4,16 @@ version = "2.4.0"
 description = "RonC Profile — dual-engine browser profile manager"
 readme = "README.md"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.10"
 authors = [{ name = "chienbm98" }]
+maintainers = [{ name = "chunganhhao" }]
 keywords = ["anti-detect", "browser-profiles", "camoufox", "fingerprint", "proxy", "mcp"]
 # Runtime dependencies live in requirements.txt (this is an application, not a library).
 
 [project.urls]
 Homepage = "https://github.com/chunganhhao/RonC-Profile"
+Upstream = "https://github.com/chienbm98/foxprofile"
 Issues = "https://github.com/chunganhhao/RonC-Profile/issues"
 Changelog = "https://github.com/chunganhhao/RonC-Profile/blob/main/CHANGELOG.md"
 

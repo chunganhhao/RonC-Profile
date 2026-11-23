@@ -22,7 +22,7 @@
   </p>
 </div>
 
-RonC Profile is a local rebrand of FoxProfile by chienbm98. Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
+RonC Profile is forked from [FoxProfile](https://github.com/chienbm98/foxprofile) by [chienbm98](https://github.com/chienbm98) (MIT License). Original authorship, copyright notices, and MIT license terms are preserved; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for all upstream sources and third-party licenses. Configuration keys (`FOXPROFILE_*`), data paths, and the `origin` remote remain compatible.
 
 ![RonC Profile](docs/images/en/main.png)
 
@@ -308,13 +308,18 @@ Anti-detect browsers are legitimate tools for privacy, web testing and agencies 
 
 ## License
 
-Released under the [MIT License](LICENSE). Copyright (c) 2026 chienbm98.
+Released under the [MIT License](LICENSE): `Copyright (c) 2026 chienbm98`; RonC Profile modifications `Copyright (c) 2026 chunganhhao`.
+
+Third-party code, patches, fonts, and upstream browser engines retain their respective licenses (including BSD-3-Clause in [`native/chromium-148/LICENSE`](native/chromium-148/LICENSE), SIL Open Font License 1.1 in `src/assets/fonts/`, MPL-2.0 for the Camoufox browser binary, and BSD-3-Clause for `fingerprint-chromium` / `ungoogled-chromium`). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the complete inventory and full license notices.
 
 ## Acknowledgements
 
-- The [Camoufox](https://github.com/daijro/camoufox) browser by daijro.
-- [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) by adryfish for the Chrome engine (BSD-3).
-- The [Be Vietnam Pro](https://github.com/bettergui/BeVietnamPro) and [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) fonts, SIL Open Font License (`src/assets/fonts/`).
+- **[FoxProfile](https://github.com/chienbm98/foxprofile)** by **[chienbm98](https://github.com/chienbm98)** (MIT) — upstream base project that RonC Profile is forked from.
+- **[Camoufox](https://github.com/daijro/camoufox)** by **daijro** (browser engine MPL-2.0; Python client MIT; runtime GeoIP bundles via [`daijro/geoip-all-in-one`](https://github.com/daijro/geoip-all-in-one)).
+- **[fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium)** by **adryfish** (BSD-3-Clause) for the Chrome engine, including **[PR #109](https://github.com/adryfish/fingerprint-chromium/pull/109)** by **woolong900** (canvas pixel-addressing fix on the **[Bromite](https://github.com/bromite/bromite)** canvas-noise patch by **csagan5** / **Slaviro**).
+- **[ungoogled-chromium](https://github.com/ungoogled-software/ungoogled-chromium)** and **[ungoogled-chromium-macos](https://github.com/ungoogled-software/ungoogled-chromium-macos)** by The ungoogled-chromium Authors (BSD-3-Clause), together with **[Chromium](https://chromium.googlesource.com/chromium/src)** and **[Google Dawn](https://dawn.googlesource.com/dawn)** (BSD-3-Clause).
+- **[Be Vietnam Pro](https://github.com/bettergui/BeVietnamPro)** and **[JetBrains Mono](https://github.com/JetBrains/JetBrainsMono)** fonts, SIL Open Font License 1.1 (`src/assets/fonts/`).
+- Core Python and automation stack (**Flet**, **Playwright**, **FastAPI**, **Uvicorn**, **aiohttp**, **MCP Python SDK**, and others) — full list and license notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ### Safe core management
 

@@ -1,11 +1,13 @@
 # Chromium 148 native correction — build input, NOT an installed fix
 
-Base: `adryfish/fingerprint-chromium` commit
+Base: [`adryfish/fingerprint-chromium`](https://github.com/adryfish/fingerprint-chromium) commit
 `13b89eae304123f0710f2d33fd0816a2f61d7ffc` (148.0.7778.215).
 `patches/109-canvas-pixel-addressing.patch` is the unmodified diff of
-[PR109](https://github.com/adryfish/fingerprint-chromium/pull/109), head
-`96d183bab734d9d056476cd6c887d35c622a010a`. It remains open/unmerged at
-2026-11-12. Upstream BSD-3-Clause notice is retained in `LICENSE`.
+[PR109](https://github.com/adryfish/fingerprint-chromium/pull/109) authored by
+**woolong900**, head `96d183bab734d9d056476cd6c887d35c622a010a` (unmerged as of
+2026-11-12); it targets `patches/extra/bromite/flag-fingerprinting-canvas-image-data-noise.patch`,
+originally from [Bromite](https://github.com/bromite/bromite) (`csagan5` / `Slaviro`).
+Upstream BSD-3-Clause notice is retained in [`LICENSE`](LICENSE).
 
 ## Apply at the right layer
 
@@ -101,7 +103,7 @@ No local Xcode installation is needed. Standard private-repo Actions still
 consume the account's compute allowance; inspection is not a promise of free
 unlimited full-core compilation.
 
-The workflow checks out macOS scaffold `6a00dfe08591a15cfb0aed0edd292ba789d9a0d7`
+The workflow checks out the [`ungoogled-software/ungoogled-chromium-macos`](https://github.com/ungoogled-software/ungoogled-chromium-macos) scaffold `6a00dfe08591a15cfb0aed0edd292ba789d9a0d7` (BSD-3-Clause)
 and replaces its stock ungoogled submodule with the fingerprint revision above.
 `prepare.py` verifies both HEADs and clean tracked inputs, refuses existing build
 trees, applies PR109, and adds a missing Rust archive SHA256 from the official
@@ -301,4 +303,9 @@ subtag whose `.lproj/locale.pak` directory is unbundled (for example `de-DE`,
   Window, Worker, SharedWorker, ServiceWorker, and popups.
 - Only two `.cc` files are modified (no header or `BUILD.gn` edits), allowing fast
   incremental resume from post-`028` checkpoints such as Run `45217857712`.
+
+## Attribution & Licenses
+
+- Native Chromium patches and the macOS build kit retain the upstream BSD-3-Clause notice in [`LICENSE`](LICENSE) (`The ungoogled-chromium Authors`).
+- See [`../../THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md) for full attribution of `adryfish/fingerprint-chromium`, `ungoogled-software/ungoogled-chromium`, `ungoogled-software/ungoogled-chromium-macos`, `woolong900` (PR #109), Bromite (`csagan5` / `Slaviro`), Chromium, and Google Dawn.
 

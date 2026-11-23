@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### Thêm
+
+- Bổ sung tệp [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) và cập nhật ghi công đầy đủ các nguồn upstream, tác giả, bản vá, font và thư viện phụ thuộc trong `LICENSE`, `README.md`, `README.vi.md`, `pyproject.toml`, `native/chromium-148/README.md` và `chrome_engine/README.md`.
+
 ### Sửa
 
 - Nhiều tiến trình dùng chung dữ liệu: hai lần sửa tiện ích cùng lúc không còn mất một thay đổi; Dừng ngâm tài khoản từ tiến trình khác thật sự dừng lượt chạy, tiến trình khác không chạy trùng tác vụ đang chạy; `GET /profiles/<name>` và MCP `get_profile` thấy ngay profile tiến trình khác vừa tạo. Thanh thao tác hàng loạt cho biết số profile đã chọn đang bị bộ lọc ẩn, và menu Giao diện/Ngôn ngữ trên web vừa màn hình 320 px.

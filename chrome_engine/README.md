@@ -90,3 +90,11 @@ python chrome_engine/e2e/detection_e2e.py headed headless   # cần internet
 - Phát hiện qua thời gian phản hồi CDP chưa được xử lý.
 - Proxy bridge nghe trên `127.0.0.1` cổng ngẫu nhiên, không có mật khẩu (Chromium không gửi được). Trang web không dùng được nó (không gửi được `CONNECT`, request thường bị trả 400), nhưng tiến trình khác trên cùng máy có thể đi ra ngoài qua proxy của profile trong lúc profile đang mở.
 - Phụ thuộc fork bên ngoài: nâng phiên bản phải chạy lại toàn bộ test (đặc biệt `test_emoji_canvas_does_not_crash`) trước khi đổi `DEFAULT_VERSION`.
+
+## Ghi công & Giấy phép
+
+- **[FoxProfile](https://github.com/chienbm98/foxprofile)** (`chienbm98`, giấy phép MIT) — nguồn gốc kiến trúc `chrome_engine` ban đầu.
+- **[fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium)** (`adryfish`, BSD-3-Clause) — binary Chromium vá fingerprint được ghim SHA-256 và tải lúc chạy.
+- **[ungoogled-chromium](https://github.com/ungoogled-software/ungoogled-chromium)** (BSD-3-Clause) — nền tảng gốc của `fingerprint-chromium`.
+- **[Playwright](https://github.com/microsoft/playwright-python)** (`Microsoft Corporation`, Apache-2.0) — driver điều khiển trình duyệt.
+- Xem [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) để biết đầy đủ thông tin bản quyền và license.

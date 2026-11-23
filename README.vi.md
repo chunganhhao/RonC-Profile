@@ -22,7 +22,7 @@
   </p>
 </div>
 
-RonC Profile is a local rebrand of FoxProfile by chienbm98. Original authorship and MIT license are preserved. Configuration keys (`FOXPROFILE_*`), data paths, and the Git remote remain compatible.
+RonC Profile được fork từ [FoxProfile](https://github.com/chienbm98/foxprofile) của [chienbm98](https://github.com/chienbm98) (giấy phép MIT). Thông tin tác giả gốc, bản quyền và giấy phép MIT được giữ nguyên; xem [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) để biết đầy đủ các nguồn upstream và license bên thứ ba. Các biến cấu hình (`FOXPROFILE_*`), đường dẫn dữ liệu và remote `origin` vẫn giữ tương thích.
 
 ![RonC Profile](docs/images/main.png)
 
@@ -304,13 +304,18 @@ Antidetect browser là công cụ hợp pháp, thường dùng để bảo vệ 
 
 ## Giấy phép
 
-Phát hành theo [giấy phép MIT](LICENSE). Copyright (c) 2026 chienbm98.
+Phát hành theo [giấy phép MIT](LICENSE): `Copyright (c) 2026 chienbm98`; phần chỉnh sửa của RonC Profile `Copyright (c) 2026 chunganhhao`.
+
+Mã nguồn, patch, font và browser engine bên thứ ba giữ nguyên license tương ứng của từng nguồn (bao gồm BSD-3-Clause trong [`native/chromium-148/LICENSE`](native/chromium-148/LICENSE), SIL Open Font License 1.1 trong `src/assets/fonts/`, MPL-2.0 cho binary trình duyệt Camoufox và BSD-3-Clause cho `fingerprint-chromium` / `ungoogled-chromium`). Xem [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) để đọc danh sách đầy đủ và toàn văn các thông báo license.
 
 ## Ghi công
 
-- Trình duyệt [Camoufox](https://github.com/daijro/camoufox) của daijro.
-- [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) của adryfish cho engine Chrome (BSD-3).
-- Font [Be Vietnam Pro](https://github.com/bettergui/BeVietnamPro) và [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), giấy phép SIL Open Font License (`src/assets/fonts/`).
+- **[FoxProfile](https://github.com/chienbm98/foxprofile)** của **[chienbm98](https://github.com/chienbm98)** (MIT) — dự án gốc upstream mà RonC Profile được fork từ đó.
+- **[Camoufox](https://github.com/daijro/camoufox)** của **daijro** (browser engine MPL-2.0; thư viện Python MIT; dữ liệu GeoIP tải lúc chạy qua [`daijro/geoip-all-in-one`](https://github.com/daijro/geoip-all-in-one)).
+- **[fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium)** của **adryfish** (BSD-3-Clause) cho engine Chrome, bao gồm **[PR #109](https://github.com/adryfish/fingerprint-chromium/pull/109)** của **woolong900** (sửa tính địa chỉ pixel canvas trên patch nhiễu canvas của **[Bromite](https://github.com/bromite/bromite)** do **csagan5** / **Slaviro** viết).
+- **[ungoogled-chromium](https://github.com/ungoogled-software/ungoogled-chromium)** và **[ungoogled-chromium-macos](https://github.com/ungoogled-software/ungoogled-chromium-macos)** của The ungoogled-chromium Authors (BSD-3-Clause), cùng **[Chromium](https://chromium.googlesource.com/chromium/src)** và **[Google Dawn](https://dawn.googlesource.com/dawn)** (BSD-3-Clause).
+- Font **[Be Vietnam Pro](https://github.com/bettergui/BeVietnamPro)** và **[JetBrains Mono](https://github.com/JetBrains/JetBrainsMono)**, giấy phép SIL Open Font License 1.1 (`src/assets/fonts/`).
+- Hệ sinh thái thư viện Python và tự động hoá cốt lõi (**Flet**, **Playwright**, **FastAPI**, **Uvicorn**, **aiohttp**, **MCP Python SDK**, v.v.) — danh sách đầy đủ và license xem tại [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ### Quản lý core an toàn
 
