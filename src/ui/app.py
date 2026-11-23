@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import time
 
 import flet as ft
@@ -85,6 +86,8 @@ class App:
         )
 
     def run(self) -> None:
+        if sys.platform == "darwin":
+            os.environ.setdefault("FLET_NO_IMPELLER", "true")
         ft.run(self._main, assets_dir=ASSETS_DIR)
 
     def _main(self, page: ft.Page) -> None:
