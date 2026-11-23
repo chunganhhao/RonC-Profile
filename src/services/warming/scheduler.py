@@ -48,7 +48,7 @@ SHARED_STOP_POLL_SECONDS = 0.25
 # A navigation step can take 25 s before the owner sees a Stop; then it closes the browser.
 PEER_STOP_WAIT_SECONDS = 60.0
 # A run's result has no caller to retry it, so its save waits out another process's write.
-RESULT_SAVE_WAIT_SECONDS = 5.0
+STORE_WAIT_SECONDS = 5.0
 
 
 class WarmingTargetSaveError(OSError):
@@ -208,7 +208,7 @@ class WarmingSchedulerService:
         return {tid: task.to_dict() for tid, task in self._tasks.items()}
 
     @contextlib.contextmanager
-    def _store_lease(self, *, timeout: float = 0.0) -> Iterator[None]:
+    def _store_lease(self, *, timeout: float = STORE_WAIT_SECONDS) -> Iterator[None]:
         with self._lock:
             if self._store_locked:
                 yield
@@ -618,7 +618,7 @@ class WarmingSchedulerService:
                         task.last_result = f"Failed (0/{len(targets)} profiles)"
                     if not task.repeat_daily and task.schedule_time:
                         task.enabled = False
-                    with self._store_lease(timeout=RESULT_SAVE_WAIT_SECONDS):
+                    with self._store_lease():
                         self._save()
 
         log(f"[Warming] Finished '{task_name}': {succeeded}/{len(targets)} profile(s) warmed")
