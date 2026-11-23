@@ -14,19 +14,21 @@ BulkCallbacks = dict[str, Callable[[], None]]
 def rebuild_bulk_bar(
     bulk_bar: ft.Row,
     state: AppState,
-    page_profiles: list[Profile],
+    shown_profiles: list[Profile],
     cbs: BulkCallbacks,
 ) -> None:
-    count = len(state.selected_names())
-    if count == 0:
+    """Bulk actions for the whole selection; `shown_profiles` is what the filter shows."""
+    selected = state.selected_names()
+    if not selected:
         bulk_bar.visible = False
         bulk_bar.controls = []
         return
+    hidden = len(selected - {p.name for p in shown_profiles})
     bulk_bar.visible = True
-    bulk_bar.controls = [_build_container(count, cbs)]
+    bulk_bar.controls = [_build_container(len(selected), hidden, cbs)]
 
 
-def _build_container(count: int, cbs: BulkCallbacks) -> ft.Container:
+def _build_container(count: int, hidden: int, cbs: BulkCallbacks) -> ft.Container:
     def btn(label: str, icon: str, key: str, style: ft.ButtonStyle) -> ft.Control:
         cls = ft.Button if style is ACCENT_STYLE else ft.OutlinedButton
         return cls(label, icon=icon, height=32, style=style, on_click=lambda _: cbs[key]())
@@ -47,6 +49,12 @@ def _build_container(count: int, cbs: BulkCallbacks) -> ft.Container:
                     size=13.5,
                     font_family=FONT_SEMIBOLD,
                     color=COLORS["text_main"],
+                ),
+                ft.Text(
+                    get_string("selected_hidden_count", count=hidden),
+                    size=12.5,
+                    color=COLORS["text_sub"],
+                    visible=hidden > 0,
                 ),
                 ft.Container(width=6),
                 btn(get_string("launch"), ft.Icons.PLAY_ARROW_ROUNDED, "launch", ACCENT_STYLE),

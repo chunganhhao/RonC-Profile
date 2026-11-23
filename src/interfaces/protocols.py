@@ -62,6 +62,8 @@ class IProfileManager(Protocol):
 
     def list_profiles(self) -> list[Profile]: ...
 
+    def get_profile(self, name: str) -> Profile | None: ...
+
     def export_profile(
         self,
         name: str,

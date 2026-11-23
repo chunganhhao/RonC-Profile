@@ -109,7 +109,7 @@ def open_warming_dialog(
 
     def _run_task(tid: str) -> bool:
         try:
-            warming_service.run_task_async(
+            started = warming_service.run_task_async(
                 tid,
                 pm,
                 bl,
@@ -119,6 +119,10 @@ def open_warming_dialog(
         except OSError:
             _rebuild_tasks()
             _show_error(get_string("warming_start_save_error"))
+            return False
+        if not started:
+            _rebuild_tasks()
+            _show_error(get_string("warming_still_running"))
             return False
         _rebuild_tasks(notify=True)
         return True

@@ -971,7 +971,9 @@ def test_b2_f1_to_f4_warming_concurrency_duration_and_api_lifespan(tmp_path, mon
             return {}
 
     orig_threading = sched_mod.threading
-    monkeypatch.setattr(sched_mod, "threading", SimpleNamespace(Event=FakeEvent))
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=FakeEvent, Thread=orig_threading.Thread)
+    )
     assert ws.execute_task_sync(t_dur.id, pm, FastLauncher())
     assert sum(waits) >= 3600
     monkeypatch.setattr(sched_mod, "threading", orig_threading)
@@ -1411,7 +1413,7 @@ def test_warming_ui_create_save_feedback(tmp_path, monkeypatch, run_immediately,
     page = _DummyPage()
     logs, runs, refreshed = [], [], []
     pm = SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name="profile")])
-    monkeypatch.setattr(ws, "run_task_async", lambda tid, *a, **kw: runs.append(tid))
+    monkeypatch.setattr(ws, "run_task_async", lambda tid, *a, **kw: runs.append(tid) or True)
     open_warming_dialog(
         page,
         ws,

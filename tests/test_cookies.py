@@ -392,7 +392,7 @@ def cookie_client(monkeypatch):
     monkeypatch.setattr("src.api.auth.API_TOKEN", "")
     profile = Profile("p", engine="chrome")
     container = SimpleNamespace(
-        profile_manager=SimpleNamespace(profiles={"p": profile}),
+        profile_manager=SimpleNamespace(profiles={"p": profile}, get_profile={"p": profile}.get),
         browser_launcher=SimpleNamespace(
             is_running=lambda _: False, exclusive=lambda _: nullcontext()
         ),

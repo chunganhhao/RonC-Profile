@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ...core.logging import get_logger
-from ...services.warming.scheduler import WARMING_PRESETS, WarmingTaskNotFound
+from ...services.warming.scheduler import (
+    WARMING_PRESETS,
+    WarmingStopTimeout,
+    WarmingTaskNotFound,
+)
 from ..dependencies import (
     get_browser_launcher,
     get_event_bus,
@@ -91,7 +95,13 @@ def stop_warming_task(
     ws: WarmingSchedulerService = Depends(get_warming_scheduler),
     eb: EventBus = Depends(get_event_bus),
 ) -> dict:
-    if not ws.stop_task(task_id):
+    try:
+        stopped = ws.stop_task(task_id)
+    except WarmingStopTimeout as exc:
+        raise HTTPException(
+            status_code=504, detail="Warming task is still stopping in another process"
+        ) from exc
+    if not stopped:
         raise HTTPException(status_code=404, detail="Warming task not found")
     eb.emit()
     return {"stopped": True, "task_id": task_id}

@@ -184,7 +184,7 @@ main { min-width: 0; padding: 24px 28px 40px; }
 .head-tool.active-tool { background: var(--paper-sunk); border-color: var(--rule-strong); color: var(--ink); }
 .head-tool.active-tool:hover { background: var(--rule); }
 .prefs-wrap { position: relative; }
-.prefs-pop { position: absolute; right: 0; top: 44px; z-index: 35; width: 340px; padding: 20px; border-radius: 16px; background: var(--paper-raised); box-shadow: var(--modal-shadow); display: flex; flex-direction: column; gap: 16px; animation: rise .16s var(--ease-out); }
+.prefs-pop { position: absolute; right: 0; top: 44px; z-index: 35; width: min(340px, calc(100vw - 32px)); padding: 20px; border-radius: 16px; background: var(--paper-raised); box-shadow: var(--modal-shadow); display: flex; flex-direction: column; gap: 16px; animation: rise .16s var(--ease-out); }
 .prefs-sec { display: flex; flex-direction: column; gap: 4px; }
 .prefs-title { font-size: 16px; font-weight: 700; color: var(--ink); }
 .prefs-sub { margin: 0 0 4px; font-size: 12.5px; color: var(--ink-2); }
@@ -235,8 +235,9 @@ main { min-width: 0; padding: 24px 28px 40px; }
 .pager { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pager select { width: auto; min-width: 72px; height: 32px; padding: 0 28px 0 12px; font-size: 12.5px; font-weight: 600; }
 .pager .icon-btn { width: 28px; height: 28px; border: 1px solid var(--rule-strong); background: var(--paper-raised); }
-.bulk { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--rule); background: var(--paper-sunk); border-radius: 10px 10px 0 0; }
+.bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--rule); background: var(--paper-sunk); border-radius: 10px 10px 0 0; }
 .bulk .n { font-weight: 600; margin-right: 8px; }
+.bulk .hidden-n { margin: 0 8px 0 -4px; font-size: 13px; color: var(--ink-2); }
 .bulk .btn { height: 32px; padding: 0 12px; font-size: 13px; }
 .row { display: grid; grid-template-columns: var(--cols); align-items: center; column-gap: 12px; min-height: var(--row-h); padding: 8px 16px; border-bottom: 1px solid var(--rule); }
 .row:last-child { border-bottom: 0; }
@@ -633,7 +634,7 @@ const I18N = {
     no_match_title: "Không tìm thấy profile", no_match: "Không có profile nào khớp “{q}” trong bộ lọc này.", clear_filters: "Xoá bộ lọc",
     launch: "Mở", stop: "Dừng", view: "Xem màn hình", cookies: "Cookie & fingerprint", edit: "Sửa", delete: "Xoá",
     stamp_live: "Đang chạy", stamp_starting: "Đang mở", stamp_stopping: "Đang dừng", stamp_failed: "Lỗi", idle: "Đã dừng",
-    direct: "Trực tiếp", follow_ip: "Theo IP", no_fp_short: "chưa có fingerprint", no_proxy_short: "không proxy", selected: "Đã chọn {n}", bulk_launch: "Mở", bulk_stop: "Dừng", bulk_delete: "Xoá", clear_sel: "Bỏ chọn",
+    direct: "Trực tiếp", follow_ip: "Theo IP", no_fp_short: "chưa có fingerprint", no_proxy_short: "không proxy", selected: "Đã chọn {n}", selected_hidden: "{n} đang bị bộ lọc ẩn", bulk_launch: "Mở", bulk_stop: "Dừng", bulk_delete: "Xoá", clear_sel: "Bỏ chọn",
     select_all: "Chọn tất cả", select_row: "Chọn {name}",
     confirm_bulk_delete: "Xoá {n} profile đã chọn? Cookie và dữ liệu của chúng sẽ mất vĩnh viễn.", bulk_skip_running: "Bỏ qua {n} profile",
     login_side: "Server này chạy RonC Profile. Đăng nhập bằng API token để quản lý profile từ xa.",
@@ -711,7 +712,7 @@ const I18N = {
     no_match_title: "No profile found", no_match: "Nothing matches “{q}” in this filter.", clear_filters: "Clear filters",
     launch: "Launch", stop: "Stop", view: "View screen", cookies: "Cookies & fingerprint", edit: "Edit", delete: "Delete",
     stamp_live: "Running", stamp_starting: "Starting", stamp_stopping: "Stopping", stamp_failed: "Failed", idle: "Stopped",
-    direct: "Direct", follow_ip: "Follows IP", no_fp_short: "no fingerprint yet", no_proxy_short: "no proxy", selected: "{n} selected", bulk_launch: "Launch", bulk_stop: "Stop", bulk_delete: "Delete", clear_sel: "Clear",
+    direct: "Direct", follow_ip: "Follows IP", no_fp_short: "no fingerprint yet", no_proxy_short: "no proxy", selected: "{n} selected", selected_hidden: "{n} hidden by the filter", bulk_launch: "Launch", bulk_stop: "Stop", bulk_delete: "Delete", clear_sel: "Clear",
     select_all: "Select all", select_row: "Select {name}",
     confirm_bulk_delete: "Delete {n} selected profiles? Their cookies and data are removed permanently.", bulk_skip_running: "Skipped {n}",
     login_side: "This server runs RonC Profile. Log in with the API token to manage profiles remotely.",
@@ -1012,7 +1013,7 @@ function render() {
   const focusedProfile = document.activeElement?.dataset.selectProfile;
   sheet.replaceChildren();
   if (!profiles.length) return sheet.append(emptyState(false));
-  if (selected.size) sheet.append(bulkBar());
+  if (selected.size) sheet.append(bulkBar(shown));
   const inner = h("div", { class: "sheet-inner" });
   inner.append(headRow(pageItems));
   if (!shown.length) inner.append(emptyState(true, q));
@@ -1299,10 +1300,12 @@ function openFieldEditor(p, key) {
   });
 }
 
-function bulkBar() {
+function bulkBar(shown) {
   const names = [...selected];
+  const hidden = names.filter((n) => !shown.some((p) => p.name === n)).length;
   return h("div", { class: "bulk" },
     h("span", { class: "n" }, t("selected", { n: names.length })),
+    hidden ? h("span", { class: "hidden-n" }, t("selected_hidden", { n: hidden })) : null,
     h("button", { class: "btn btn-act", onclick: () => bulk("launch") }, icon("play", true), t("bulk_launch")),
     h("button", { class: "btn btn-line", onclick: () => bulk("stop") }, icon("stop", true), t("bulk_stop")),
     h("button", { class: "btn btn-line", onclick: () => bulk("delete") }, icon("trash", true), t("bulk_delete")),
