@@ -7,6 +7,8 @@ from datetime import datetime
 def setup_logging(
     log_dir: str = "logs",
     log_level: int = logging.INFO,
+    *,
+    console: bool = True,
 ) -> logging.Logger:
     pathlib.Path(log_dir).mkdir(exist_ok=True, parents=True)
 
@@ -22,18 +24,17 @@ def setup_logging(
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
     file_handler.setLevel(log_level)
 
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.WARNING)
-
     formatter = logging.Formatter(
         "%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
-
     logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    if console:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.WARNING)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
 
     return logger
 

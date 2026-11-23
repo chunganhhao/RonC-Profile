@@ -13,6 +13,7 @@ restore and tab snapshots are FoxProfile's own, shared with Camoufox.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 import sys
@@ -22,8 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from chrome_engine import fetch
 from chrome_engine.engine import ChromeEngine, EngineError
-from src.core.config import DATA_DIR, HEADLESS, RESTORE_TABS
-from src.core.logging import get_logger
+from src.core.config import DATA_DIR, HEADLESS, LOG_DIR, LOG_LEVEL, RESTORE_TABS
+from src.core.logging import get_logger, setup_logging
 from src.services.browser import control, session
 from src.services.browser.runner import _read_profile_extra, restore_tabs, snapshot_tabs
 from src.services.browser.timing import launch_stage, report_timing
@@ -235,6 +236,9 @@ async def _async_main(argv: list[str]) -> int:
 
 
 def main() -> int:
+    setup_logging(
+        LOG_DIR, getattr(logging, LOG_LEVEL, logging.INFO), console=False
+    ).propagate = False
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")

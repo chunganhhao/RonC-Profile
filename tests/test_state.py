@@ -1,6 +1,24 @@
 from src.ui.state import AppState
 
 
+def test_activity_log_localizes_launch_failure_and_flushes_immediately():
+    from src.core.strings import get_string, set_language
+
+    try:
+        for language in ("en", "vi"):
+            set_language(language)
+            state = AppState()
+            state.add_log("Starting Chrome engine...")
+            state.flush_log()
+            message = "[shop-01] LAUNCH_FAILED: A windows persona cannot be presented consistently on a linux host: native worker WebGPU"
+            assert state.add_log(message)
+            expected = get_string("chrome_cross_os", target="Windows", host="Linux")
+            assert state.get_all_log_lines()[-1] == f"> {expected}"
+            assert expected in state.flush_log()
+    finally:
+        set_language("en")
+
+
 def test_failed_reason_tooltip():
     from src.ui.components.profile_card import _stamp
 

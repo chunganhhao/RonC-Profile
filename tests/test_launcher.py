@@ -1,3 +1,4 @@
+import sys
 import threading
 
 import pytest
@@ -13,6 +14,57 @@ from src.ui.state import AppState
 class FakeProc:
     def poll(self):
         return None
+
+
+@pytest.mark.parametrize("error_type", ["EngineError", "RuntimeError"])
+def test_chrome_traceback_stays_in_file_not_launcher_callback(monkeypatch, tmp_path, error_type):
+    from src.services.browser import process
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FOXPROFILE_LOG_DIR", str(tmp_path / "logs"))
+    script = f"""
+import sys
+from chrome_engine import runner
+from chrome_engine.engine import EngineError
+
+class Engine:
+    def __init__(self, *args, **kwargs):
+        pass
+    async def start(self):
+        raise {error_type}("fixture launch failure")
+    async def stop(self):
+        pass
+
+runner.ChromeEngine = Engine
+runner._read_profile_extra = lambda _: {{}}
+async def installed():
+    pass
+runner.ensure_installed = installed
+runner._async_main = lambda _: runner.run_browser("shop-01", "None", "windows")
+sys.argv = ["runner", "shop-01", "None", "windows"]
+sys.exit(runner.main())
+"""
+    monkeypatch.setattr(process, "runner_command", lambda _: [sys.executable, "-c", script])
+    proc = process.spawn_browser(Profile("shop-01", engine="chrome"))
+    messages = []
+    launcher = BrowserLauncher()
+    result = launcher_mod._LaunchResult()
+    try:
+        launcher._monitor_process(proc, "shop-01", messages.append, None, lambda: None, result)
+    finally:
+        process.terminate(proc, "shop-01")
+    assert result.error == (
+        "fixture launch failure"
+        if error_type == "EngineError"
+        else "RuntimeError: fixture launch failure"
+    )
+    assert any("LAUNCH_FAILED:" in message for message in messages)
+    assert not any("Traceback" in message or 'File "' in message for message in messages), messages
+    logs = list((tmp_path / "logs").glob("foxprofile_*.log"))
+    assert len(logs) == 1
+    text = logs[0].read_text(encoding="utf-8")
+    assert "Chrome launch failed\nTraceback (most recent call last):" in text
+    assert f"{error_type}: fixture launch failure" in text
 
 
 @pytest.fixture
