@@ -1413,7 +1413,7 @@ def test_warming_ui_create_save_feedback(tmp_path, monkeypatch, run_immediately,
     page = _DummyPage()
     logs, runs, refreshed = [], [], []
     pm = SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name="profile")])
-    monkeypatch.setattr(ws, "run_task_async", lambda tid, *a, **kw: runs.append(tid))
+    monkeypatch.setattr(ws, "run_task_async", lambda tid, *a, **kw: runs.append(tid) or True)
     open_warming_dialog(
         page,
         ws,
