@@ -11,6 +11,8 @@ import importlib.util
 import json
 import math
 import re
+import subprocess
+import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,6 +31,35 @@ def _protected_macos_fonts() -> frozenset[str]:
     if len(fonts) != 196:
         raise ValueError(f"Expected 196 protected macOS core fonts in 028, got {len(fonts)}")
     return fonts
+
+
+def _host_macos_speech_voice_count() -> int | None:
+    if sys.platform != "darwin":
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                "/usr/bin/osascript",
+                "-l",
+                "JavaScript",
+                "-e",
+                (
+                    'ObjC.import("AVFoundation"); '
+                    "const vs = $.AVSpeechSynthesisVoice.speechVoices; "
+                    "vs ? vs.count : 0"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    raw = proc.stdout.strip()
+    return int(raw) if raw.isdigit() else None
 
 
 SAMPLE = """async function sample() {
@@ -1395,11 +1426,22 @@ async def verify(executable: Path, output: Path) -> None:
                           await reg.unregister();
                         }
                         const voices = await new Promise((res) => {
-                          const init = speechSynthesis.getVoices();
+                          const read = () => speechSynthesis.getVoices();
+                          const init = read();
                           if (init.length > 0) return res(init);
-                          const done = () => res(speechSynthesis.getVoices());
-                          speechSynthesis.onvoiceschanged = done;
-                          setTimeout(done, 500);
+                          let settled = false;
+                          const finish = (list) => {
+                            if (settled) return;
+                            settled = true;
+                            clearTimeout(timer);
+                            speechSynthesis.onvoiceschanged = null;
+                            res(list);
+                          };
+                          speechSynthesis.onvoiceschanged = () => {
+                            const current = read();
+                            if (current.length > 0) finish(current);
+                          };
+                          const timer = setTimeout(() => finish(read()), 3000);
                         });
                         const fonts = await window.queryLocalFonts();
                         const families = Array.from(new Set(fonts.map(f => f.family))).sort();
@@ -1546,6 +1588,7 @@ async def verify(executable: Path, output: Path) -> None:
                 "nf": "de-DE",
                 "num": "123.456,789",
             }
+            host_local_voice_count = _host_macos_speech_voice_count()
             for label, payload in (("3003", r3003), ("3006", r3006)):
                 for realm in ("window", "worker", "shared", "service"):
                     row = payload[realm]
@@ -1574,8 +1617,11 @@ async def verify(executable: Path, output: Path) -> None:
                     raise ValueError(
                         f"027 unexpected broken Google Network Speech voices ({label}): {gvoices}"
                     )
-                if payload.get("localVoiceCount", 0) <= 0:
-                    raise ValueError(f"027 missing local system speech voices ({label})")
+                if host_local_voice_count != 0 and payload.get("localVoiceCount", 0) <= 0:
+                    raise ValueError(
+                        f"027 missing local system speech voices ({label}): "
+                        f"host={host_local_voice_count}"
+                    )
                 fams = payload.get("localFontFamilies", [])
                 if len(fams) <= 50 or "Arial" not in fams or "Helvetica" not in fams:
                     raise ValueError(
@@ -1609,6 +1655,11 @@ async def verify(executable: Path, output: Path) -> None:
                 "seed_3003_font_count": len(r3003["localFontFamilies"]),
                 "seed_3006_font_count": len(r3006["localFontFamilies"]),
                 "local_voice_count": r3003["localVoiceCount"],
+                "local_voice_count_3006": r3006["localVoiceCount"],
+                "host_local_voice_count": host_local_voice_count,
+                "speech_voice_gate": (
+                    "host_unavailable_on_runner" if host_local_voice_count == 0 else "enforced"
+                ),
                 "google_voice_count": 0,
                 "core_font_missing_count": r3003["coreFontMissingCount"],
                 "installed_protected_font_count": len(installed_core_fonts),

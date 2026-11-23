@@ -855,6 +855,7 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
         "playwright.async_api",
         types.SimpleNamespace(async_playwright=lambda: FakePlaywrightCM()),
     )
+    monkeypatch.setattr(verify_mod, "_host_macos_speech_voice_count", lambda: 191)
 
     asyncio.run(verify_mod.verify(exe, out))
     report = json.loads(out.read_text())
@@ -879,6 +880,10 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     assert locale_case["same_origin_close_popup"]["openerClosed"] is True
     assert locale_case["same_origin_close_popup"]["seen"] == ["de-DE"]
     assert locale_case["core_font_missing_count"] == 0
+    assert locale_case["local_voice_count"] == 42
+    assert locale_case["local_voice_count_3006"] == 42
+    assert locale_case["host_local_voice_count"] == 191
+    assert locale_case["speech_voice_gate"] == "enforced"
     for bad_close in ({"seen": ["de-DE", "en-US", "de-DE"]}, {"hadSameOriginOpener": False}):
         close_popup_override = bad_close
         with pytest.raises(ValueError, match="027 popup locale continuity mismatch"):
@@ -929,6 +934,90 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
         match="027 queryLocalFonts did not reflect per-seed supplemental/user FontCache filtering",
     ):
         asyncio.run(verify_mod.verify(exe, out))
+
+    font_probe_override = {"localVoiceCount": 0}
+    monkeypatch.setattr(verify_mod, "_host_macos_speech_voice_count", lambda: 191)
+    with pytest.raises(ValueError, match="027 missing local system speech voices"):
+        asyncio.run(verify_mod.verify(exe, out))
+
+    monkeypatch.setattr(verify_mod, "_host_macos_speech_voice_count", lambda: None)
+    with pytest.raises(ValueError, match="027 missing local system speech voices"):
+        asyncio.run(verify_mod.verify(exe, out))
+
+    monkeypatch.setattr(verify_mod, "_host_macos_speech_voice_count", lambda: 0)
+    asyncio.run(verify_mod.verify(exe, out))
+    zero_voice_report = json.loads(out.read_text())["cases"]["locale_speech_font_de"]
+    assert zero_voice_report["host_local_voice_count"] == 0
+    assert zero_voice_report["local_voice_count"] == 0
+    assert zero_voice_report["local_voice_count_3006"] == 0
+    assert zero_voice_report["speech_voice_gate"] == "host_unavailable_on_runner"
+
+    font_probe_override = {"localVoiceCount": 0, "googleVoices": ["Google US English"]}
+    with pytest.raises(ValueError, match="027 unexpected broken Google Network Speech voices"):
+        asyncio.run(verify_mod.verify(exe, out))
+
+
+def test_verify_speech_voice_host_probe_and_checkpoint_compat(monkeypatch):
+    import types
+
+    verify_path = KIT / "verify.py"
+    vspec = importlib.util.spec_from_file_location("native_verify_speech", verify_path)
+    assert vspec is not None and vspec.loader is not None
+    verify_mod = importlib.util.module_from_spec(vspec)
+    vspec.loader.exec_module(verify_mod)
+
+    monkeypatch.setattr(verify_mod.sys, "platform", "linux")
+    assert verify_mod._host_macos_speech_voice_count() is None
+
+    monkeypatch.setattr(verify_mod.sys, "platform", "darwin")
+    responses: list[object] = [
+        types.SimpleNamespace(returncode=0, stdout="191\n"),
+        types.SimpleNamespace(returncode=0, stdout="0\n"),
+        types.SimpleNamespace(returncode=0, stdout="not-a-number\n"),
+        types.SimpleNamespace(returncode=1, stdout="191\n"),
+        subprocess.TimeoutExpired(cmd="osascript", timeout=10),
+    ]
+
+    def fake_run(*args, **kwargs):
+        item = responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(verify_mod.subprocess, "run", fake_run)
+    assert verify_mod._host_macos_speech_voice_count() == 191
+    assert verify_mod._host_macos_speech_voice_count() == 0
+    assert verify_mod._host_macos_speech_voice_count() is None
+    assert verify_mod._host_macos_speech_voice_count() is None
+    assert verify_mod._host_macos_speech_voice_count() is None
+
+    verify_src = verify_path.read_text(encoding="utf-8")
+    assert "if (current.length > 0) finish(current);" in verify_src
+    assert "setTimeout(() => finish(read()), 3000)" in verify_src
+
+    cspec = importlib.util.spec_from_file_location(
+        "native_checkpoint_verify_compat", KIT / "checkpoint.py"
+    )
+    assert cspec is not None and cspec.loader is not None
+    checkpoint_mod = importlib.util.module_from_spec(cspec)
+    cspec.loader.exec_module(checkpoint_mod)
+
+    saved = {
+        "format": 1,
+        "workspace": "/Users/runner/work/RonC-Profile/RonC-Profile",
+        "host": "arm64-macOS",
+        "python": "3.12",
+        "ninja": "1.12",
+        "xcode": "26",
+        "sdk": "macOS26",
+        "kit": {"ci-build.gn": "gn-sha", "prepare.py": "prep-sha", "verify.py": "old-verify"},
+        "source": {"chromium": "148.0.7778.215"},
+    }
+    current = {
+        **saved,
+        "kit": {"ci-build.gn": "gn-sha", "prepare.py": "prep-sha", "verify.py": "new-verify"},
+    }
+    assert checkpoint_mod.compatible_identity(saved, current) is True
 
 
 def test_verify_026_recheck_exclusive_out_and_blank_api_token(tmp_path, monkeypatch, capsys):
