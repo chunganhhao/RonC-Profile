@@ -252,6 +252,7 @@ def test_legacy_ninja_log_mtime_repair_and_migration_compatibility(tmp_path):
     new_ctx["source"]["apple_silicon_coherence_patch_sha256"] = "new-026"
     new_ctx["source"]["locale_speech_font_patch_sha256"] = "new-027"
     new_ctx["source"]["pixelscan_coherence_patch_sha256"] = "new-028"
+    new_ctx["source"]["macos_renderer_locale_pak_patch_sha256"] = "new-029"
     new_ctx["kit"]["build.sh"] = "updated"
     new_ctx["kit"]["checkpoint.py"] = "updated"
     new_ctx["kit"]["prepare.py"] = "updated"
@@ -308,6 +309,7 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     checkpoint.pack(source, ckpt, saved_ctx)
     new_ctx = json.loads(json.dumps(saved_ctx))
     new_ctx["source"]["webgl_readback_patch_sha256"] = "new-024"
+    new_ctx["source"]["macos_renderer_locale_pak_patch_sha256"] = "new-029"
     new_ctx["kit"]["build.sh"] = "new"
     new_ctx["kit"]["prepare.py"] = "new"
     root = tmp_path / "root"
@@ -321,7 +323,7 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     patch_hook.assert_called_once_with(root / "build/src", saved_ctx["source"])
     assert json.loads((root / "native-ready.json").read_text()) == new_ctx
 
-    # Post-025 checkpoint (Run #17/#19: has 023/024/025, lacks 026) must also apply 026 on restore.
+    # Post-025 checkpoint (Run #17/#19: has 023/024/025, lacks 026..029) must apply on restore.
     post025_saved = json.loads(json.dumps(saved_ctx))
     post025_saved["source"]["webgl_readback_patch_sha256"] = "old-024"
     post025_saved["source"]["audio_clientrects_patch_sha256"] = "old-025"
@@ -331,6 +333,7 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     post026_ctx["source"]["apple_silicon_coherence_patch_sha256"] = "new-026"
     post026_ctx["source"]["locale_speech_font_patch_sha256"] = "new-027"
     post026_ctx["source"]["pixelscan_coherence_patch_sha256"] = "new-028"
+    post026_ctx["source"]["macos_renderer_locale_pak_patch_sha256"] = "new-029"
     post026_ctx["kit"]["prepare.py"] = "new-026"
     root2 = tmp_path / "root2"
     root2.mkdir()
@@ -342,7 +345,7 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     patch_hook2.assert_called_once_with(root2 / "build/src", post025_saved["source"])
     assert json.loads((root2 / "native-ready.json").read_text()) == post026_ctx
 
-    # Post-026 checkpoint (has 023..026, lacks 027) must also migrate cleanly and apply 027.
+    # Post-026 checkpoint (has 023..026, lacks 027..029) must migrate cleanly and apply.
     post026_saved = json.loads(json.dumps(post025_saved))
     post026_saved["source"]["apple_silicon_coherence_patch_sha256"] = "old-026"
     ckpt26 = tmp_path / "ckpt26"
@@ -350,6 +353,7 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     post027_ctx = json.loads(json.dumps(post026_saved))
     post027_ctx["source"]["locale_speech_font_patch_sha256"] = "new-027"
     post027_ctx["source"]["pixelscan_coherence_patch_sha256"] = "new-028"
+    post027_ctx["source"]["macos_renderer_locale_pak_patch_sha256"] = "new-029"
     post027_ctx["kit"]["prepare.py"] = "new-027"
     root3 = tmp_path / "root3"
     root3.mkdir()
@@ -361,13 +365,14 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     patch_hook3.assert_called_once_with(root3 / "build/src", post026_saved["source"])
     assert json.loads((root3 / "native-ready.json").read_text()) == post027_ctx
 
-    # Post-027 checkpoint (Run #22: has 023..027, lacks 028) must also migrate cleanly and apply 028.
+    # Post-027 checkpoint (Run #22: has 023..027, lacks 028/029) must migrate cleanly and apply.
     post027_saved = json.loads(json.dumps(post026_saved))
     post027_saved["source"]["locale_speech_font_patch_sha256"] = "old-027"
     ckpt27 = tmp_path / "ckpt27"
     checkpoint.pack(source, ckpt27, post027_saved)
     post028_ctx = json.loads(json.dumps(post027_saved))
     post028_ctx["source"]["pixelscan_coherence_patch_sha256"] = "new-028"
+    post028_ctx["source"]["macos_renderer_locale_pak_patch_sha256"] = "new-029"
     post028_ctx["kit"]["prepare.py"] = "new-028"
     root4 = tmp_path / "root4"
     root4.mkdir()
@@ -379,9 +384,54 @@ def test_cli_restore_applies_incremental_patches_for_legacy_checkpoint(tmp_path,
     patch_hook4.assert_called_once_with(root4 / "build/src", post027_saved["source"])
     assert json.loads((root4 / "native-ready.json").read_text()) == post028_ctx
 
+    # Post-028 checkpoint (Run 45217857712: has 023..028, lacks 029) must migrate cleanly and apply 029.
+    post028_saved = json.loads(json.dumps(post027_saved))
+    post028_saved["source"]["pixelscan_coherence_patch_sha256"] = "old-028"
+    ckpt28 = tmp_path / "ckpt28"
+    checkpoint.pack(source, ckpt28, post028_saved)
+    post029_ctx = json.loads(json.dumps(post028_saved))
+    post029_ctx["source"]["macos_renderer_locale_pak_patch_sha256"] = "new-029"
+    post029_ctx["kit"]["prepare.py"] = "new-029"
+    root5 = tmp_path / "root5"
+    root5.mkdir()
+    monkeypatch.setattr(checkpoint, "identity", lambda _: post029_ctx)
+    patch_hook5 = Mock(return_value=True)
+    monkeypatch.setattr(checkpoint, "_apply_incremental_patches", patch_hook5)
+    monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root5), str(ckpt28)])
+    assert checkpoint.main() == 0
+    patch_hook5.assert_called_once_with(root5 / "build/src", post028_saved["source"])
+    assert json.loads((root5 / "native-ready.json").read_text()) == post029_ctx
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX patch required")
-def test_cli_restore_real_post_027_to_post_028_overlapping_patches(tmp_path, monkeypatch):
+
+def _seed_pre_patch_tree(source: Path, patch_paths: tuple[Path, ...] | list[Path]) -> None:
+    files: dict[str, list[str]] = {}
+    for patch_path in patch_paths:
+        current_rel = None
+        in_hunk = False
+        for raw in patch_path.read_text().splitlines(keepends=True):
+            if raw.startswith("+++ b/"):
+                current_rel = raw.removeprefix("+++ b/").strip()
+                files.setdefault(current_rel, [])
+                in_hunk = False
+            elif raw.startswith("@@ "):
+                assert current_rel is not None
+                old_start = int(re.match(r"@@ -(\d+)(?:,\d+)? \+", raw).group(1))
+                lines = files[current_rel]
+                while len(lines) < old_start - 1:
+                    lines.append(f"// stub line {len(lines) + 1}\n")
+                in_hunk = True
+            elif raw.startswith("diff --git "):
+                in_hunk = False
+            elif in_hunk and raw.startswith((" ", "-")):
+                assert current_rel is not None
+                files[current_rel].append(raw[1:])
+    for rel, lines in files.items():
+        target = source / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("".join(lines))
+
+
+def _patch_monkeypatch_linux(monkeypatch) -> None:
     if sys.platform.startswith("linux"):
         run = subprocess.run
 
@@ -392,36 +442,20 @@ def test_cli_restore_real_post_027_to_post_028_overlapping_patches(tmp_path, mon
 
         monkeypatch.setattr(subprocess, "run", portable_patch)
 
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX patch required")
+def test_cli_restore_real_post_027_to_post_028_overlapping_patches(tmp_path, monkeypatch):
+    _patch_monkeypatch_linux(monkeypatch)
+
     prep_spec = importlib.util.spec_from_file_location("native_prepare", KIT / "prepare.py")
     assert prep_spec and prep_spec.loader
     native_prepare = importlib.util.module_from_spec(prep_spec)
     prep_spec.loader.exec_module(native_prepare)
 
     patch_028 = KIT / "patches/028-pixelscan-noise-font-coherence.patch"
+    patch_029 = KIT / "patches/029-macos-renderer-locale-pak-coherence.patch"
     source = tmp_path / "post027-src"
-    files: dict[str, list[str]] = {}
-    current_rel = None
-    in_hunk = False
-    for raw in patch_028.read_text().splitlines(keepends=True):
-        if raw.startswith("+++ b/"):
-            current_rel = raw.removeprefix("+++ b/").strip()
-            files[current_rel] = []
-            in_hunk = False
-        elif raw.startswith("@@ "):
-            old_start = int(re.match(r"@@ -(\d+)(?:,\d+)? \+", raw).group(1))
-            lines = files[current_rel]
-            while len(lines) < old_start - 1:
-                lines.append(f"// stub line {len(lines) + 1}\n")
-            in_hunk = True
-        elif in_hunk:
-            if raw.startswith((" ", "-")):
-                files[current_rel].append(raw[1:])
-            elif raw.startswith("diff --git "):
-                in_hunk = False
-    for rel, lines in files.items():
-        target = source / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("".join(lines))
+    _seed_pre_patch_tree(source, [patch_028, patch_029])
 
     root = tmp_path / "root"
     root.mkdir()
@@ -450,7 +484,10 @@ def test_cli_restore_real_post_027_to_post_028_overlapping_patches(tmp_path, mon
     new_ctx["source"]["pixelscan_coherence_patch_sha256"] = (
         native_prepare.PIXELSCAN_COHERENCE_PATCH_SHA256
     )
-    new_ctx["kit"]["prepare.py"] = "new-028"
+    new_ctx["source"]["macos_renderer_locale_pak_patch_sha256"] = (
+        native_prepare.MACOS_RENDERER_LOCALE_PAK_PATCH_SHA256
+    )
+    new_ctx["kit"]["prepare.py"] = "new-029"
     monkeypatch.setattr(checkpoint, "identity", lambda _: new_ctx)
     monkeypatch.setattr(checkpoint, "validate", Mock())
     monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root), str(ckpt)])
@@ -474,19 +511,137 @@ def test_cli_restore_real_post_027_to_post_028_overlapping_patches(tmp_path, mon
         in (restored / "third_party/blink/renderer/platform/fonts/font_cache.cc").read_text()
     )
     assert (
+        "CheckAndResolveLocale"
+        in (restored / "content/browser/renderer_host/render_process_host_impl.cc").read_text()
+    )
+    assert (
+        "fingerprint-locale"
+        in (restored / "third_party/blink/renderer/core/inspector/locale_controller.cc").read_text()
+    )
+    for applied_patch in (patch_028, patch_029):
+        assert (
+            subprocess.run(
+                [
+                    "/usr/bin/patch",
+                    "-p1",
+                    "-R",
+                    "-f",
+                    "-C",
+                    "-d",
+                    str(restored),
+                    "-i",
+                    str(applied_patch),
+                ],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+            ).returncode
+            == 0
+        )
+    assert checkpoint._apply_incremental_patches(restored, saved_ctx["source"]) is False
+    # The fixture contains only 028/029 files, not a complete 023..029 tree.
+    with pytest.raises(
+        RuntimeError, match="Incremental patch 023 missing file:.*fingerprint_gpu.h"
+    ):
+        checkpoint._apply_incremental_patches(restored)
+    assert json.loads((root / "native-ready.json").read_text()) == new_ctx
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX patch required")
+def test_cli_restore_real_post_028_to_post_029_overlapping_patches(tmp_path, monkeypatch):
+    _patch_monkeypatch_linux(monkeypatch)
+
+    prep_spec = importlib.util.spec_from_file_location("native_prepare", KIT / "prepare.py")
+    assert prep_spec and prep_spec.loader
+    native_prepare = importlib.util.module_from_spec(prep_spec)
+    prep_spec.loader.exec_module(native_prepare)
+
+    patch_027 = KIT / "patches/027-macos-locale-speech-font-coherence.patch"
+    patch_029 = KIT / "patches/029-macos-renderer-locale-pak-coherence.patch"
+    blocks_027 = [
+        block
+        for block in re.split(r"(?m)(?=^diff --git )", patch_027.read_text())
+        if "render_process_host_impl.cc" in block or "locale_controller.cc" in block
+    ]
+    assert len(blocks_027) == 2
+    two_file_027 = tmp_path / "027-locale-only.patch"
+    two_file_027.write_text("".join(blocks_027))
+
+    source = tmp_path / "post028-src"
+    _seed_pre_patch_tree(source, [two_file_027])
+    rphi_seed = source / "content/browser/renderer_host/render_process_host_impl.cc"
+    rphi_lines = rphi_seed.read_text().splitlines(keepends=True)
+    rphi_lines[210:216] = [
+        '#include "third_party/blink/public/public_buildflags.h"\n',
+        '#include "third_party/perfetto/include/perfetto/tracing/traced_proto.h"\n',
+        '#include "ui/accessibility/accessibility_switches.h"\n',
+        '#include "ui/base/ui_base_features.h"\n',
+        '#include "ui/base/ui_base_switches.h"\n',
+        '#include "ui/display/display_switches.h"\n',
+    ]
+    rphi_seed.write_text("".join(rphi_lines))
+    subprocess.run(
+        ["/usr/bin/patch", "-p1", "-f", "-d", str(source), "-i", str(two_file_027)],
+        stdin=subprocess.DEVNULL,
+        check=True,
+    )
+
+    root = tmp_path / "root"
+    root.mkdir()
+    saved_ctx = {
+        "format": 1,
+        "workspace": str(root.resolve()),
+        "host": ["Darwin", "arm64"],
+        "python": "3.12.0",
+        "ninja": "1.12.1",
+        "xcode": "Xcode 26",
+        "sdk": "/SDK",
+        "source": {
+            "platform_revision": native_prepare.PLATFORM_REV,
+            "macos_antidetect_patch_sha256": native_prepare.MACOS_ANTIDETECT_PATCH_SHA256,
+            "webgl_readback_patch_sha256": native_prepare.READBACK_PARITY_PATCH_SHA256,
+            "audio_clientrects_patch_sha256": native_prepare.AUDIO_CLIENTRECTS_PATCH_SHA256,
+            "apple_silicon_coherence_patch_sha256": native_prepare.APPLE_SILICON_PATCH_SHA256,
+            "locale_speech_font_patch_sha256": native_prepare.LOCALE_SPEECH_FONT_PATCH_SHA256,
+            "pixelscan_coherence_patch_sha256": native_prepare.PIXELSCAN_COHERENCE_PATCH_SHA256,
+        },
+        "kit": {"ci-build.gn": "gn-sha", "build.sh": "old", "prepare.py": "old-028"},
+    }
+    ckpt = tmp_path / "ckpt28"
+    checkpoint.pack(source, ckpt, saved_ctx)
+
+    new_ctx = json.loads(json.dumps(saved_ctx))
+    new_ctx["source"]["macos_renderer_locale_pak_patch_sha256"] = (
+        native_prepare.MACOS_RENDERER_LOCALE_PAK_PATCH_SHA256
+    )
+    new_ctx["kit"]["prepare.py"] = "new-029"
+    monkeypatch.setattr(checkpoint, "identity", lambda _: new_ctx)
+    monkeypatch.setattr(checkpoint, "validate", Mock())
+    monkeypatch.setattr(sys, "argv", ["checkpoint.py", "restore", str(root), str(ckpt)])
+
+    assert checkpoint.main() == 0
+    restored = root / "build/src"
+    rphi_text = (restored / "content/browser/renderer_host/render_process_host_impl.cc").read_text()
+    lc_text = (
+        restored / "third_party/blink/renderer/core/inspector/locale_controller.cc"
+    ).read_text()
+    assert '#include "ui/base/l10n/l10n_util.h"' in rphi_text
+    assert "l10n_util::CheckAndResolveLocale" in rphi_text
+    assert 'command_line->AppendSwitchASCII("fingerprint-locale", requested_lang);' in rphi_text
+    assert 'command_line->GetSwitchValueASCII("fingerprint-locale")' in lc_text
+    assert (
         subprocess.run(
-            ["/usr/bin/patch", "-p1", "-R", "-f", "-C", "-d", str(restored), "-i", str(patch_028)],
+            ["/usr/bin/patch", "-p1", "-R", "-f", "-C", "-d", str(restored), "-i", str(patch_029)],
             stdin=subprocess.DEVNULL,
             capture_output=True,
         ).returncode
         == 0
     )
     assert checkpoint._apply_incremental_patches(restored, saved_ctx["source"]) is False
-    # The fixture contains only 028's three files, not a complete 023..028 tree.
-    with pytest.raises(
-        RuntimeError, match="Incremental patch 023 missing file:.*fingerprint_gpu.h"
-    ):
-        checkpoint._apply_incremental_patches(restored)
+    # Verify _verify_skipped_patches peels 029 cleanly to reveal intact 027 blocks in both files.
+    native_prepare._verify_skipped_patches(
+        restored,
+        [(str(two_file_027), "027"), (str(patch_029), "029")],
+    )
     assert json.loads((root / "native-ready.json").read_text()) == new_ctx
 
 

@@ -281,3 +281,24 @@ The core-font acceptance gate also queries an isolated browser profile with
 in that inventory must remain visible in both seeds 3003 and 3006, including
 families absent from the explicit rendering probes. It does not require all 196
 names to be installed, and rejects an empty protected-family inventory.
+
+## Native macOS renderer locale-pak coherence 029
+
+`patches/029-macos-renderer-locale-pak-coherence.patch` fixes the macOS renderer
+startup `CHECK(!loaded_locale.empty())` crash when `--lang` carries a region
+subtag whose `.lproj/locale.pak` directory is unbundled (for example `de-DE`,
+`vi-VN`, `ja-JP`):
+
+- `RenderProcessHostImpl::AppendRendererCommandLine`
+  (`render_process_host_impl.cc`) resolves `switches::kLang` through
+  `l10n_util::CheckAndResolveLocale(..., CheckLocaleMode::kUseKnownLocalesList)`
+  (in-memory `kPlatformLocales` lookup, zero UI-thread disk I/O) so `ResourceBundle`
+  always loads an existing bundled `.lproj/locale.pak` (such as `de`, `vi`,
+  `en-US`, `en-GB`, `zh-CN`, `zh-TW`), while forwarding the full requested
+  BCP-47 tag via `--fingerprint-locale` (unless `--disable-spoofing=locale` is set).
+- `LocaleController::Init()` (`locale_controller.cc`) prefers `--fingerprint-locale`
+  over `--lang`, preserving full region formatting (`de-DE`, `123.456,789`) across
+  Window, Worker, SharedWorker, ServiceWorker, and popups.
+- Only two `.cc` files are modified (no header or `BUILD.gn` edits), allowing fast
+  incremental resume from post-`028` checkpoints such as Run `45217857712`.
+

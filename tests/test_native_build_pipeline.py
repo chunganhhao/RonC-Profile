@@ -49,6 +49,10 @@ def test_prepare_applies_after_revision_checks_and_records_incomplete_acceptance
     assert proof["locale_speech_font_patch_sha256"] == native.LOCALE_SPEECH_FONT_PATCH_SHA256
     assert proof["pixelscan_coherence_patch_sha256"] == native.PIXELSCAN_COHERENCE_PATCH_SHA256
     assert (
+        proof["macos_renderer_locale_pak_patch_sha256"]
+        == native.MACOS_RENDERER_LOCALE_PAK_PATCH_SHA256
+    )
+    assert (
         (scaffold / "ungoogled-chromium/patches/series")
         .read_text()
         .endswith(
@@ -65,6 +69,8 @@ def test_prepare_applies_after_revision_checks_and_records_incomplete_acceptance
             + native.LOCALE_SPEECH_FONT_SERIES_ENTRY
             + "\n"
             + native.PIXELSCAN_COHERENCE_SERIES_ENTRY
+            + "\n"
+            + native.MACOS_RENDERER_LOCALE_PAK_SERIES_ENTRY
             + "\n"
         )
     )
@@ -89,6 +95,9 @@ def test_prepare_applies_after_revision_checks_and_records_incomplete_acceptance
     assert (
         scaffold / "ungoogled-chromium/patches" / native.PIXELSCAN_COHERENCE_SERIES_ENTRY
     ).read_bytes() == native.PIXELSCAN_COHERENCE_PATCH.read_bytes()
+    assert (
+        scaffold / "ungoogled-chromium/patches" / native.MACOS_RENDERER_LOCALE_PAK_SERIES_ENTRY
+    ).read_bytes() == native.MACOS_RENDERER_LOCALE_PAK_PATCH.read_bytes()
     assert len(proof["open_findings"]) == 2
     with pytest.raises(ValueError, match="fresh dedicated checkout"):
         native.prepare(scaffold)
@@ -313,6 +322,15 @@ def test_modified_pixelscan_coherence_overlay_refused(scaffold, monkeypatch):
     native.subprocess.run.assert_not_called()
 
 
+def test_modified_macos_renderer_locale_pak_overlay_refused(scaffold, monkeypatch):
+    bad = scaffold / "bad-029.patch"
+    bad.write_text("unreviewed 029 changes")
+    monkeypatch.setattr(native, "MACOS_RENDERER_LOCALE_PAK_PATCH", bad)
+    with pytest.raises(ValueError, match="macOS renderer locale pak patch checksum"):
+        native.prepare(scaffold)
+    native.subprocess.run.assert_not_called()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX patch required")
 def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkeypatch):
     import hashlib
@@ -351,7 +369,8 @@ def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkey
     patch_d.write_text("--- a/apple.txt\n+++ b/apple.txt\n@@ -1,2 +1,3 @@\n m1\n+new026\n m3\n")
     patch_e = tmp_path / "027.patch"
     patch_e.write_text(
-        "--- a/locale.txt\n+++ b/locale.txt\n@@ -1,3 +1,3 @@\n l1\n-old027\n+new027\n l3\n"
+        "--- a/locale.txt\n+++ b/locale.txt\n@@ -1,3 +1,3 @@\n r1\n-old027_loc\n+new027_loc\n r3\n"
+        "--- a/font.txt\n+++ b/font.txt\n@@ -1,3 +1,3 @@\n l1\n-old027\n+new027\n l3\n"
     )
     patch_f = tmp_path / "028.patch"
     patch_f.write_text(
@@ -364,8 +383,12 @@ def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkey
         "-new024_gl\n"
         "+new028_gl\n"
         " tail\n"
-        "--- a/locale.txt\n+++ b/locale.txt\n"
+        "--- a/font.txt\n+++ b/font.txt\n"
         "@@ -1,3 +1,3 @@\n l1\n-new027\n+new028_font\n l3\n"
+    )
+    patch_g = tmp_path / "029.patch"
+    patch_g.write_text(
+        "--- a/locale.txt\n+++ b/locale.txt\n@@ -1,3 +1,3 @@\n r1\n-new027_loc\n+new029_pak\n r3\n"
     )
     for attr, path in (
         ("MACOS_ANTIDETECT_PATCH", patch_a),
@@ -374,30 +397,34 @@ def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkey
         ("APPLE_SILICON_PATCH", patch_d),
         ("LOCALE_SPEECH_FONT_PATCH", patch_e),
         ("PIXELSCAN_COHERENCE_PATCH", patch_f),
+        ("MACOS_RENDERER_LOCALE_PAK_PATCH", patch_g),
     ):
         monkeypatch.setattr(native, attr, path)
         monkeypatch.setattr(native, f"{attr}_SHA256", hashlib.sha256(path.read_bytes()).hexdigest())
 
-    # 1. Post-023 tree (saved_source=None): skips 023, applies 024..028 with 024/028 overlaps.
+    # 1. Post-023 tree (saved_source=None): skips 023, applies 024..029 with 024/028/029 overlaps.
     src_post023 = tmp_path / "src_post023"
     src_post023.mkdir()
     (src_post023 / "shared.txt").write_text("head\nnew023_canvas\nmid\nnew023_gl\ntail\n")
     (src_post023 / "audio.txt").write_text("x\nold025\nz\n")
     (src_post023 / "apple.txt").write_text("m1\nm3\n")
-    (src_post023 / "locale.txt").write_text("l1\nold027\nl3\n")
+    (src_post023 / "locale.txt").write_text("r1\nold027_loc\nr3\n")
+    (src_post023 / "font.txt").write_text("l1\nold027\nl3\n")
     assert native.apply_incremental_patches(src_post023) is True
     assert (src_post023 / "shared.txt").read_text() == "head\nnew028_canvas\nmid\nnew028_gl\ntail\n"
     assert (src_post023 / "audio.txt").read_text() == "x\nnew025\nz\n"
     assert (src_post023 / "apple.txt").read_text() == "m1\nnew026\nm3\n"
-    assert (src_post023 / "locale.txt").read_text() == "l1\nnew028_font\nl3\n"
-    # Second invocation detects 028 already applied even though 023/024/027 reverse checks fail.
+    assert (src_post023 / "locale.txt").read_text() == "r1\nnew029_pak\nr3\n"
+    assert (src_post023 / "font.txt").read_text() == "l1\nnew028_font\nl3\n"
+    # Second invocation detects 029 already applied even though 023/024/027 reverse checks fail.
     assert native.apply_incremental_patches(src_post023) is False
 
-    # 2. Post-027 tree (023 replaced by 024, 027 present): works both with/without saved_source.
-    for label, saved_source in (
-        ("no_saved_source", None),
+    # 2. Post-027 and post-028 trees work both with and without saved_source.
+    for stage, font_text, saved_source in (
+        ("post027_no_saved", "l1\nnew027\nl3\n", None),
         (
-            "with_saved_source",
+            "post027_saved",
+            "l1\nnew027\nl3\n",
             {
                 "macos_antidetect_patch_sha256": "h23",
                 "webgl_readback_patch_sha256": "h24",
@@ -406,27 +433,47 @@ def test_apply_incremental_patches_idempotent_with_real_patches(tmp_path, monkey
                 "locale_speech_font_patch_sha256": "h27",
             },
         ),
+        ("post028_no_saved", "l1\nnew028_font\nl3\n", None),
+        (
+            "post028_saved",
+            "l1\nnew028_font\nl3\n",
+            {
+                "macos_antidetect_patch_sha256": "h23",
+                "webgl_readback_patch_sha256": "h24",
+                "audio_clientrects_patch_sha256": "h25",
+                "apple_silicon_coherence_patch_sha256": "h26",
+                "locale_speech_font_patch_sha256": "h27",
+                "pixelscan_coherence_patch_sha256": "h28",
+            },
+        ),
     ):
-        src_post027 = tmp_path / f"src_post027_{label}"
-        src_post027.mkdir()
-        (src_post027 / "shared.txt").write_text("head\nnew023_canvas\nmid\nnew024_gl\ntail\n")
-        (src_post027 / "audio.txt").write_text("x\nnew025\nz\n")
-        (src_post027 / "apple.txt").write_text("m1\nnew026\nm3\n")
-        (src_post027 / "locale.txt").write_text("l1\nnew027\nl3\n")
-        assert native.apply_incremental_patches(src_post027, saved_source=saved_source) is True
+        src_tree = tmp_path / f"src_{stage}"
+        src_tree.mkdir()
+        (src_tree / "shared.txt").write_text(
+            "head\nnew028_canvas\nmid\nnew028_gl\ntail\n"
+            if stage.startswith("post028")
+            else "head\nnew023_canvas\nmid\nnew024_gl\ntail\n"
+        )
+        (src_tree / "audio.txt").write_text("x\nnew025\nz\n")
+        (src_tree / "apple.txt").write_text("m1\nnew026\nm3\n")
+        (src_tree / "locale.txt").write_text("r1\nnew027_loc\nr3\n")
+        (src_tree / "font.txt").write_text(font_text)
+        assert native.apply_incremental_patches(src_tree, saved_source=saved_source) is True
         assert (
-            src_post027 / "shared.txt"
+            src_tree / "shared.txt"
         ).read_text() == "head\nnew028_canvas\nmid\nnew028_gl\ntail\n"
-        assert (src_post027 / "locale.txt").read_text() == "l1\nnew028_font\nl3\n"
-        assert native.apply_incremental_patches(src_post027, saved_source=saved_source) is False
+        assert (src_tree / "locale.txt").read_text() == "r1\nnew029_pak\nr3\n"
+        assert (src_tree / "font.txt").read_text() == "l1\nnew028_font\nl3\n"
+        assert native.apply_incremental_patches(src_tree, saved_source=saved_source) is False
 
-    # 3. Corrupted 023 fails closed before applying pending 028.
+    # 3. Corrupted 023 fails closed before applying pending 028/029.
     bad_src = tmp_path / "src_bad028"
     bad_src.mkdir()
     (bad_src / "shared.txt").write_text("head\ncorrupt\nmid\nnew024_gl\ntail\n")
     (bad_src / "audio.txt").write_text("x\nnew025\nz\n")
     (bad_src / "apple.txt").write_text("m1\nnew026\nm3\n")
-    (bad_src / "locale.txt").write_text("l1\nnew027\nl3\n")
+    (bad_src / "locale.txt").write_text("r1\nnew027_loc\nr3\n")
+    (bad_src / "font.txt").write_text("l1\nnew027\nl3\n")
     with pytest.raises(RuntimeError, match="Incremental patch 023.*shared.txt"):
         native.apply_incremental_patches(bad_src)
 
