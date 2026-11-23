@@ -19,6 +19,7 @@ from src.core.config import DATA_DIR, HEADLESS, PROFILES_FILE, RESTORE_TABS
 from src.services.browser import control, session
 from src.services.browser import display as xvfb
 from src.services.browser.fingerprint import available_gpus, load_or_create
+from src.services.browser.process import watch_launcher
 from src.services.browser.search import ensure_google_search
 from src.services.browser.timing import launch_stage, report_timing
 from src.services.proxy.geo_check import requests_proxy_url
@@ -39,12 +40,13 @@ def _configure_stdio() -> None:
 
 
 def _safe_print(message: str) -> None:
-    try:
-        print(message, flush=True)
-    except UnicodeEncodeError:
-        fallback = (message + "\n").encode("utf-8", errors="replace")
-        sys.stdout.buffer.write(fallback)
-        sys.stdout.flush()
+    with contextlib.suppress(BrokenPipeError):
+        try:
+            print(message, flush=True)
+        except UnicodeEncodeError:
+            fallback = (message + "\n").encode("utf-8", errors="replace")
+            sys.stdout.buffer.write(fallback)
+            sys.stdout.flush()
 
 
 def _compact_error(exc: Exception, limit: int = 700) -> str:
@@ -418,6 +420,7 @@ async def run_browser(
 async def _async_main() -> int:
     loop = asyncio.get_running_loop()
     _setup_signals(loop)
+    watch_launcher(_shutdown)
     from src.services.browser.cores import launch_binding
     from src.services.browser.gpu_probe import install_headless_gpu_probe
     from src.services.browser.lease import profile_lease

@@ -1,7 +1,9 @@
 import asyncio
+import contextlib
 import json
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 import time
@@ -11,6 +13,7 @@ import pytest
 
 from src.models.profile import Profile
 from src.services.browser import display, process, runner
+from src.services.browser.lease import profile_lease, waiting_lease
 
 linux_only = pytest.mark.skipif(
     not pathlib.Path("/proc/self/stat").exists(), reason="Xvfb records read /proc (Linux)"
@@ -125,6 +128,78 @@ def test_runners_share_the_launcher_session(monkeypatch):
     monkeypatch.setattr(process.subprocess, "Popen", lambda args, **kw: captured.update(kw))
     process.spawn_browser(Profile(name="p"))
     assert not captured.get("start_new_session")
+
+
+@pytest.mark.parametrize("engine", ["chrome", "camoufox"])
+def test_runner_releases_profile_after_launcher_is_killed(tmp_path, engine):
+    profile_dir = tmp_path / "Thử nghiệm 1"
+    runner_pid_file = tmp_path / "runner.pid"
+    ready = tmp_path / "ready"
+    saved = tmp_path / "saved"
+    child = f"""
+import asyncio, sys
+from pathlib import Path
+
+if {engine!r} == "chrome":
+    from chrome_engine import runner
+    entry = lambda: runner._async_main(sys.argv[1:])
+else:
+    from src.services.browser import runner
+    entry = runner._async_main
+
+async def run_browser(*args):
+    Path({str(ready)!r}).touch()
+    await runner._shutdown.wait()
+    Path({str(saved)!r}).write_text("saved session", encoding="utf-8")
+    return 0
+
+runner.run_browser = run_browser
+sys.exit(asyncio.run(entry()))
+"""
+    parent_code = f"""
+import sys, time
+from pathlib import Path
+from src.models.profile import Profile
+from src.services.browser import process
+
+profile = Profile({profile_dir.name!r}, engine={engine!r}, os_type="macos")
+command = process.runner_command(profile)
+process.runner_command = lambda _: [sys.executable, "-c", {child!r}, *command[-5:]]
+runner = process.spawn_browser(profile)
+Path({str(runner_pid_file)!r}).write_text(str(runner.pid), encoding="utf-8")
+time.sleep(60)
+"""
+    parent = subprocess.Popen(
+        [sys.executable, "-c", parent_code],
+        cwd=pathlib.Path(process.__file__).resolve().parents[3],
+        env={
+            **os.environ,
+            "FOXPROFILE_DATA_DIR": str(tmp_path),
+            "FOXPROFILE_PROFILES_FILE": str(tmp_path / "profiles.json"),
+        },
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while not (ready.exists() and runner_pid_file.exists()) and time.monotonic() < deadline:
+            assert parent.poll() is None
+            time.sleep(0.01)
+        assert ready.exists(), "runner did not start"
+        with pytest.raises((BlockingIOError, PermissionError)), profile_lease(profile_dir):
+            pass
+        parent.kill()
+        parent.wait(timeout=5)
+        try:
+            with waiting_lease(profile_dir, timeout=5):
+                assert saved.read_text(encoding="utf-8") == "saved session"
+        except (BlockingIOError, PermissionError):
+            pytest.fail("runner still holds the profile lease after launcher death")
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait(timeout=5)
+        if not saved.exists() and runner_pid_file.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(runner_pid_file.read_text(encoding="utf-8")), signal.SIGTERM)
 
 
 # --- display records: platform independent ---------------------------------------------

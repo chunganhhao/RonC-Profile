@@ -26,19 +26,13 @@ from chrome_engine.engine import ChromeEngine, EngineError
 from src.core.config import DATA_DIR, HEADLESS, LOG_DIR, LOG_LEVEL, RESTORE_TABS
 from src.core.logging import get_logger, setup_logging
 from src.services.browser import control, session
+from src.services.browser.process import watch_launcher
 from src.services.browser.runner import _read_profile_extra, restore_tabs, snapshot_tabs
+from src.services.browser.runner import _safe_print as _say
 from src.services.browser.timing import launch_stage, report_timing
 from src.utils.validation import normalize_start_url
 
 _shutdown = asyncio.Event()
-
-
-def _say(message: str) -> None:
-    try:
-        print(message, flush=True)
-    except UnicodeEncodeError:
-        sys.stdout.buffer.write((message + "\n").encode("utf-8", errors="replace"))
-        sys.stdout.flush()
 
 
 def _compact(exc: BaseException, limit: int = 220) -> str:
@@ -220,6 +214,7 @@ async def _async_main(argv: list[str]) -> int:
             loop.add_signal_handler(sig, _shutdown.set)
     except NotImplementedError:
         pass
+    watch_launcher(_shutdown)
     from src.services.browser.cores import launch_binding
     from src.services.browser.lease import profile_lease
 
