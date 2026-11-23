@@ -610,6 +610,40 @@ def _fail_pool_save(monkeypatch):
     monkeypatch.setattr(pool_mod.tempfile, "mkstemp", fail_mkstemp)
 
 
+def test_proxy_pool_merges_imports_from_stale_instances(tmp_path):
+    path = str(tmp_path / "proxies.json")
+    first = ProxyPoolService(path)
+    second = ProxyPoolService(path)
+    assert first.list_entries() == second.list_entries() == []
+
+    assert first.bulk_import("192.0.2.10:8080|Alpha") == (1, 0)
+    assert first.bulk_import("198.51.100.20:8080|Beta") == (1, 0)
+    assert second.bulk_import("203.0.113.30:8080|Gamma") == (1, 0)
+
+    for pool in (first, second, ProxyPoolService(path)):
+        assert [entry.label for entry in pool.list_entries()] == ["Alpha", "Beta", "Gamma"]
+
+
+def test_proxy_pool_health_check_merges_changes_while_probe_runs(tmp_path):
+    path = str(tmp_path / "proxies.json")
+    first = ProxyPoolService(path)
+    entry = first.add_proxy("192.0.2.10:8080", "Original")
+    second = ProxyPoolService(path)
+
+    class ConcurrentWriter:
+        def check_proxy_sync(self, proxy, timeout):
+            assert proxy == entry.proxy
+            second.add_proxy(proxy, "Relabelled")
+            second.add_proxy("198.51.100.20:8080", "New")
+            return True, "192.0.2.10"
+
+    first.check_entry(entry.id, ConcurrentWriter())
+    assert [(e.label, e.status) for e in ProxyPoolService(path).list_entries()] == [
+        ("Relabelled", "working"),
+        ("New", "untested"),
+    ]
+
+
 def test_proxy_pool_bulk_import_save_error_keeps_pool(tmp_path, monkeypatch):
     path = tmp_path / "proxies.json"
     pool = ProxyPoolService(file_path=str(path))

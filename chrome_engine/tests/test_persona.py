@@ -281,6 +281,14 @@ def test_macos_generated_model_cpu_constraints_and_defaults():
     assert not any(a.startswith("--fingerprint-display-profile") for a in baseline.to_args())
 
 
+def test_legacy_mac_cpu_matches_its_apple_silicon_chip():
+    for seed in range(3, 3 * 600, 3):
+        p = personas.generate("macos", seed=seed, coherence_026=False)
+        slot = personas.apple_silicon_slot_for_seed(seed)
+        assert p.hardware_concurrency in {cores for cores, _ in slot.cores}
+    assert personas.generate("macos", seed=495, coherence_026=False).hardware_concurrency == 8
+
+
 def test_save_cleans_up_temp_file_on_replace_failure(tmp_path, monkeypatch):
     from pathlib import Path
 

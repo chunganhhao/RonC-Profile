@@ -1,15 +1,20 @@
 import json
+import os
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import create_app
+from src.models.profile import Profile
 from src.services.browser.launcher import BrowserLauncher, ProfileBusyError, _LaunchResult
 from src.services.profile import manager
-from src.services.profile.transfer import import_from_zip
+from src.services.profile.transfer import export_to_zip, import_from_zip
 
 
 def _archive(path, name, files):
@@ -88,6 +93,94 @@ def test_export_api_does_not_archive_its_output(tmp_path, monkeypatch, destinati
         assert archive.namelist() == ["profile.json", "data/Default/Preferences"]
         assert json.loads(archive.read("profile.json"))["engine"] == "chrome"
         assert archive.read("data/Default/Preferences") == b'{"fixture": true}'
+
+
+def test_export_skips_chromium_lock_links_and_keeps_browser_data(tmp_path):
+    data = tmp_path / "profile"
+    default = data / "Default"
+    default.mkdir(parents=True)
+    prefs = default / "Preferences"
+    prefs.write_bytes(b'{"fixture": true}')
+    (data / "chrome_persona.json").write_bytes(b"{}")
+    try:
+        (data / "SingletonLock").symlink_to("test-host-123")
+        (data / "SingletonCookie").symlink_to("test-cookie")
+        (data / "SingletonSocket").symlink_to(prefs)
+    except OSError:
+        pytest.skip("Symlinks unavailable")
+
+    ok, path = export_to_zip(Profile(name="alice", engine="chrome"), str(data), str(tmp_path))
+    assert ok, path
+    with zipfile.ZipFile(path) as archive:
+        assert set(archive.namelist()) == {
+            "profile.json",
+            "data/chrome_persona.json",
+            "data/Default/Preferences",
+        }
+        assert archive.read("data/Default/Preferences") == b'{"fixture": true}'
+
+
+def test_concurrent_exports_do_not_archive_each_others_staging_files(tmp_path, monkeypatch):
+    (tmp_path / "Preferences").write_bytes(b"{}")
+    walk = os.walk
+    both_scanning = Barrier(2)
+
+    def concurrent_walk(path):
+        for listing in walk(path):
+            both_scanning.wait(timeout=5)
+            yield listing
+
+    monkeypatch.setattr(os, "walk", concurrent_walk)
+    monkeypatch.setattr(
+        "src.services.profile.transfer.datetime",
+        SimpleNamespace(now=lambda: datetime(2026, 1, 1)),
+    )
+    with ThreadPoolExecutor(2) as workers:
+        results = list(
+            workers.map(
+                lambda _: export_to_zip(Profile(name="alice"), str(tmp_path), str(tmp_path)),
+                range(2),
+            )
+        )
+    assert all(ok for ok, _ in results), results
+    assert results[0][1] != results[1][1]
+    for _, path in results:
+        with zipfile.ZipFile(path) as archive:
+            assert archive.namelist() == ["profile.json", "data/Preferences"]
+
+
+def test_failed_export_does_not_leave_partial_archive(tmp_path, monkeypatch):
+    data = tmp_path / "profile"
+    data.mkdir()
+    (data / "Preferences").write_bytes(b"{}")
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("injected ZIP write failure")
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", fail_write)
+    ok, error = export_to_zip(Profile(name="alice"), str(data), str(tmp_path))
+    assert not ok and "injected ZIP write failure" in error
+    assert list(tmp_path.iterdir()) == [data]
+
+
+def test_export_fails_when_a_browser_storage_file_disappears(tmp_path, monkeypatch):
+    data = tmp_path / "IndexedDB"
+    data.mkdir()
+    manifest = data / "MANIFEST-000001"
+    manifest.write_text("references 000007.ldb", encoding="utf-8")
+    table = data / "000007.ldb"
+    table.write_bytes(b"fixture")
+    write = zipfile.ZipFile.write
+
+    def compact_before_copy(archive, filename, *args, **kwargs):
+        if Path(filename) == table:
+            table.unlink()
+        return write(archive, filename, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", compact_before_copy)
+    ok, error = export_to_zip(Profile(name="alice"), str(data), str(tmp_path))
+    assert not ok and table.name in error
+    assert list(tmp_path.iterdir()) == [data]
 
 
 @pytest.fixture

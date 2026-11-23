@@ -39,7 +39,6 @@ _PLATFORM_VERSIONS: dict[str, list[tuple[str, float]]] = {
 }
 _CORES: dict[str, list[tuple[int, float]]] = {
     "windows": [(4, 0.15), (8, 0.35), (12, 0.20), (16, 0.25), (20, 0.05)],
-    "macos": [(8, 0.35), (10, 0.25), (11, 0.05), (12, 0.20), (14, 0.10), (16, 0.05)],
     "linux": [(4, 0.20), (8, 0.35), (12, 0.20), (16, 0.25)],
 }
 
@@ -396,10 +395,20 @@ _APPLE_SILICON_SLOTS: tuple[AppleSiliconSlot, ...] = (
 )
 
 
+MACOS_CPU_COUNTS_BY_SLOT = tuple(
+    tuple(sorted(c for c, _ in slot.cores)) for slot in _APPLE_SILICON_SLOTS
+)
+
+
 def apple_silicon_slot_for_seed(seed: int) -> AppleSiliconSlot:
     """Return the C++-matched Apple Silicon chip slot for an aligned or raw seed."""
     aligned = align_seed_for_device_memory(seed)
     return _APPLE_SILICON_SLOTS[aligned % len(_APPLE_SILICON_SLOTS)]
+
+
+def macos_cpu_counts_for_seed(seed: int) -> tuple[int, ...]:
+    aligned = align_seed_for_device_memory(seed)
+    return MACOS_CPU_COUNTS_BY_SLOT[aligned % len(MACOS_CPU_COUNTS_BY_SLOT)]
 
 
 def allowed_macos_cores_for_model(
@@ -668,8 +677,8 @@ def generate(
     if seed is None:
         seed = align_seed_for_device_memory(1 + secrets.randbelow(SEED_MAX))
     rng = Random(f"{seed}:{platform}")
-    if platform == "macos" and coherence_026:
-        slot = apple_silicon_slot_for_seed(seed)
+    slot = apple_silicon_slot_for_seed(seed) if platform == "macos" else None
+    if slot is not None and coherence_026:
         display = rng.choices(slot.displays, weights=[d.weight for d in slot.displays], k=1)[0]
         dock_height = rng.choice((0, 64, 68, 72, 76))
         avail_height = display.height - display.avail_top - dock_height
@@ -698,7 +707,7 @@ def generate(
         platform=platform,
         platform_version=_pick(rng, _PLATFORM_VERSIONS[platform]),
         brand=brand,
-        hardware_concurrency=_pick(rng, _CORES[platform]),
+        hardware_concurrency=_pick(rng, slot.cores if slot is not None else _CORES[platform]),
         timezone=timezone,
         locale=locale,
     )

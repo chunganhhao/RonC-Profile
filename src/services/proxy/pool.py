@@ -7,7 +7,7 @@ import os
 import tempfile
 import threading
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from ...core import config as app_config
@@ -15,6 +15,7 @@ from ...core.logging import get_logger
 from ...services.profile.manager import ProfileStoreChangedError
 from ...utils.proxy_parser import mask_proxy, normalize_proxy
 from ...utils.validation import validate_proxy_format
+from ..browser.lease import store_lease
 
 if TYPE_CHECKING:
     from ...interfaces.protocols import IProfileManager, IProxyService
@@ -79,23 +80,40 @@ class ProxyPoolService:
     def file_path(self) -> str:
         return self._explicit_path or app_config.PROXY_POOL_FILE
 
+    def _read_entries(self) -> dict[str, ProxyPoolEntry]:
+        try:
+            with open(self.file_path, encoding="utf-8") as f:
+                raw = json.load(f)
+            items = raw.get("proxies", []) if isinstance(raw, dict) else raw
+            if not isinstance(items, list):
+                raise ValueError
+            entries = {}
+            for item in items:
+                if isinstance(item, dict) and (entry := ProxyPoolEntry.from_dict(item)):
+                    entries[entry.id] = entry
+            return entries
+        except FileNotFoundError:
+            return {}
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise OSError("Invalid proxy pool store") from exc
+
     def reload(self) -> None:
         with self._lock:
-            self._entries.clear()
-            path = self.file_path
-            if not os.path.exists(path):
-                return
             try:
-                with open(path, encoding="utf-8") as f:
-                    raw = json.load(f)
-                items = raw if isinstance(raw, list) else raw.get("proxies", [])
-                for item in items:
-                    if isinstance(item, dict):
-                        entry = ProxyPoolEntry.from_dict(item)
-                        if entry:
-                            self._entries[entry.id] = entry
-            except Exception as e:
-                logger.error("Failed to load proxy pool from %s: %s", path, e)
+                self._entries = self._read_entries()
+            except OSError as e:
+                logger.error("Failed to load proxy pool from %s: %s", self.file_path, e)
+
+    @contextlib.contextmanager
+    def _write_transaction(self):
+        with self._lock, store_lease(self.file_path):
+            previous = self._entries
+            self._entries = self._read_entries()
+            try:
+                yield
+            except BaseException:
+                self._entries = previous
+                raise
 
     def _save(self) -> None:
         with self._lock:
@@ -115,10 +133,12 @@ class ProxyPoolService:
 
     def list_entries(self) -> list[ProxyPoolEntry]:
         with self._lock:
+            self.reload()
             return list(self._entries.values())
 
     def get_entry(self, proxy_id: str) -> ProxyPoolEntry | None:
         with self._lock:
+            self.reload()
             return self._entries.get(proxy_id)
 
     def _upsert_locked(self, raw_str: str, label: str = "") -> ProxyPoolEntry | None:
@@ -143,7 +163,7 @@ class ProxyPoolService:
         return entry
 
     def add_proxy(self, raw_str: str, label: str = "") -> ProxyPoolEntry | None:
-        with self._lock:
+        with self._write_transaction():
             entry = self._upsert_locked(raw_str, label)
             if entry is not None:
                 self._save()
@@ -156,8 +176,7 @@ class ProxyPoolService:
         """
         added = 0
         invalid = 0
-        with self._lock:
-            previous = {pid: replace(entry) for pid, entry in self._entries.items()}
+        with self._write_transaction():
             for raw_line in (text or "").splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -175,15 +194,11 @@ class ProxyPoolService:
                 else:
                     invalid += 1
             if added > 0:
-                try:
-                    self._save()
-                except Exception:
-                    self._entries = previous
-                    raise
+                self._save()
         return added, invalid
 
     def remove_proxy(self, proxy_id: str) -> bool:
-        with self._lock:
+        with self._write_transaction():
             if proxy_id not in self._entries:
                 return False
             del self._entries[proxy_id]
@@ -191,7 +206,7 @@ class ProxyPoolService:
             return True
 
     def clear_dead(self) -> int:
-        with self._lock:
+        with self._write_transaction():
             dead_ids = [pid for pid, e in self._entries.items() if e.status == "dead"]
             for pid in dead_ids:
                 del self._entries[pid]
@@ -205,19 +220,18 @@ class ProxyPoolService:
         proxy_service: IProxyService,
         timeout: int = 10,
     ) -> ProxyPoolEntry | None:
-        with self._lock:
-            entry = self._entries.get(proxy_id)
-            if not entry:
-                return None
-            target_proxy = entry.proxy
+        entry = self.get_entry(proxy_id)
+        if entry is None:
+            return None
+        target_proxy = entry.proxy
 
         t0 = time.monotonic()
         ok, msg = proxy_service.check_proxy_sync(target_proxy, timeout=timeout)
         elapsed_ms = max(1, int((time.monotonic() - t0) * 1000))
 
-        with self._lock:
+        with self._write_transaction():
             entry = self._entries.get(proxy_id)
-            if not entry:
+            if entry is None or entry.proxy != target_proxy:
                 return None
             entry.last_checked = time.time()
             entry.latency_ms = elapsed_ms if ok else 0
@@ -247,9 +261,7 @@ class ProxyPoolService:
     def usage_counts(self, pm: IProfileManager) -> dict[str, int]:
         """Count how many profiles currently use each pool entry."""
         counts: dict[str, int] = {}
-        with self._lock:
-            entries = list(self._entries.values())
-        for e in entries:
+        for e in self.list_entries():
             counts[e.id] = 0
         for prof in pm.list_profiles():
             if not prof.proxy:
@@ -265,14 +277,12 @@ class ProxyPoolService:
         pm: IProfileManager,
         only_working: bool = False,
     ) -> ProxyPoolEntry | None:
-        with self._lock:
-            candidates = [
-                e
-                for e in self._entries.values()
-                if (e.status == "working" if only_working else e.status != "dead")
-            ]
-            if not candidates and not only_working:
-                candidates = list(self._entries.values())
+        entries = self.list_entries()
+        candidates = [
+            e for e in entries if (e.status == "working" if only_working else e.status != "dead")
+        ]
+        if not candidates and not only_working:
+            candidates = entries
         if not candidates:
             return None
         counts = self.usage_counts(pm)
@@ -286,14 +296,12 @@ class ProxyPoolService:
         only_working: bool = False,
     ) -> int:
         """Assign pool proxies across `profile_names` in round-robin order."""
-        with self._lock:
-            pool = [
-                e
-                for e in self._entries.values()
-                if (e.status == "working" if only_working else e.status != "dead")
-            ]
-            if not pool and not only_working:
-                pool = list(self._entries.values())
+        entries = self.list_entries()
+        pool = [
+            e for e in entries if (e.status == "working" if only_working else e.status != "dead")
+        ]
+        if not pool and not only_working:
+            pool = entries
         if not pool or not profile_names:
             return 0
 
