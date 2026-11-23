@@ -588,7 +588,7 @@ def test_generic_lease_windows_mode_does_not_reject_synthetic_0777(tmp_path, mon
 
     from src.services.browser import lease
 
-    source = inspect.getsource(lease.profile_lease.__wrapped__)
+    source = inspect.getsource(lease._lease_file)
     condition = next(
         n.test
         for n in ast.walk(ast.parse(source))
