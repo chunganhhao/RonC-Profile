@@ -213,7 +213,7 @@ def test_warming_scheduler_execution_and_due_slots(tmp_path, monkeypatch):
         schedule_time="14:15",
         repeat_daily=True,
     )
-    monkeypatch.setattr(ws, "run_task_async", lambda tid, *a, **kw: True)
+    monkeypatch.setattr(ws, "_execute_task", lambda *_args: None)
     dt = datetime.datetime(2026, 11, 8, 14, 15, 10)
     assert ws.check_due_tasks(pm, bl, now=dt) == [daily.id]
     # Calling again in the same minute must not re-trigger
@@ -240,6 +240,55 @@ def test_due_warming_task_retries_in_same_minute_after_store_contention(tmp_path
     assert WarmingSchedulerService(file_path=path).get_task(due.id).last_triggered_slot == (
         "2026-11-08 14:15"
     )
+
+
+def test_due_warming_uses_shared_store_after_peer_deletes_task(tmp_path, monkeypatch):
+    path = str(tmp_path / "tasks.json")
+    deleting = WarmingSchedulerService(file_path=path)
+    deleted = deleting.add_task("Deleted", ["Profile"], schedule_time="14:15")
+    dispatching = WarmingSchedulerService(file_path=path)
+    writer = WarmingSchedulerService(file_path=path)
+    assert dispatching.get_task(deleted.id) is not None
+    added = writer.add_task("Kept", ["Profile"], schedule_time="14:15")
+    assert deleting.delete_task(deleted.id)
+    assert [t.id for t in WarmingSchedulerService(file_path=path).list_tasks()] == [added.id]
+    executed = []
+    finished = threading.Event()
+
+    def execute(task, *_args):
+        executed.append(task.id)
+        finished.set()
+
+    monkeypatch.setattr(dispatching, "_execute_task", execute)
+    dt = datetime.datetime(2026, 11, 8, 14, 15, 10)
+
+    assert dispatching.check_due_tasks(None, None, now=dt) == [added.id]
+    assert finished.wait(5)
+    assert executed == [added.id]
+    assert writer.check_due_tasks(None, None, now=dt) == []
+    assert [t.id for t in WarmingSchedulerService(file_path=path).list_tasks()] == [added.id]
+
+
+def test_manual_warming_run_of_peer_deleted_task_returns_not_found(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "tasks.json"))
+    deleting = WarmingSchedulerService()
+    deleted = deleting.add_task("Deleted", ["Profile"])
+    container = Container()
+    dispatching = container.warming_scheduler
+    assert dispatching.get_task(deleted.id) is not None
+    assert deleting.delete_task(deleted.id)
+    executed = []
+    monkeypatch.setattr(dispatching, "_execute_task", lambda task, *_: executed.append(task.id))
+
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        res = client.post(f"/api/v1/warming/tasks/{deleted.id}/run")
+
+    assert res.status_code == 404
+    assert res.json() == {"detail": "Warming task not found"}
+    assert not executed
 
 
 def test_profile_rename_retargets_saved_warming_task(tmp_path, monkeypatch):

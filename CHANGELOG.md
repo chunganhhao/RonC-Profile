@@ -6,6 +6,8 @@
 
 ### Sửa
 
+- Không chạy lịch ngâm tài khoản đã bị xoá từ tiến trình khác; web giữ ghi chú nhiều dòng và tiêu điểm ô chọn, đồng thời chỉ tải lại danh sách một lần khi mở hoặc dừng nhiều profile.
+
 - Tác vụ ngâm tài khoản giữ đúng profile khi đổi tên và không treo ở trạng thái đang chạy khi không lưu được; web cập nhật fingerprint theo danh sách, hiển thị đúng cổng proxy và cho phép sửa URL mở mặc định.
 
 - Profile Chrome mới mặc định theo hệ điều hành của máy; lỗi mở trình duyệt hiển thị lý do dễ hiểu bằng đúng ngôn ngữ trên desktop và web, tooltip giữ lý do thất bại và nhãn phân trang rõ ràng hơn. Trên macOS, mặc định tắt Impeller để tooltip không bị lỗi chữ, vẫn giữ giá trị `FLET_NO_IMPELLER` do người dùng đặt.

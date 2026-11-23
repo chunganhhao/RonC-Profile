@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ...core.logging import get_logger
-from ...services.warming.scheduler import WARMING_PRESETS
+from ...services.warming.scheduler import WARMING_PRESETS, WarmingTaskNotFound
 from ..dependencies import (
     get_browser_launcher,
     get_event_bus,
@@ -75,10 +75,10 @@ def run_warming_task(
     bl: IBrowserLauncher = Depends(get_browser_launcher),
     eb: EventBus = Depends(get_event_bus),
 ) -> dict:
-    if ws.get_task(task_id) is None:
-        raise HTTPException(status_code=404, detail="Warming task not found")
     try:
-        started = ws.run_task_async(task_id, pm, bl, on_update=eb.emit)
+        started = ws.run_task_async(task_id, pm, bl, on_update=eb.emit, require_exists=True)
+    except WarmingTaskNotFound as exc:
+        raise HTTPException(status_code=404, detail="Warming task not found") from exc
     except OSError as exc:
         logger.exception("Could not save warming task start")
         raise HTTPException(status_code=500, detail="Could not save warming task start") from exc

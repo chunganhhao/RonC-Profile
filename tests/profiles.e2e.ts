@@ -1,6 +1,42 @@
 import { test } from '@e2e-dev/web';
 import { expect } from 'e2e';
 
+test('changing Startup URL preserves a multiline inline note', async ({ app, browser }) => {
+  const note = 'Line one\nLine two';
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await browser.locator('[aria-label="Edit Notes: Studio Gmail"]').click();
+  await browser.locator('#field-value').fill(note);
+  await browser.locator('#modal-root .btn-act').click();
+  await expect(browser.locator('.row.body:has([aria-label="Edit Notes: Studio Gmail"]) .notes-line')).toHaveAttribute('title', note);
+  await browser.locator('[aria-label="Edit: Studio Gmail"]').click();
+  await browser.locator('#f-start-url').fill('https://example.test/start');
+  await browser.locator('#modal-root .btn-act').click();
+  await expect(browser.locator('[role=dialog]')).toHaveCount(0);
+  await browser.reload();
+  await browser.locator('[aria-label="Edit Notes: Studio Gmail"]').click();
+  await expect(browser.locator('#field-value')).toHaveValue(note);
+});
+
+test('Space keeps keyboard focus on the selected row', async ({ app, browser }) => {
+  await browser.setViewport({ width: 1400, height: 1000 });
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  const header = browser.locator('.head-row input[type=checkbox]');
+  const checkbox = browser.locator('.row.body input[type=checkbox]').first();
+  await expect(header).toBeVisible();
+  await browser.evaluate(() => document.querySelector<HTMLInputElement>('.head-row input[type=checkbox]')!.focus());
+  await browser.keyboard.press('Tab');
+  await expect(browser.locator('.row.body input[type=checkbox]:focus')).toHaveCount(1);
+  await browser.keyboard.press('Space');
+  await expect(checkbox).toBeChecked();
+  await expect(browser.locator('.row.body input[type=checkbox]:focus')).toHaveCount(1);
+  await browser.keyboard.press('Tab');
+  await expect(browser.locator('.row.body .c-id button:focus')).toHaveCount(1);
+});
+
 test('profile field editors persist only their fields', async ({ app, browser }) => {
   await app.open('/');
   await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));

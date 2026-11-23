@@ -1008,6 +1008,7 @@ function render() {
   renderFilters();
 
   const sheet = $("sheet");
+  const focusedProfile = document.activeElement?.dataset.selectProfile;
   sheet.replaceChildren();
   if (!profiles.length) return sheet.append(emptyState(false));
   if (selected.size) sheet.append(bulkBar());
@@ -1017,6 +1018,9 @@ function render() {
   for (const p of pageItems) inner.append(row(p));
   sheet.append(h("div", { class: "sheet-scroll", id: "sheet-scroll" }, inner));
   sheet.append(sheetFooter(shown.length, totalPages));
+  if (focusedProfile !== undefined) {
+    inner.querySelector(`[data-select-profile="${CSS.escape(focusedProfile)}"]`)?.focus({ preventScroll: true });
+  }
   justLanded.clear();
 }
 
@@ -1125,7 +1129,7 @@ function row(p) {
   const isBusy = busy.has(p.name);
   const os = { windows: "WIN", macos: "MAC", linux: "LIN" }[p.os_type] || "OS";
   const engine = p.engine === "chrome" ? "Chrome" : "Camoufox";
-  const box = h("input", { type: "checkbox", "aria-label": t("select_row", { name: p.name }),
+  const box = h("input", { type: "checkbox", "data-select-profile": p.name, "aria-label": t("select_row", { name: p.name }),
     onchange: (e) => { e.target.checked ? selected.add(p.name) : selected.delete(p.name); render(); } });
   box.checked = selected.has(p.name);
   const proxy = p.proxy_display;
@@ -1316,11 +1320,13 @@ async function bulk(action) {
     if (deleted) toast(t("deleted_n", { n: deleted }) + (skipped ? " · " + t("bulk_skip_running", { n: skipped }) : ""));
     return refresh();
   }
-  const targets = profiles.filter((p) => names.includes(p.name) && (action === "launch" ? !running.has(p.name) : running.has(p.name)));
-  await Promise.all(targets.map((p) => toggle(p, { quiet: true })));
+  const targets = profiles.filter((p) => names.includes(p.name) && !busy.has(p.name) && (action === "launch" ? !running.has(p.name) : running.has(p.name)));
+  if (!targets.length) return;
+  await Promise.all(targets.map((p) => toggle(p, { quiet: true, refreshAfter: false })));
+  await refresh();
 }
 
-async function toggle(p, { quiet = false } = {}) {
+async function toggle(p, { quiet = false, refreshAfter = true } = {}) {
   const stopping = running.has(p.name);
   busy.set(p.name, stopping ? "stopping" : "starting");
   failed.delete(p.name);
@@ -1342,7 +1348,7 @@ async function toggle(p, { quiet = false } = {}) {
     toast(`${p.name}: ${reason}`, true);
   }
   busy.delete(p.name);
-  await refresh();
+  if (refreshAfter) await refresh();
 }
 
 function modal(build, { wide = false, onDismiss = null } = {}) {
@@ -1469,7 +1475,9 @@ function openEditor(p) {
     const initialStartUrl = p?.start_url || "";
     const startUrl = h("input", { id: "f-start-url", value: initialStartUrl, placeholder: "https://mail.google.com", inputmode: "url", autocomplete: "off", class: "data" });
     const recovery = h("input", { id: "f-recovery", value: p && p.recovery_email ? p.recovery_email : "", placeholder: t("recovery_hint"), autocomplete: "off", class: "data" });
-    const notesInput = h("input", { id: "f-notes", value: p && p.notes ? p.notes : "", placeholder: t("empty_notes"), autocomplete: "off" });
+    const notesInput = h("textarea", { id: "f-notes", rows: 3, placeholder: t("empty_notes"), autocomplete: "off" });
+    notesInput.value = p?.notes || "";
+    const initialNotes = notesInput.value.trim();
     let backupLoaded = !p, initialBackupCodes = "", backupDirty = false;
     const backupInput = h("textarea", { id: "f-backup-codes", rows: 3, maxlength: 4096, placeholder: t("backup_codes_placeholder"), autocomplete: "off", class: "data backup-sheet" + (p ? " hidden" : "") });
     backupInput.value = "";
@@ -1567,6 +1575,7 @@ function openEditor(p) {
         fpPayload.hardware_concurrency = null;
       }
       const rawBackup = normalizeBackupText(backupInput.value);
+      const notes = notesInput.value.trim();
       const body = {
         name: name.value.trim(),
         os_type: os.value,
@@ -1576,7 +1585,7 @@ function openEditor(p) {
         start_url: startUrl.value.trim() !== initialStartUrl ? startUrl.value.trim() : undefined,
         recovery_email: recovery.value.trim(),
         backup_codes: p ? (backupLoaded && rawBackup !== initialBackupCodes ? rawBackup : undefined) : (rawBackup || undefined),
-        notes: notesInput.value.trim(),
+        notes: p && notes === initialNotes ? undefined : notes,
         webrtc_mode: webrtcSelect.value,
         extension_ids: [...selectedExts],
         initial_fingerprint: (isChrome && (!p || hwChanged)) ? fpPayload : undefined,

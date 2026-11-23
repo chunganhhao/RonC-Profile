@@ -49,6 +49,10 @@ class WarmingTargetSaveError(OSError):
     pass
 
 
+class WarmingTaskNotFound(LookupError):
+    pass
+
+
 def validate_schedule_time(value: str) -> bool:
     val = (value or "").strip()
     if not val:
@@ -376,28 +380,44 @@ class WarmingSchedulerService:
         on_update: Callable[[], None] | None = None,
     ) -> bool:
         """Execute a warming task synchronously."""
-        with self._lock:
+        with self._store_lease():
             started = self._begin_task(task_id)
         if started is None:
             return False
         task, cancel_ev, _ = started
         return self._execute_task(task, cancel_ev, pm, bl, log_fn, step_dwell_seconds, on_update)
 
-    def _begin_task(self, task_id: str) -> tuple[WarmingTask, threading.Event, str] | None:
-        task = self._tasks.get(task_id)
-        if not task or task.status == "running":
+    def _begin_task(
+        self, task_id: str, *, scheduled_slot: str | None = None, require_exists: bool = False
+    ) -> tuple[WarmingTask, threading.Event, tuple[str, str]] | None:
+        latest = self._read_tasks().get(task_id)
+        if latest is None:
+            if require_exists:
+                raise WarmingTaskNotFound(task_id)
             return None
-        previous_status = task.status
+        task = self._tasks.get(task_id)
+        if task and task.status == "running":
+            return None
+        if latest.status == "running":
+            latest.status = "idle"
+        if task is None:
+            task = self._tasks[task_id] = latest
+        else:
+            task.__dict__.update(vars(latest))
+        self._saved_tasks[task_id] = task.to_dict()
+        previous_state = task.status, task.last_triggered_slot
         task.status = "running"
+        if scheduled_slot is not None:
+            task.last_triggered_slot = scheduled_slot
         cancel_ev = threading.Event()
         self._cancel_flags[task_id] = cancel_ev
         try:
             self._save()
         except Exception:
-            task.status = previous_status
+            task.status, task.last_triggered_slot = previous_state
             self._cancel_flags.pop(task_id, None)
             raise
-        return replace(task), cancel_ev, previous_status
+        return replace(task), cancel_ev, previous_state
 
     def _execute_task(
         self,
@@ -557,12 +577,17 @@ class WarmingSchedulerService:
         bl: IBrowserLauncher,
         log_fn: Callable[[str], None] | None = None,
         on_update: Callable[[], None] | None = None,
+        *,
+        require_exists: bool = False,
+        scheduled_slot: str | None = None,
     ) -> bool:
-        with self._lock:
-            started = self._begin_task(task_id)
+        with self._store_lease():
+            started = self._begin_task(
+                task_id, require_exists=require_exists, scheduled_slot=scheduled_slot
+            )
             if started is None:
                 return False
-            task, cancel_ev, previous_status = started
+            task, cancel_ev, previous_state = started
             try:
                 threading.Thread(
                     target=self._execute_task,
@@ -570,7 +595,8 @@ class WarmingSchedulerService:
                     daemon=True,
                 ).start()
             except RuntimeError:
-                self._tasks[task_id].status = previous_status
+                current = self._tasks[task_id]
+                current.status, current.last_triggered_slot = previous_state
                 self._cancel_flags.pop(task_id, None)
                 self._save()
                 raise
@@ -589,33 +615,18 @@ class WarmingSchedulerService:
         hhmm = dt.strftime("%H:%M")
         slot = dt.strftime("%Y-%m-%d %H:%M")
         triggered: list[str] = []
-        with self._lock:
-            due = [
-                t
-                for t in self._tasks.values()
-                if t.enabled
-                and t.schedule_time == hhmm
-                and t.status != "running"
-                and t.last_triggered_slot != slot
-            ]
-            if not due:
-                return triggered
-            with self._store_lease():
-                for task in due:
-                    previous_slot = task.last_triggered_slot
-                    task.last_triggered_slot = slot
-                    started = False
-                    try:
-                        started = self.run_task_async(
-                            task.id, pm, bl, log_fn=log_fn, on_update=on_update
-                        )
-                    finally:
-                        if not started:
-                            task.last_triggered_slot = previous_slot
-                            if self._saved_tasks[task.id]["last_triggered_slot"] == slot:
-                                self._save()
-                    if started:
-                        triggered.append(task.id)
+        with self._store_lease():
+            for task in self._read_tasks().values():
+                if (
+                    not task.enabled
+                    or task.schedule_time != hhmm
+                    or task.last_triggered_slot == slot
+                ):
+                    continue
+                if self.run_task_async(
+                    task.id, pm, bl, log_fn=log_fn, on_update=on_update, scheduled_slot=slot
+                ):
+                    triggered.append(task.id)
         return triggered
 
     def start_daemon(
