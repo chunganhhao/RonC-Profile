@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import pathlib
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import PlainTextResponse
+from pydantic import ValidationError
 
 from ...core.config import DATA_DIR
 from ...core.logging import get_logger
@@ -114,13 +116,15 @@ def list_profiles(
         rows = []
         for profile in profiles:
             info = fingerprint.summary(os.path.join(DATA_DIR, profile.name))
+            preview = None
+            if info is not None:
+                with contextlib.suppress(ValidationError):
+                    preview = FingerprintResponse(name=profile.name, exists=True, **info)
             rows.append(
                 PanelProfileResponse(
                     **profile.model_dump(),
                     proxy_display=mask_proxy(profile.proxy),
-                    fingerprint=FingerprintResponse(name=profile.name, exists=True, **info)
-                    if info is not None
-                    else None,
+                    fingerprint=preview,
                 )
             )
         return PanelProfileListResponse(profiles=rows, total=len(rows))
