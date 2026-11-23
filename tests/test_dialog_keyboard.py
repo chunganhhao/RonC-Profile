@@ -219,6 +219,55 @@ def test_dropdown_escape_seen_only_by_page_preserves_the_unsaved_profile(monkeyp
     assert page.on_keyboard_event is original_keyboard
 
 
+@pytest.mark.parametrize("action", ["cancel", "save", "escape", "dismiss"])
+def test_profile_close_stops_totp_timer(monkeypatch, action):
+    page = DialogPage(notify_dismiss=False)
+    timer = Mock()
+    timer_factory = Mock(return_value=timer)
+    monkeypatch.setattr("src.ui.dialogs.profile.threading.Timer", timer_factory)
+    open_profile_dialog(
+        page, None, Mock(return_value=None), Profile("Chromium demo", engine="chrome")
+    )
+    (dialog,) = page.dialogs
+    timer.start.assert_called_once_with()
+    timer.cancel.assert_not_called()
+
+    if action == "escape":
+        _send_key(page, "Escape")
+    elif action == "dismiss":
+        page.pop_dialog()
+        dialog.on_dismiss(None)
+    else:
+        _click_action(dialog, action == "save")
+
+    assert not page.dialogs
+    timer.cancel.assert_called_once_with()
+    timer_factory.call_args.args[1]()
+    timer_factory.assert_called_once()
+
+
+def test_profile_close_prevents_in_flight_totp_tick_from_restarting_timer(monkeypatch):
+    page = DialogPage(notify_dismiss=False)
+    current_timer, next_timer = Mock(), Mock()
+    timer_factory = Mock(return_value=current_timer)
+    monkeypatch.setattr("src.ui.dialogs.profile.threading.Timer", timer_factory)
+    open_profile_dialog(
+        page, None, Mock(return_value=None), Profile("Chromium demo", engine="chrome")
+    )
+    tick = timer_factory.call_args.args[1]
+
+    def close_editor(*_):
+        _send_key(page, "Escape")
+        return next_timer
+
+    timer_factory.side_effect = close_editor
+    tick()
+
+    assert not page.dialogs
+    current_timer.cancel.assert_called_once_with()
+    next_timer.start.assert_not_called()
+
+
 @pytest.mark.parametrize("is_edit", [False, True], ids=["create", "edit"])
 def test_enter_in_profile_name_runs_the_save_button_path(is_edit):
     page = DialogPage()

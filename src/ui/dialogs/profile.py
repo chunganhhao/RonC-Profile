@@ -270,6 +270,7 @@ def open_profile_dialog(
     )
 
     totp_timer_state: dict[str, Any] = {"active": True, "timer": None}
+    totp_timer_lock = threading.Lock()
 
     def _render_totp_state(notify: bool = True) -> None:
         raw = (two_fa_field.value or "").strip()
@@ -305,8 +306,10 @@ def open_profile_dialog(
             return
         timer = threading.Timer(1.0, _on_totp_tick)
         timer.daemon = True
-        totp_timer_state["timer"] = timer
-        timer.start()
+        with totp_timer_lock:
+            if totp_timer_state["active"]:
+                totp_timer_state["timer"] = timer
+                timer.start()
 
     def _on_totp_tick() -> None:
         if not totp_timer_state["active"]:
@@ -315,12 +318,13 @@ def open_profile_dialog(
         _schedule_totp_tick()
 
     def _stop_totp_timer(_: object = None) -> None:
-        totp_timer_state["active"] = False
-        timer = totp_timer_state.get("timer")
-        if timer is not None:
-            with contextlib.suppress(Exception):
-                timer.cancel()
-            totp_timer_state["timer"] = None
+        with totp_timer_lock:
+            totp_timer_state["active"] = False
+            timer = totp_timer_state.get("timer")
+            if timer is not None:
+                with contextlib.suppress(Exception):
+                    timer.cancel()
+                totp_timer_state["timer"] = None
         object.__setattr__(totp_preview_text, "_refresh_hook", None)
 
     two_fa_field.on_change = _update_totp_preview
