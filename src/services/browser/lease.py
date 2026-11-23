@@ -114,8 +114,17 @@ def discard_lease(path) -> None:
     Callers must make sure no process can take this lease meanwhile, or two processes
     could end up holding different files under the same name.
     """
-    with suppress(BlockingIOError, PermissionError), profile_lease(path), suppress(OSError):
-        os.unlink(_lease_file(path))
+    lock_file = _lease_file(path)
+    if not lock_file.exists():
+        return
+    try:
+        with profile_lease(path):
+            pass
+    except (BlockingIOError, PermissionError):
+        return
+    # Unlinked after release: Windows refuses to delete a file that is still open.
+    with suppress(OSError):
+        os.unlink(lock_file)
 
 
 @contextmanager
