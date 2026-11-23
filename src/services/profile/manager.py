@@ -585,8 +585,13 @@ class ProfileManager:
     def set_extension_assignments(self, extension_id: str, profile_names: set[str]) -> int:
         """Apply one extension's membership without overwriting other profile edits."""
         with self._lock:
+            profiles = self.list_profiles()
+            if not profile_names.issubset(profile.name for profile in profiles):
+                raise ProfileStoreChangedError(
+                    "Selected profiles no longer exist; reopen extension settings and try again"
+                )
             changed = []
-            for profile in self.list_profiles():
+            for profile in profiles:
                 ids = profile.extension_ids
                 should_have = profile.name in profile_names
                 if should_have == (extension_id in ids):

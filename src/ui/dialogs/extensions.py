@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import flet as ft
 
 from ...core.strings import get_string
+from ...services.profile.manager import ProfileStoreChangedError
 from ..theme.colors import COLORS, FONT_BOLD, FONT_DATA, FONT_SEMIBOLD
 from ..theme.styles import ACCENT_STYLE, DANGER_ICON_STYLE, ICON_STYLE, OUTLINE_STYLE
 from .responsive import bind_responsive_dialog
@@ -103,7 +104,11 @@ def open_extension_settings_dialog(
                 entry.id, selected_profiles, pm, pin_mode=new_pin, apply_to_all=all_chrome
             )
         except Exception as exc:
-            msg = get_string("ext_save_error", error=str(exc))
+            msg = (
+                get_string("ext_selection_changed")
+                if isinstance(exc, ProfileStoreChangedError)
+                else get_string("ext_save_error", error=str(exc))
+            )
             save_error.value = msg
             save_error.visible = True
             log(msg)

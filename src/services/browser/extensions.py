@@ -22,7 +22,7 @@ from ...core.logging import get_logger
 from .lease import waiting_lease
 
 if TYPE_CHECKING:
-    from ..profile.manager import ProfileManager
+    from ...interfaces.protocols import IProfileManager
 
 logger = get_logger("browser.extensions")
 
@@ -544,7 +544,7 @@ class ExtensionService:
         self,
         ext_id: str,
         profile_names: list[str],
-        profile_manager: ProfileManager | None,
+        profile_manager: IProfileManager | None,
         *,
         pin_mode: str | None = None,
         apply_to_all: bool | None = None,
