@@ -17,10 +17,11 @@ def test_localized_launch_error():
         set_language("vi")
         result = localize_launch_error(message)
         assert "EngineError" not in result
-        assert "windows" in result and "linux" in result
+        assert "Windows" in result and "Linux" in result
         assert "hệ điều hành" in result
         set_language("en")
-        assert "Choose the same OS" in localize_launch_error(message)
+        assert "Chrome profiles must use the same OS" in localize_launch_error(message)
+        assert "WebGPU" not in localize_launch_error(message)
         assert localize_launch_error("EngineError: Could not start") == "Could not start"
         assert localize_launch_error("Connection refused") == "Connection refused"
         assert localize_launch_error("") == ""

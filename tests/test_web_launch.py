@@ -20,7 +20,7 @@ def run_js(script):
     return json.loads(result.stdout)
 
 
-@pytest.mark.parametrize("host", ["windows", "macos", "linux"])
+@pytest.mark.parametrize("host", ["windows", "macos", "linux", None])
 def test_editor_uses_server_host_for_chrome(host):
     handler = re.search(r"engine.onchange = \(\) => \{(.*?)\n    \};", PANEL, re.S)[1]
     assert 'fetch("/api/v1/info")' in PANEL
@@ -39,7 +39,8 @@ def test_editor_uses_server_host_for_chrome(host):
         console.log(JSON.stringify([chrome, camoufox, os.value]));
         """
     )
-    assert result == [host, "macos", "windows"]
+    assert result == [host or "", "macos", "windows"]
+    assert "os_type: os.value || undefined" in PANEL
 
 
 @pytest.mark.parametrize("language", ["en", "vi"])
@@ -62,7 +63,10 @@ def test_panel_localizes_cross_os_error(language):
         ]));
         """
     )
-    assert "windows" in result[0] and "linux" in result[0]
+    assert "Windows" in result[0] and "Linux" in result[0]
     assert "EngineError" not in result[0]
-    assert ("hệ điều hành" if language == "vi" else "Choose the same OS") in result[0]
+    assert (
+        "hệ điều hành" if language == "vi" else "Chrome profiles must use the same OS"
+    ) in result[0]
+    assert "WebGPU" not in result[0]
     assert result[1:] == ["Could not start", "", "Connection refused"]

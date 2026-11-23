@@ -800,7 +800,7 @@ Object.assign(I18N.en, {
   backup_codes_loading: "Loading backup codes...", backup_codes_load_failed: "Failed to load backup codes: {e}", backup_codes_retry: "Retry",
   copy_backup_codes: "Copy All", copied_backup_codes: "Backup codes copied",
   footer_total: "Total: {n}", rows_per_page: "Rows per page", page_of: "Page {cur} of {tot}",
-  chrome_cross_os: "This profile uses {target}, but this computer runs {host}. Choose the same OS as this computer for the Chrome profile; native worker WebGPU can reveal the host GPU.",
+  chrome_cross_os: "This profile is set to {target}, but this computer runs {host}. Chrome profiles must use the same OS as this computer.",
   first_page: "First page", prev_page: "Previous page", next_page: "Next page", last_page: "Last page",
   toolbar_running: "Running ({r})"
 });
@@ -835,7 +835,7 @@ Object.assign(I18N.vi, {
   backup_codes_loading: "Đang tải mã dự phòng...", backup_codes_load_failed: "Không thể tải mã dự phòng: {e}", backup_codes_retry: "Thử lại",
   copy_backup_codes: "Chép tất cả", copied_backup_codes: "Đã sao chép mã dự phòng",
   footer_total: "Tổng cộng: {n}", rows_per_page: "Dòng mỗi trang", page_of: "Trang {cur} / {tot}",
-  chrome_cross_os: "Profile này dùng hệ điều hành {target}, nhưng máy đang chạy {host}. Hãy chọn hệ điều hành trùng với máy cho profile Chrome; WebGPU trong worker có thể làm lộ GPU của máy.",
+  chrome_cross_os: "Profile này đặt hệ điều hành {target}, nhưng máy đang chạy {host}. Profile Chrome phải dùng cùng hệ điều hành với máy.",
   first_page: "Trang đầu", prev_page: "Trang trước", next_page: "Trang sau", last_page: "Trang cuối",
   toolbar_running: "Đang mở ({r})"
 });
@@ -851,7 +851,8 @@ let hostOS;
 
 function localizeLaunchError(message) {
   const match = message.match(/A (windows|macos|linux) persona cannot be presented consistently on a (windows|macos|linux) host/);
-  return match ? t("chrome_cross_os", { target: match[1], host: match[2] }) : message.replace("EngineError: ", "");
+  const names = { windows: "Windows", macos: "macOS", linux: "Linux" };
+  return match ? t("chrome_cross_os", { target: names[match[1]], host: names[match[2]] }) : message.replace("EngineError: ", "");
 }
 const liveSince = new Map();     // name -> Date the profile was first seen running
 const justLanded = new Set();    // stamps to animate on the next render
@@ -1407,7 +1408,7 @@ function field(label, input, hint) {
 function openEditor(p) {
   modal((close) => {
     const name = h("input", { id: "f-name", value: p ? p.name : "", required: true, maxlength: 64, autocomplete: "off" });
-    const os = h("select", { id: "f-os" }, [["windows", "Windows"], ["macos", "macOS"], ["linux", "Linux"]].map(([v, label]) =>
+    const os = h("select", { id: "f-os" }, [["", t("geo_auto")], ["windows", "Windows"], ["macos", "macOS"], ["linux", "Linux"]].map(([v, label]) =>
       h("option", { value: v, selected: (p ? p.os_type : "macos") === v }, label)));
     const engine = h("select", { id: "f-engine", disabled: !!p },
       [["camoufox", t("engine_camoufox")], ["chrome", t("engine_chrome")]].map(([v, label]) =>
@@ -1456,7 +1457,7 @@ function openEditor(p) {
       renderHwNote();
     } }, icon("reload", true), t("roll_fp"));
     engine.onchange = () => {
-      if (!p) os.value = engine.value === "chrome" ? hostOS : "macos";
+      if (!p) os.value = engine.value === "chrome" ? (hostOS || "") : "macos";
       hwChanged = true;
       renderHwNote();
     };
@@ -1575,7 +1576,7 @@ function openEditor(p) {
       const rawBackup = normalizeBackupText(backupInput.value);
       const body = {
         name: name.value.trim(),
-        os_type: os.value,
+        os_type: os.value || undefined,
         proxy: proxy.value.trim() || null,
         timezone: tz.value.trim(),
         locale: loc.value.trim(),
@@ -1584,7 +1585,7 @@ function openEditor(p) {
         notes: notesInput.value.trim(),
         webrtc_mode: webrtcSelect.value,
         extension_ids: [...selectedExts],
-        initial_fingerprint: (isChrome && (!p || hwChanged)) ? fpPayload : undefined,
+        initial_fingerprint: (isChrome && os.value && (!p || hwChanged)) ? fpPayload : undefined,
       };
       if (!p) body.engine = engine.value;
       try {
