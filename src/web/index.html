@@ -1411,7 +1411,8 @@ function openEditor(p) {
         h("option", { value: v, selected: (p ? p.engine : "camoufox") === v }, label)));
     const engineNote = h("div", { class: "note" }, icon("alert", true), h("span", {}, t("engine_note")));
     const existingFp = p?.fingerprint;
-    let currentSeed = p
+    const needsDraftSeed = p && engine.value === "chrome" && os.value === "macos" && !existingFp?.seed;
+    let currentSeed = p && !needsDraftSeed
       ? (existingFp && existingFp.seed ? existingFp.seed : null)
       : Math.floor(100000000 + Math.random() * 2000000000);
     let seedRolled = !p;
@@ -1584,7 +1585,7 @@ function openEditor(p) {
       if (submitBtn) submitBtn.disabled = true;
       const isChrome = engine.value === "chrome";
       const fpPayload = { platform: os.value };
-      if (seedRolled && currentSeed != null) {
+      if ((seedRolled || (needsDraftSeed && coresOverridden)) && currentSeed != null) {
         fpPayload.seed = currentSeed;
       }
       if (coresOverridden && coresSelect.value) {
