@@ -20,6 +20,42 @@ def run_js(script):
     return json.loads(result.stdout)
 
 
+def test_extension_settings_can_retry_after_a_profile_rename():
+    settings = PANEL.split("function openExtensionSettingsModal(", 1)[1].split(
+        "\nasync function openExtensionsModal", 1
+    )[0]
+    result = run_js(
+        f"""
+        const entry = {{id: 'demo', name: 'Demo', assigned_profiles: ['Alice']}};
+        let profiles = [{{name: 'Alice', engine: 'chrome', extension_ids: ['demo']}}];
+        let confirm, closed = 0;
+        const calls = [], messages = [], enc = encodeURIComponent, t = key => key;
+        const toast = message => messages.push(message);
+        const modal = render => render(() => closed++);
+        const modalHead = () => {{}};
+        function h(tag, attrs, ...children) {{
+          if (tag === 'button' && children[0] === 'ext_confirm_btn') confirm = attrs.onclick;
+          return attrs;
+        }}
+        async function refresh() {{
+          profiles = [{{name: 'Alicia', engine: 'chrome', extension_ids: ['demo']}}];
+        }}
+        async function api(method, path, body) {{
+          calls.push(body.profile_names);
+          if (body.profile_names.includes('Alice')) throw {{status: 409}};
+        }}
+        function openExtensionSettingsModal({settings}
+        openExtensionSettingsModal(entry);
+        await confirm();
+        // The extension card still holds the old name even with the fresh profile list.
+        openExtensionSettingsModal(entry);
+        await confirm();
+        console.log(JSON.stringify([calls, messages, closed]));
+        """
+    )
+    assert result == [[["Alice"], ["Alicia"]], ["ext_selection_changed", "saved"], 1]
+
+
 @pytest.mark.parametrize("action", ["launch", "stop"])
 def test_bulk_browser_action_refreshes_lists_once(action):
     refresh = PANEL.split("async function refresh() {", 1)[1].split("\nconst FILTERS", 1)[0]

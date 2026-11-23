@@ -2006,14 +2006,13 @@ function openExtensionSettingsModal(extEntry, onSaved) {
   modal((close) => {
     let pinMode = extEntry.pin_mode || "custom";
     const applyAll = h("input", { type: "checkbox", checked: Boolean(extEntry.apply_to_all_chrome) });
-    const selectedProfs = new Set(extEntry.assigned_profiles || []);
+    const selectedProfs = new Set();
     const profList = h("div", { class: "ext-prof-list" },
       profiles.length
         ? profiles.map((p) => {
             const cb = h("input", { type: "checkbox", checked: (p.extension_ids || []).includes(extEntry.id),
               onchange: (e) => { e.target.checked ? selectedProfs.add(p.name) : selectedProfs.delete(p.name); } });
             if (cb.checked) selectedProfs.add(p.name);
-            else selectedProfs.delete(p.name);
             return h("label", { class: "check", style: "margin-top:2px" }, cb, h("span", {}, `${p.name} (${p.engine.toUpperCase()})`));
           })
         : h("span", { class: "muted" }, t("empty_title"))
