@@ -1,7 +1,16 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from chrome_engine.release import host_os
 
 
 class ProfileCreate(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def default_chrome_os(cls, data):
+        if isinstance(data, dict) and "os_type" not in data and data.get("engine") == "chrome":
+            return {**data, "os_type": host_os()}
+        return data
+
     name: str
     proxy: str | None = None
     os_type: str = "windows"

@@ -2,7 +2,7 @@ from collections.abc import Callable
 
 import flet as ft
 
-from ...core.strings import get_string
+from ...core.strings import get_string, localize_launch_error
 from ...models.profile import Profile, extract_backup_code_tokens
 from ...utils.proxy_parser import mask_proxy
 from ..theme.colors import COLORS, FONT_DATA, FONT_SEMIBOLD
@@ -190,7 +190,7 @@ def build_profile_card(
     on_copy_2fa: Callable[[str], None] | None = None,
     device: str = "",
     since: str = "",
-    failed: bool = False,
+    failed: str = "",
     row_index: int = 1,
     on_copy_user: Callable[[str], None] | None = None,
     on_copy_recovery: Callable[[str], None] | None = None,
@@ -631,13 +631,13 @@ def _stack(*lines: ft.Control) -> ft.Column:
     return ft.Column(spacing=1, alignment=ft.MainAxisAlignment.CENTER, controls=list(lines))
 
 
-def _stamp(is_loading: bool, is_running: bool, since: str, failed: bool = False) -> ft.Control:
+def _stamp(is_loading: bool, is_running: bool, since: str, failed: str = "") -> ft.Control:
     if failed and not is_loading and not is_running:
         return ft.Container(
             padding=ft.Padding.symmetric(horizontal=8, vertical=3),
             border_radius=5,
             border=ft.Border.all(1, COLORS["error"]),
-            tooltip=get_string("stamp_failed"),
+            tooltip=localize_launch_error(failed),
             content=ft.Text(
                 get_string("stamp_failed"),
                 size=11,

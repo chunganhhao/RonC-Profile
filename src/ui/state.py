@@ -17,7 +17,7 @@ class AppState:
         self._log_lines: list[str] = []
         self._loading_profiles: set[str] = set()
         # Profiles whose last launch exited before it was ready.
-        self.failed: set[str] = set()
+        self.failed: dict[str, str] = {}
         self._loading_lock = threading.Lock()
         self._log_lock = threading.Lock()
         self._last_log_ui_update: float = 0.0

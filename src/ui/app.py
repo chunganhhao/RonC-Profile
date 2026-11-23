@@ -7,7 +7,7 @@ import flet as ft
 from ..core.config import DATA_DIR
 from ..core.container import Container
 from ..core.logging import get_logger
-from ..core.strings import current_language, get_string, set_language
+from ..core.strings import current_language, get_string, localize_launch_error, set_language
 from ..interfaces.protocols import IBrowserLauncher, IProfileManager, IProxyService
 from ..services.browser import fingerprint
 from ..utils.totp import generate_totp
@@ -561,7 +561,8 @@ class App:
             self.state.toggle_selection(stale)
 
         running = self.bl.running_profile_names()
-        self.state.failed.intersection_update(all_names - running)
+        for name in set(self.state.failed) - (all_names - running):
+            self.state.failed.pop(name, None)
         for name in running - set(self._live_since):
             self._live_since[name] = time.strftime("%H:%M")
         for name in set(self._live_since) - running:
@@ -615,7 +616,7 @@ class App:
                     on_copy_2fa=self._on_copy_2fa,
                     device=self._device_label(p.name),
                     since=self._live_since.get(p.name, ""),
-                    failed=p.name in self.state.failed,
+                    failed=self.state.failed.get(p.name, ""),
                     row_index=start_offset + idx + 1,
                     active_feedback=self._active_feedback_for(p.name, now),
                     layout_width=self._profile_table_width,
@@ -760,9 +761,10 @@ class App:
 
     def _log(self, message: str) -> None:
         logger.info(message)
+        visible_message = localize_launch_error(message) if "LAUNCH_FAILED:" in message else message
         if self.refs is not None:
             self._toast_until = time.monotonic() + 2.4
-            self._toast_text.value = message
+            self._toast_text.value = visible_message
             self._toast_text.color = COLORS["live_ink"]
             self._toast_banner.visible = True
             for prefix in ("Updated:", "Đã cập nhật:", "Updated profile:", "Đã cập nhật hồ sơ:"):

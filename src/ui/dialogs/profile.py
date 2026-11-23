@@ -7,6 +7,8 @@ from typing import Any
 
 import flet as ft
 
+from chrome_engine.release import host_os
+
 from ...core.config import DATA_DIR
 from ...core.strings import get_string
 from ...interfaces.protocols import IProxyService
@@ -611,6 +613,9 @@ def open_profile_dialog(
     _render_fp_summary()
 
     def on_engine_change(_: ft.ControlEvent) -> None:
+        if not is_edit:
+            os_dropdown.value = host_os() if engine_dropdown.value == "chrome" else "macos"
+            _rebuild_fp(roll_new=True, os_changed=True)
         engine_note.visible = engine_dropdown.value == "chrome" and not is_edit
         _sync_hardware_controls_for_engine()
         _render_fp_summary()

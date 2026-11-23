@@ -2,6 +2,7 @@ import threading
 
 import pytest
 
+from src.core.strings import get_string
 from src.models.profile import Profile
 from src.services.browser import launcher as launcher_mod
 from src.services.browser.launcher import BrowserLauncher, ProfileBusyError
@@ -84,6 +85,50 @@ def test_failed_spawn_releases_the_profile(bl, monkeypatch):
 class _Profiles:
     def __init__(self, *names):
         self.profiles = {n: Profile(name=n) for n in names}
+
+
+def test_ui_keeps_launch_failure_and_clears_on_success():
+    from types import SimpleNamespace
+
+    state = AppState()
+    logs = []
+
+    def start(profile, log, _, on_ready, on_stop):
+        log("[demo] LAUNCH_FAILED: Could not start browser")
+        on_stop()
+        return True
+
+    browser = SimpleNamespace(is_running=lambda _: False, start_thread=start)
+    launch_or_stop("demo", _Profiles("demo"), browser, state, logs.append)
+    assert state.failed["demo"] == "Could not start browser"
+    assert logs == [
+        get_string("launching_profile", name="demo"),
+        "[demo] LAUNCH_FAILED: Could not start browser",
+    ]
+
+    def ready(profile, log, _, on_ready, on_stop):
+        assert "demo" not in state.failed
+        on_ready()
+        on_stop()
+        return True
+
+    browser.start_thread = ready
+    launch_or_stop("demo", _Profiles("demo"), browser, state, logs.append)
+    assert "demo" not in state.failed
+
+
+def test_ui_failure_without_protocol_has_fallback():
+    from types import SimpleNamespace
+
+    state = AppState()
+
+    def start(profile, log, _, on_ready, on_stop):
+        on_stop()
+        return True
+
+    browser = SimpleNamespace(is_running=lambda _: False, start_thread=start)
+    launch_or_stop("demo", _Profiles("demo"), browser, state, lambda _: None)
+    assert state.failed["demo"] == get_string("stamp_failed")
 
 
 def test_ui_click_does_not_stay_loading_when_launched_elsewhere(bl, monkeypatch):

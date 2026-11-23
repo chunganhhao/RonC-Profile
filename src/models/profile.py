@@ -1,4 +1,5 @@
 import re
+import sys
 from dataclasses import asdict, dataclass, field
 
 # Browser engines a profile can run on. A profile keeps its engine for life:
@@ -17,6 +18,13 @@ MAX_TAG_LENGTH = 64
 MAX_DISPLAY_ORDER = 1_000_000
 MAX_BACKUP_CODES_LENGTH = 4096
 MAX_BACKUP_CODE_TOKENS = 20
+
+
+def host_os() -> str:
+    return (
+        "windows" if sys.platform == "win32" else "macos" if sys.platform == "darwin" else "linux"
+    )
+
 
 _BACKUP_CODE_RE = re.compile(r"(?<!\d)(\d{4}\s+\d{4}|\d{8})(?!\d)")
 
@@ -127,7 +135,7 @@ def valid_display_order(value: object) -> bool:
 class Profile:
     name: str
     proxy: str | None = None
-    os_type: str = "windows"
+    os_type: str | None = None
     # None = follow the proxy's exit IP (Camoufox geoip); set to pin a value.
     timezone: str | None = None
     locale: str | None = None
@@ -149,6 +157,10 @@ class Profile:
     tags: list[str] = field(default_factory=list)
     extension_ids: list[str] = field(default_factory=list)
     display_order: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.os_type is None:
+            self.os_type = host_os() if self.engine == "chrome" else "windows"
 
     @property
     def effective_tags(self) -> list[str]:

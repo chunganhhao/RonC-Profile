@@ -34,6 +34,29 @@ def walk(control):
         yield from walk(content)
 
 
+def test_create_chrome_uses_host_os():
+    from chrome_engine.release import host_os
+
+    page = page_fake()
+    open_profile_dialog(page, None, Mock())
+    dialog = page.show_dialog.call_args.args[0]
+    dropdowns = [c for c in walk(dialog.content) if isinstance(c, ft.Dropdown)]
+    engine = next(c for c in dropdowns if {o.key for o in c.options} == {"camoufox", "chrome"})
+    os_picker = next(
+        c for c in dropdowns if {o.key for o in c.options} == {"windows", "macos", "linux"}
+    )
+    try:
+        assert os_picker.value == "macos"
+        engine.value = "chrome"
+        engine.on_select(None)
+        assert os_picker.value == host_os()
+        engine.value = "camoufox"
+        engine.on_select(None)
+        assert os_picker.value == "macos"
+    finally:
+        dialog.on_dismiss(None)
+
+
 def test_empty_extensions_do_not_expand_inside_a_wrapping_row():
     page = page_fake()
     service = SimpleNamespace(list_entries=lambda: [], usage_counts=lambda _: {})
