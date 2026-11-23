@@ -1,11 +1,12 @@
 """ASCII-only, value-free launch diagnostics for the runner's stdout log."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from time import perf_counter
 
 
 def report_timing(stage: str, started: float, status: str = "ok") -> None:
-    print(f"LAUNCH_TIMING {stage} {perf_counter() - started:.3f}s {status}", flush=True)
+    with suppress(BrokenPipeError):
+        print(f"LAUNCH_TIMING {stage} {perf_counter() - started:.3f}s {status}", flush=True)
 
 
 @contextmanager
