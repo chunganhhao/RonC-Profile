@@ -17,10 +17,18 @@ def open_confirm_dialog(
     action_label: str | None = None,
     action_icon: ft.IconData = ft.Icons.DELETE,
 ) -> None:
+    def _on_cancel(_: ft.ControlEvent) -> None:
+        if dlg.open:
+            page.pop_dialog()
+
+    def _on_key_down(event: ft.KeyDownEvent) -> None:
+        if event.key == "Escape":
+            _on_cancel(event)
 
     def _on_confirm(_: ft.ControlEvent) -> None:
-        on_confirm()
-        page.pop_dialog()
+        if dlg.open:
+            page.pop_dialog()
+            on_confirm()
 
     dlg = ft.AlertDialog(
         modal=True,
@@ -35,12 +43,22 @@ def open_confirm_dialog(
             color=COLORS["text_dim"],
         ),
         actions=[
-            ft.TextButton(get_string("cancel"), on_click=lambda _: page.pop_dialog()),
-            ft.Button(
-                action_label if action_label is not None else get_string("delete"),
-                icon=action_icon,
-                style=ERROR_STYLE,
-                on_click=_on_confirm,
+            ft.KeyboardListener(
+                autofocus=True,
+                on_key_down=_on_key_down,
+                content=ft.Row(
+                    tight=True,
+                    spacing=8,
+                    controls=[
+                        ft.TextButton(get_string("cancel"), on_click=_on_cancel),
+                        ft.Button(
+                            action_label if action_label is not None else get_string("delete"),
+                            icon=action_icon,
+                            style=ERROR_STYLE,
+                            on_click=_on_confirm,
+                        ),
+                    ],
+                ),
             ),
         ],
     )

@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- App desktop: cập nhật đồng thời số lượng Kho Proxy ở thanh bên và chân trang, giữ nội dung dài trong cột, cho phép hủy xác nhận xóa bằng Esc và giữ các nút đứng yên khi hiện thông báo lưu.
+
 - Sau khi app hoặc server bị buộc tắt, Chromium tự đóng an toàn để có thể mở lại, dừng hoặc xoá profile sau khi khởi động lại mà không mất dữ liệu.
 
 - Nhiều tiến trình dùng chung dữ liệu: hai lần sửa tiện ích cùng lúc không còn mất một thay đổi; Dừng ngâm tài khoản từ tiến trình khác thật sự dừng lượt chạy, tiến trình khác không chạy trùng tác vụ đang chạy; `GET /profiles/<name>` và MCP `get_profile` thấy ngay profile tiến trình khác vừa tạo. Thanh thao tác hàng loạt cho biết số profile đã chọn đang bị bộ lọc ẩn, và menu Giao diện/Ngôn ngữ trên web vừa màn hình 320 px.

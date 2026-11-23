@@ -194,15 +194,20 @@ def open_proxy_pool_dialog(
                                             ),
                                             ft.Text(
                                                 e.masked,
+                                                expand=3,
+                                                expand_loose=True,
                                                 size=12.5,
                                                 font_family=FONT_DATA,
                                                 color=COLORS["text_main"],
                                                 no_wrap=True,
                                                 overflow=ft.TextOverflow.ELLIPSIS,
+                                                tooltip=e.masked,
                                             ),
                                             *(
                                                 [
                                                     ft.Container(
+                                                        expand=2,
+                                                        expand_loose=True,
                                                         padding=ft.Padding.symmetric(
                                                             horizontal=6, vertical=1
                                                         ),
@@ -211,11 +216,14 @@ def open_proxy_pool_dialog(
                                                         border=ft.Border.all(
                                                             1, COLORS["rule_strong"]
                                                         ),
+                                                        tooltip=e.label,
                                                         content=ft.Text(
                                                             e.label,
                                                             size=10.5,
                                                             font_family=FONT_SEMIBOLD,
                                                             color=COLORS["text_sub"],
+                                                            no_wrap=True,
+                                                            overflow=ft.TextOverflow.ELLIPSIS,
                                                         ),
                                                     )
                                                 ]

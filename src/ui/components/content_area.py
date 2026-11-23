@@ -314,7 +314,11 @@ def build_content_area(
                     ],
                 ),
                 ft.Container(height=12),
-                *([toast_banner] if toast_banner is not None else []),
+                *(
+                    [ft.Container(height=48, alignment=ft.Alignment.CENTER, content=toast_banner)]
+                    if toast_banner is not None
+                    else []
+                ),
                 ft.Row(
                     key="profiles_toolbar",
                     wrap=True,

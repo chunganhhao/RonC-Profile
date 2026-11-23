@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import flet as ft
 import pytest
 
 from src.core.strings import get_string
@@ -58,4 +59,29 @@ def test_bulk_delete_empty(monkeypatch):
     log, refresh, done = Mock(), Mock(), Mock()
     bulk.bulk_delete_profiles(None, [], pm, log, refresh, done)
     for callback in (confirm, pm.delete_profile, log, refresh, done):
+        callback.assert_not_called()
+
+
+@pytest.mark.parametrize("cancel_with_escape", [True, False])
+def test_single_delete_confirmation_cancel(cancel_with_escape):
+    pm = SimpleNamespace(delete_profile=Mock())
+    log, refresh = Mock(), Mock()
+    page = Mock()
+    profile.delete_profile(page, "first", pm, log, refresh)
+    dialog = page.show_dialog.call_args.args[0]
+    dialog.open = True
+    assert dialog.modal
+    listener = next((c for c in dialog.actions if isinstance(c, ft.KeyboardListener)), None)
+
+    if cancel_with_escape:
+        assert listener is not None and listener.autofocus
+        listener.on_key_down(SimpleNamespace(key="Enter"))
+        page.pop_dialog.assert_not_called()
+        listener.on_key_down(SimpleNamespace(key="Escape"))
+    else:
+        actions = listener.content.controls if listener else dialog.actions
+        cancel_button = next(c for c in actions if c.content == get_string("cancel"))
+        cancel_button.on_click(None)
+    page.pop_dialog.assert_called_once_with()
+    for callback in (pm.delete_profile, log, refresh):
         callback.assert_not_called()

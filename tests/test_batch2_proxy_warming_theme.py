@@ -717,6 +717,92 @@ def test_proxy_pool_ui_import_handles_save_error(tmp_path, monkeypatch):
     assert refreshed == [True]
 
 
+def test_proxy_pool_long_text_has_bounded_space_and_masked_tooltips(tmp_path):
+    endpoint = "socks5://user:pass@long-test-branch-proxy-endpoint.example.test:1080"
+    label = "Nhãn kho proxy cho bộ phận vận hành chi nhánh Nguyễn Thị Minh Khai"
+    pool = ProxyPoolService(file_path=str(tmp_path / "proxies.json"))
+    pool.add_proxy(endpoint, label=label)
+    entry = pool.list_entries()[0]
+    page = _DummyPage()
+    open_proxy_pool_dialog(page, pool, SimpleNamespace(), SimpleNamespace(list_profiles=list))
+
+    controls = list(_walk_controls(page.dialog))
+    endpoint_text = next(c for c in controls if isinstance(c, ft.Text) and c.value == entry.masked)
+    label_text = next(c for c in controls if isinstance(c, ft.Text) and c.value == label)
+    label_chip = next(c for c in controls if getattr(c, "content", None) is label_text)
+    assert label_chip.expand and endpoint_text.expand
+    assert label_text.no_wrap and endpoint_text.no_wrap
+    assert label_text.overflow == endpoint_text.overflow == ft.TextOverflow.ELLIPSIS
+    assert label_chip.tooltip == label
+    assert endpoint_text.tooltip == entry.masked and "pass" not in entry.masked
+
+
+def test_toast_visibility_does_not_change_toolbar_layout():
+    toast = ft.Container(visible=False)
+    content = build_content_area(
+        ft.Text("Profiles"),
+        ft.Column(),
+        ft.IconButton(),
+        ft.IconButton(),
+        ft.Text("1"),
+        toast_banner=toast,
+    )
+    body = next(
+        c
+        for c in _walk_controls(content)
+        if any(ctrl.key == "profiles_toolbar" for ctrl in getattr(c, "controls", []))
+    )
+    slot = next((c for c in body.controls if getattr(c, "content", None) is toast), None)
+    assert slot is not None and slot.visible and slot.height > 0
+    height = slot.height
+    toast.visible = True
+    assert slot.visible and slot.height == height
+
+
+def test_proxy_pool_sidebar_tracks_import_and_delete(tmp_path, monkeypatch):
+    from src.core import config as app_config
+    from src.core.strings import get_string
+    from src.ui.app import App
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    app = App()
+    app.proxy_pool.add_proxy("198.51.100.10:8080")
+    page = _DummyPage()
+    page.controls = []
+    page.add = page.controls.append
+    app.page = page
+    app._file_picker = None
+    app._build_ui()
+    sidebar = page.controls[0].controls[0]
+    nav = next(
+        c for c in _walk_controls(sidebar) if getattr(c, "on_click", None) == app._open_proxy_pool
+    )
+    badge = nav.content.controls[-1].content
+    assert badge.value == "1"
+
+    nav.on_click(None)
+    controls = list(_walk_controls(page.dialog))
+    bulk_input = next(c for c in controls if isinstance(c, ft.TextField) and c.multiline)
+    import_button = next(
+        c for c in controls if getattr(c, "content", None) == get_string("proxy_pool_import_btn")
+    )
+    bulk_input.value = "192.0.2.10:8080|Short\n192.0.2.20:8080|Other"
+    import_button.on_click(None)
+    assert app._footer_proxy_text.value == get_string("footer_proxy_pool", count=3)
+    assert badge.value == "3"
+
+    delete_button = next(
+        c
+        for c in _walk_controls(page.dialog)
+        if isinstance(c, ft.IconButton) and c.icon == ft.Icons.DELETE_OUTLINE
+    )
+    delete_button.on_click(None)
+    assert app._footer_proxy_text.value == get_string("footer_proxy_pool", count=2)
+    assert badge.value == "2"
+
+
 def test_pionlogin_ui_components_and_dialogs(tmp_path, monkeypatch):
     from src.core import config as app_config
 
