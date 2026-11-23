@@ -214,7 +214,7 @@ def open_core_manager(page: ft.Page, pm=None, bl=None) -> None:
             get_string("core_manager"), size=19, font_family=FONT_BOLD, color=COLORS["text_main"]
         ),
         content=body_container,
-        actions=[ft.TextButton(get_string("close_btn"), on_click=lambda _: page.pop_dialog())],
+        actions=[ft.TextButton(get_string("close_btn"), on_click=lambda event: close(event))],
     )
     bind_responsive_dialog(
         page,
@@ -226,4 +226,4 @@ def open_core_manager(page: ft.Page, pm=None, bl=None) -> None:
         max_width=860,
     )
     render()
-    show_modal_dialog(page, dialog)
+    close = show_modal_dialog(page, dialog, local_keyboard=True)

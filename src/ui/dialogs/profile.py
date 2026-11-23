@@ -1205,7 +1205,7 @@ def open_profile_dialog(
             on_resize_extra=_on_dialog_resize,
         )
 
-    close = show_profile_editor(page, dlg, prepare_dialog)
+    close = show_profile_editor(page, dlg, prepare_dialog, local_keyboard=True)
     if close is not None:
         _schedule_totp_tick()
 

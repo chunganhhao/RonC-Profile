@@ -1,5 +1,6 @@
+import asyncio
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from weakref import ref
 
 import flet as ft
@@ -34,6 +35,23 @@ class DialogPage:
         if self.notify_dismiss and dialog.on_dismiss:
             dialog.on_dismiss(None)
         return dialog
+
+
+def _send_key(page, key):
+    (dialog,) = page.dialogs
+    handler = (
+        dialog.content.on_key_down
+        if isinstance(dialog.content, ft.KeyboardListener)
+        else page.on_keyboard_event
+    )
+    handler(SimpleNamespace(key=key))
+
+
+def _click_action(dialog, index):
+    action = dialog.actions[index]
+    if isinstance(action, ft.KeyboardListener):
+        action = action.content
+    action.on_click(None)
 
 
 def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handler():
@@ -91,16 +109,16 @@ def test_editor_closes_and_reopens_without_client_dismiss_event(kind, action):
     open_editor()
     (dialog,) = page.dialogs
     if action == "escape":
-        page.on_keyboard_event(SimpleNamespace(key="Escape"))
+        _send_key(page, "Escape")
     else:
-        dialog.actions[action == "save"].on_click(None)
+        _click_action(dialog, action == "save")
     assert not page.dialogs
     assert (page.on_keyboard_event, page.on_resize) == originals
     assert save.call_count == (action == "save")
 
     open_editor()
     assert len(page.dialogs) == 1
-    page.dialogs[-1].actions[0].on_click(None)
+    _click_action(page.dialogs[-1], 0)
 
 
 @pytest.mark.parametrize("kind", ["create", "edit", "tag", "cores", "proxy_pool", "warming"])
@@ -129,9 +147,9 @@ def test_escape_dismisses_modal_without_saving_and_restores_handlers(monkeypatch
 
     (dialog,) = page.dialogs
     try:
-        page.on_keyboard_event(SimpleNamespace(key="Enter"))
+        _send_key(page, "Enter")
         assert page.dialogs == [dialog]
-        page.on_keyboard_event(SimpleNamespace(key="Escape"))
+        _send_key(page, "Escape")
         assert not page.dialogs
         assert page.on_keyboard_event is original_keyboard
         assert page.on_resize is original_resize
@@ -160,7 +178,7 @@ def test_double_click_on_row_pencil_opens_only_one_editor_and_can_reopen(kind):
     try:
         open_editor()
         open_editor()
-        page.dialogs[-1].actions[0].on_click(None)
+        _click_action(page.dialogs[-1], 0)
         assert not page.dialogs
         open_editor()
         assert len(page.dialogs) == 1
@@ -175,6 +193,30 @@ def _walk(control):
         yield from _walk(child)
     if isinstance(getattr(control, "content", None), ft.Control):
         yield from _walk(control.content)
+
+
+def test_dropdown_escape_seen_only_by_page_preserves_the_unsaved_profile(monkeypatch):
+    page = DialogPage()
+    original_keyboard = page.on_keyboard_event
+    save = Mock()
+    open_profile_dialog(page, None, save, Profile("Chromium demo", engine="chrome"))
+    (dialog,) = page.dialogs
+    name = next(c for c in _walk(dialog.content) if isinstance(c, ft.TextField))
+    name.value = "Unsaved draft"
+    focus = AsyncMock()
+    monkeypatch.setattr(dialog.content, "focus", focus)
+    monkeypatch.setattr(type(ft.context), "disable_auto_update", Mock())
+
+    escape = SimpleNamespace(key="Escape")
+    asyncio.run(page.on_keyboard_event(escape))
+    assert page.dialogs == [dialog]
+    assert name.value == "Unsaved draft"
+    focus.assert_awaited_once()
+    save.assert_not_called()
+
+    dialog.content.on_key_down(escape)
+    assert not page.dialogs
+    assert page.on_keyboard_event is original_keyboard
 
 
 @pytest.mark.parametrize("is_edit", [False, True], ids=["create", "edit"])

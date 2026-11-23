@@ -477,7 +477,7 @@ def open_warming_dialog(
             ft.TextButton(
                 get_string("close_btn"),
                 style=ft.ButtonStyle(color=COLORS["text_sub"]),
-                on_click=lambda _: page.pop_dialog(),
+                on_click=lambda event: close(event),
             ),
         ],
     )
@@ -494,4 +494,4 @@ def open_warming_dialog(
         min_height=380,
         max_height=800,
     )
-    show_modal_dialog(page, dlg)
+    close = show_modal_dialog(page, dlg, local_keyboard=True)

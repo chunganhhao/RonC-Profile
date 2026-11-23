@@ -536,7 +536,7 @@ def test_flet_all_tags_scrollable_notes_backup_codes_pagination_and_running_filt
         c for c in walk(edit_page.dialog.content) if getattr(c, "value", None) == "initial-note"
     )
     notes_box.value = "notes-only-update"
-    edit_page.dialog.actions[-1].on_click(None)
+    edit_page.dialog.actions[-1].content.on_click(None)
     assert "backup_codes" not in captured_extra
     assert pm.profiles["canary-prof"].notes == "notes-only-update"
     assert pm.profiles["canary-prof"].backup_codes == sheet_b
@@ -553,7 +553,7 @@ def test_flet_all_tags_scrollable_notes_backup_codes_pagination_and_running_filt
         if getattr(c, "key", None) == "dialog_backup_codes_field"
     )
     bkp_box.value = ""
-    clear_page.dialog.actions[-1].on_click(None)
+    clear_page.dialog.actions[-1].content.on_click(None)
     assert captured_extra["backup_codes"] == ""
     assert pm.profiles["canary-prof"].backup_codes is None
     clear_page.dialog.on_dismiss(None)
