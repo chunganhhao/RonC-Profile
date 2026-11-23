@@ -236,9 +236,12 @@ async def _async_main(argv: list[str]) -> int:
 
 
 def main() -> int:
-    setup_logging(
-        LOG_DIR, getattr(logging, LOG_LEVEL, logging.INFO), console=False
-    ).propagate = False
+    try:
+        logger = setup_logging(LOG_DIR, getattr(logging, LOG_LEVEL, logging.INFO), console=False)
+    except OSError:
+        logger = get_logger()
+        logger.addHandler(logging.NullHandler())
+    logger.propagate = False
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")

@@ -16,11 +16,17 @@ class FakeProc:
         return None
 
 
+@pytest.mark.parametrize("blocked_log", [False, True])
 @pytest.mark.parametrize("error_type", ["EngineError", "RuntimeError"])
-def test_chrome_traceback_stays_in_file_not_launcher_callback(monkeypatch, tmp_path, error_type):
+def test_chrome_traceback_stays_in_file_not_launcher_callback(
+    monkeypatch, tmp_path, error_type, blocked_log
+):
     from src.services.browser import process
 
     monkeypatch.chdir(tmp_path)
+    if blocked_log:
+        (tmp_path / "logs").mkdir()
+        (tmp_path / "logs").chmod(0o500)
     monkeypatch.setenv("FOXPROFILE_LOG_DIR", str(tmp_path / "logs"))
     script = f"""
 import sys
@@ -61,10 +67,37 @@ sys.exit(runner.main())
     assert any("LAUNCH_FAILED:" in message for message in messages)
     assert not any("Traceback" in message or 'File "' in message for message in messages), messages
     logs = list((tmp_path / "logs").glob("foxprofile_*.log"))
+    if blocked_log:
+        assert logs == []
+        return
     assert len(logs) == 1
     text = logs[0].read_text(encoding="utf-8")
     assert "Chrome launch failed\nTraceback (most recent call last):" in text
     assert f"{error_type}: fixture launch failure" in text
+
+
+def test_chrome_unwritable_log_does_not_block_launch(monkeypatch, tmp_path):
+    from src.services.browser import process
+
+    monkeypatch.chdir(tmp_path)
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(mode=0o500)
+    monkeypatch.setenv("FOXPROFILE_LOG_DIR", str(log_dir))
+    script = """
+import sys
+from chrome_engine import runner
+async def ready(_):
+    print("BROWSER_STARTED", flush=True)
+    return 0
+runner._async_main = ready
+sys.argv = ["runner", "shop-01", "None", "linux"]
+sys.exit(runner.main())
+"""
+    monkeypatch.setattr(process, "runner_command", lambda _: [sys.executable, "-c", script])
+    proc = process.spawn_browser(Profile("shop-01", engine="chrome"))
+    output, _ = proc.communicate(timeout=20)
+    assert proc.returncode == 0, output
+    assert output == "BROWSER_STARTED\n"
 
 
 @pytest.fixture
