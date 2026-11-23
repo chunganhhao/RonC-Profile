@@ -1408,7 +1408,7 @@ function field(label, input, hint) {
 function openEditor(p) {
   modal((close) => {
     const name = h("input", { id: "f-name", value: p ? p.name : "", required: true, maxlength: 64, autocomplete: "off" });
-    const os = h("select", { id: "f-os" }, [["", t("geo_auto")], ["windows", "Windows"], ["macos", "macOS"], ["linux", "Linux"]].map(([v, label]) =>
+    const os = h("select", { id: "f-os" }, [["windows", "Windows"], ["macos", "macOS"], ["linux", "Linux"]].map(([v, label]) =>
       h("option", { value: v, selected: (p ? p.os_type : "macos") === v }, label)));
     const engine = h("select", { id: "f-engine", disabled: !!p },
       [["camoufox", t("engine_camoufox")], ["chrome", t("engine_chrome")]].map(([v, label]) =>
@@ -1457,7 +1457,7 @@ function openEditor(p) {
       renderHwNote();
     } }, icon("reload", true), t("roll_fp"));
     engine.onchange = () => {
-      if (!p) os.value = engine.value === "chrome" ? (hostOS || "") : "macos";
+      if (!p) os.value = engine.value === "chrome" ? hostOS : "macos";
       hwChanged = true;
       renderHwNote();
     };
@@ -1576,7 +1576,7 @@ function openEditor(p) {
       const rawBackup = normalizeBackupText(backupInput.value);
       const body = {
         name: name.value.trim(),
-        os_type: os.value || undefined,
+        os_type: os.value,
         proxy: proxy.value.trim() || null,
         timezone: tz.value.trim(),
         locale: loc.value.trim(),
@@ -1585,7 +1585,7 @@ function openEditor(p) {
         notes: notesInput.value.trim(),
         webrtc_mode: webrtcSelect.value,
         extension_ids: [...selectedExts],
-        initial_fingerprint: (isChrome && os.value && (!p || hwChanged)) ? fpPayload : undefined,
+        initial_fingerprint: (isChrome && (!p || hwChanged)) ? fpPayload : undefined,
       };
       if (!p) body.engine = engine.value;
       try {

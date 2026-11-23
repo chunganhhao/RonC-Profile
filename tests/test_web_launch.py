@@ -20,7 +20,7 @@ def run_js(script):
     return json.loads(result.stdout)
 
 
-@pytest.mark.parametrize("host", ["windows", "macos", "linux", None])
+@pytest.mark.parametrize("host", ["windows", "macos", "linux"])
 def test_editor_uses_server_host_for_chrome(host):
     handler = re.search(r"engine.onchange = \(\) => \{(.*?)\n    \};", PANEL, re.S)[1]
     assert 'fetch("/api/v1/info")' in PANEL
@@ -39,8 +39,60 @@ def test_editor_uses_server_host_for_chrome(host):
         console.log(JSON.stringify([chrome, camoufox, os.value]));
         """
     )
-    assert result == [host or "", "macos", "windows"]
-    assert "os_type: os.value || undefined" in PANEL
+    assert result == [host, "macos", "windows"]
+    assert "os_type: os.value," in PANEL
+    assert '[["", t("geo_auto")], ["windows", "Windows"]' not in PANEL
+    assert "initial_fingerprint: (isChrome && (!p || hwChanged)) ? fpPayload : undefined" in PANEL
+
+
+@pytest.mark.parametrize("failure", ["network", "http", "json"])
+def test_info_failure_prevents_editor_access(failure):
+    boot = PANEL[PANEL.rindex("(async () => {") :].split("</script>")[0]
+    result = run_js(
+        f"""
+        let hostOS, token = '', appShown = false, errorShown = false;
+        function applyI18n() {{}}
+        function applyTheme() {{}}
+        function h() {{}}
+        function t(key) {{ return key; }}
+        function showApp() {{ appShown = true; }}
+        const document = {{body: {{replaceChildren() {{ errorShown = true; }}}}}};
+        async function fetch() {{
+          if ({json.dumps(failure)} === 'network') throw new Error('offline');
+          return {{ok: {json.dumps(failure != "http")}, status: 500, statusText: 'error',
+            async json() {{ throw new Error('invalid JSON'); }} }};
+        }}
+        await {boot.rstrip().rstrip(";")};
+        console.log(JSON.stringify([appShown, errorShown]));
+        """
+    )
+    assert result == [False, True]
+
+
+@pytest.mark.parametrize("editing,changed", [(False, False), (True, True), (True, False)])
+def test_editor_sends_concrete_os_and_keeps_chrome_seed_and_cores(editing, changed):
+    payload = PANEL.split('const isChrome = engine.value === "chrome";')[-1].split(
+        "const rawBackup"
+    )[0]
+    expression = re.search(r"initial_fingerprint: (.*),", PANEL)[1]
+    result = run_js(
+        f"""
+        const engine = {{value: 'chrome'}}, os = {{value: 'linux'}};
+        const p = {"{}" if editing else "null"}, hwChanged = {json.dumps(changed)};
+        const seedRolled = true, currentSeed = 123456789, coresOverridden = true;
+        const coresSelect = {{value: '12'}}, isChrome = true;
+        {payload}
+        console.log(JSON.stringify({{os_type: os.value, initial_fingerprint: {expression}}}));
+        """
+    )
+    expected = {"os_type": "linux"}
+    if not editing or changed:
+        expected["initial_fingerprint"] = {
+            "platform": "linux",
+            "seed": 123456789,
+            "hardware_concurrency": 12,
+        }
+    assert result == expected
 
 
 @pytest.mark.parametrize("language", ["en", "vi"])
