@@ -19,7 +19,7 @@ from typing import Any
 
 from ...core import config as app_config
 from ...core.logging import get_logger
-from .lease import store_lease
+from .lease import waiting_lease
 
 logger = get_logger("browser.extensions")
 
@@ -195,6 +195,7 @@ class ExtensionService:
         self._explicit_file = file_path or extensions_file
         self._explicit_dir = extensions_dir
         self._lock = threading.RLock()
+        self._store_locked = False
         self._entries: dict[str, ExtensionEntry] = {}
         self.reload()
 
@@ -268,10 +269,22 @@ class ExtensionService:
 
     @contextlib.contextmanager
     def _write_transaction(self) -> Iterator[None]:
-        """Reread the shared file and hold its lease so a peer's write cannot be overwritten."""
-        with self._lock, store_lease(self.file_path, timeout=STORE_WAIT_SECONDS):
-            self.reload()
-            yield
+        """Reread the shared file and hold its lease so a peer's write cannot be overwritten.
+
+        Only this file's lease is held: assign_profiles calls into the profile manager,
+        which takes its own lock before the shared profile-store lease.
+        """
+        with self._lock:
+            if self._store_locked:
+                yield
+                return
+            with waiting_lease(self.file_path, STORE_WAIT_SECONDS):
+                self._store_locked = True
+                try:
+                    self.reload()
+                    yield
+                finally:
+                    self._store_locked = False
 
     def _save(self) -> None:
         path = self.file_path

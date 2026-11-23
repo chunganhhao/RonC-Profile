@@ -17,6 +17,7 @@ from src.api.dependencies import get_browser_launcher, get_profile_manager
 from src.api.routes.profiles import router as profiles_router
 from src.models.profile import Profile
 from src.services.browser.extensions import ExtensionService
+from src.services.browser.lease import store_lease
 from src.services.profile import manager
 from src.services.warming.scheduler import WarmingSchedulerService
 
@@ -81,6 +82,28 @@ class _Launcher:
 
 class _Profiles:
     profiles = {"warm": Profile(name="warm", engine="chrome")}
+
+
+def test_assigning_an_extension_lets_other_threads_write_the_profile_store(tmp_path):
+    ext = ExtensionService(str(tmp_path / "extensions.json"), str(tmp_path / "extensions"))
+    alpha = ext.install_from_zip(_archive("Alpha"), filename="alpha.zip")
+    written = threading.Event()
+
+    class _Manager:
+        def list_profiles(self):
+            # add_profile takes the manager's lock, then the profile store lease.
+            def write():
+                with store_lease(tmp_path / "profiles.json"):
+                    written.set()
+
+            threading.Thread(target=write, daemon=True).start()
+            assert written.wait(2), "profile store write blocked by the extension assignment"
+            return []
+
+        def save_profiles(self):
+            pass
+
+    assert ext.assign_profiles(alpha.id, [], _Manager()) == 0
 
 
 def _running_pair(tmp_path):
