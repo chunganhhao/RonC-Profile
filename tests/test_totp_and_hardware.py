@@ -275,7 +275,7 @@ def test_f1_f2_f3_dialog_regressions():
     )
     paste_field.value = "new@example.test|new-password"
     paste_btn.on_click(None)
-    page.dialog.actions[-1].on_click(None)
+    page.dialog.actions[-1].content.on_click(None)
     assert saved["account_uid"] == "new@example.test"
     assert saved["account_password"] == "new-password"
     assert saved["two_fa_secret"] == ""
@@ -304,14 +304,14 @@ def test_f1_f2_f3_dialog_regressions():
     assert len(hw_dropdowns) == 5
     # [screen_dropdown, cores_dropdown, gpu_dropdown, webrtc_dropdown, canvas_dropdown]
     assert [c.disabled for c in hw_dropdowns] == [True, False, True, False, True]
-    chrome_page.dialog.actions[-1].on_click(None)
+    chrome_page.dialog.actions[-1].content.on_click(None)
     assert saved["webrtc_mode"] == "disable"
     assert saved["canvas_mode"] == "noise"
     assert saved["initial_fingerprint"] is None
     next(
         c for c in chrome_controls if getattr(c, "icon", None) == ft.Icons.CASINO_OUTLINED
     ).on_click(None)
-    chrome_page.dialog.actions[-1].on_click(None)
+    chrome_page.dialog.actions[-1].content.on_click(None)
     assert isinstance(saved["initial_fingerprint"].get("seed"), int)
     chrome_page.dialog.on_dismiss(None)
 
@@ -428,7 +428,7 @@ def test_ponytail_findings_start_url_auto_screen_os_reset_and_card_perf(tmp_path
     screen_dd.value = "auto"
     screen_dd.on_select(None)
     assert screen_dd.value == "auto"
-    page.dialog.actions[-1].on_click(None)
+    page.dialog.actions[-1].content.on_click(None)
     assert not saved["initial_fingerprint"].get("_custom_screen")
     page.dialog.on_dismiss(None)
 
@@ -589,7 +589,7 @@ def test_space_delimited_quick_paste_and_trait_hash_and_geo_sync_and_responsive_
 
     rpage = ResizablePage(1280, 820)
     open_profile_dialog(rpage, None, lambda *a, **kw: None, Profile("resp-test", os_type="macos"))
-    body = rpage.dialog.content
+    body = rpage.dialog.content.content
     w_initial = body.width
     assert 800 <= w_initial <= 1120
     # Shrink window to compact width -> columns stack & width scales down

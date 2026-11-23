@@ -5,6 +5,7 @@ import flet as ft
 from ...core.strings import get_string
 from ...services.browser import cores
 from ..theme.colors import COLORS, FONT_BOLD
+from .modal import show_modal_dialog
 from .responsive import bind_responsive_dialog
 
 
@@ -213,7 +214,7 @@ def open_core_manager(page: ft.Page, pm=None, bl=None) -> None:
             get_string("core_manager"), size=19, font_family=FONT_BOLD, color=COLORS["text_main"]
         ),
         content=body_container,
-        actions=[ft.TextButton(get_string("close_btn"), on_click=lambda _: page.pop_dialog())],
+        actions=[ft.TextButton(get_string("close_btn"), on_click=lambda event: close(event))],
     )
     bind_responsive_dialog(
         page,
@@ -225,4 +226,4 @@ def open_core_manager(page: ft.Page, pm=None, bl=None) -> None:
         max_width=860,
     )
     render()
-    page.show_dialog(dialog)
+    close = show_modal_dialog(page, dialog, local_keyboard=True)

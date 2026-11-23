@@ -511,7 +511,7 @@ def test_p2_seedless_cpu_edit_and_flet_metadata_edit_preserve_identity(
         Profile(name="p2-mac", os_type="macos", engine="chrome"),
     )
     controls = list(walk(page.dialog))
-    save_btn = page.dialog.actions[-1]
+    save_btn = page.dialog.actions[-1].content
     save_btn.on_click(None)
     assert captured.get("initial_fingerprint") is None
 
@@ -682,7 +682,7 @@ def test_mixed_core_flet_roll_respects_bound_core_both_directions(client, workdi
     open_profile_dialog(page, None, on_save1, pm.profiles["bound-run19"], profile_manager=pm)
     controls = list(walk(page.dialog))
     next(c for c in controls if getattr(c, "icon", None) == ft.Icons.CASINO_OUTLINED).on_click(None)
-    page.dialog.actions[-1].on_click(None)
+    page.dialog.actions[-1].content.on_click(None)
 
     assert isinstance(captured["initial_fingerprint"], dict)
     saved1 = chrome_persona.load(pdir1)
@@ -742,7 +742,7 @@ def test_mixed_core_flet_roll_respects_bound_core_both_directions(client, workdi
     next(c for c in controls2 if getattr(c, "icon", None) == ft.Icons.CASINO_OUTLINED).on_click(
         None
     )
-    page2.dialog.actions[-1].on_click(None)
+    page2.dialog.actions[-1].content.on_click(None)
 
     saved2 = chrome_persona.load(pdir2)
     assert saved2 is not None
@@ -1018,7 +1018,7 @@ def test_save_contract_flet_cpu_patch_api_no_platform_and_atomic_refusal(
     )
     cores_dd.value = "12"
     cores_dd.on_select(None)
-    page.dialog.actions[-1].on_click(None)
+    page.dialog.actions[-1].content.on_click(None)
 
     assert captured["initial_fingerprint"] == {"platform": "macos", "hardware_concurrency": 12}
     after_flet = chrome_persona.load(race_dir)
@@ -1086,7 +1086,7 @@ def test_save_contract_flet_cpu_patch_api_no_platform_and_atomic_refusal(
 
     # Metadata-only save in uninitialized Editor A_meta must not emit preview or clobber disk.
     uninit_captured.clear()
-    page_meta.dialog.actions[-1].on_click(None)
+    page_meta.dialog.actions[-1].content.on_click(None)
     assert uninit_captured["initial_fingerprint"] is None
     after_meta = chrome_persona.load(uninit_dir)
     assert after_meta == rolled_b_uninit
@@ -1103,7 +1103,7 @@ def test_save_contract_flet_cpu_patch_api_no_platform_and_atomic_refusal(
     )
     cores_a.value = "12"
     cores_a.on_select(None)
-    page_a.dialog.actions[-1].on_click(None)
+    page_a.dialog.actions[-1].content.on_click(None)
     assert uninit_captured["initial_fingerprint"] == {
         "platform": "macos",
         "hardware_concurrency": 12,
@@ -1154,7 +1154,7 @@ def test_save_contract_flet_cpu_patch_api_no_platform_and_atomic_refusal(
     )
     cores_empty.value = "12"
     cores_empty.on_select(None)
-    page_empty.dialog.actions[-1].on_click(None)
+    page_empty.dialog.actions[-1].content.on_click(None)
     assert empty_captured["initial_fingerprint"] == {
         "platform": "macos",
         "seed": 6,
@@ -1201,7 +1201,7 @@ def test_save_contract_flet_cpu_patch_api_no_platform_and_atomic_refusal(
     next(c for c in ctrls_roll if getattr(c, "icon", None) == ft.Icons.CASINO_OUTLINED).on_click(
         None
     )
-    page_roll.dialog.actions[-1].on_click(None)
+    page_roll.dialog.actions[-1].content.on_click(None)
     assert isinstance(roll_captured["initial_fingerprint"].get("seed"), int)
     roll_saved = chrome_persona.load(workdir / "camoufox_data/flet-uninit-roll")
     assert (

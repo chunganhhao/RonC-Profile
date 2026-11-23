@@ -5,6 +5,7 @@ import flet as ft
 from ...core.strings import get_string
 from ..theme.colors import COLORS
 from ..theme.styles import ERROR_STYLE
+from .modal import show_modal_dialog
 
 
 def open_confirm_dialog(
@@ -17,23 +18,8 @@ def open_confirm_dialog(
     action_label: str | None = None,
     action_icon: ft.IconData = ft.Icons.DELETE,
 ) -> None:
-    previous_keyboard_handler = page.on_keyboard_event
-
-    def _restore_keyboard_handler(_: ft.ControlEvent | None = None) -> None:
-        if page.on_keyboard_event is _on_key_down:
-            page.on_keyboard_event = previous_keyboard_handler
-            page.update()
-
     def _on_cancel(_: ft.ControlEvent) -> None:
-        try:
-            if dlg.open:
-                page.pop_dialog()
-        finally:
-            _restore_keyboard_handler()
-
-    def _on_key_down(event: ft.KeyboardEvent) -> None:
-        if dlg.open and event.key == "Escape":
-            _on_cancel(event)
+        close()
 
     def _on_confirm(event: ft.ControlEvent) -> None:
         if dlg.open:
@@ -44,7 +30,6 @@ def open_confirm_dialog(
 
     dlg = ft.AlertDialog(
         modal=True,
-        on_dismiss=_restore_keyboard_handler,
         title=ft.Text(
             title if title is not None else get_string("confirm_delete_msg", name=profile_name),
             size=18,
@@ -65,6 +50,4 @@ def open_confirm_dialog(
             ),
         ],
     )
-    page.show_dialog(dlg)
-    page.on_keyboard_event = _on_key_down
-    page.update()
+    close = show_modal_dialog(page, dlg)

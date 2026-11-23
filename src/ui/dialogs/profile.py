@@ -34,6 +34,7 @@ from ...utils.validation import (
 from ..theme.colors import COLORS, FONT_BOLD, FONT_DATA, FONT_SEMIBOLD
 from ..theme.page import build_engine_dropdown, build_os_dropdown
 from ..theme.styles import ACCENT_STYLE, DLG_FIELD_KWARGS, OUTLINE_STYLE
+from .modal import show_profile_editor
 from .responsive import bind_responsive_dialog
 
 _DATA = ft.TextStyle(font_family=FONT_DATA, size=12.5)
@@ -269,6 +270,7 @@ def open_profile_dialog(
     )
 
     totp_timer_state: dict[str, Any] = {"active": True, "timer": None}
+    totp_timer_lock = threading.Lock()
 
     def _render_totp_state(notify: bool = True) -> None:
         raw = (two_fa_field.value or "").strip()
@@ -304,8 +306,10 @@ def open_profile_dialog(
             return
         timer = threading.Timer(1.0, _on_totp_tick)
         timer.daemon = True
-        totp_timer_state["timer"] = timer
-        timer.start()
+        with totp_timer_lock:
+            if totp_timer_state["active"]:
+                totp_timer_state["timer"] = timer
+                timer.start()
 
     def _on_totp_tick() -> None:
         if not totp_timer_state["active"]:
@@ -314,17 +318,17 @@ def open_profile_dialog(
         _schedule_totp_tick()
 
     def _stop_totp_timer(_: object = None) -> None:
-        totp_timer_state["active"] = False
-        timer = totp_timer_state.get("timer")
-        if timer is not None:
-            with contextlib.suppress(Exception):
-                timer.cancel()
-            totp_timer_state["timer"] = None
+        with totp_timer_lock:
+            totp_timer_state["active"] = False
+            timer = totp_timer_state.get("timer")
+            if timer is not None:
+                with contextlib.suppress(Exception):
+                    timer.cancel()
+                totp_timer_state["timer"] = None
         object.__setattr__(totp_preview_text, "_refresh_hook", None)
 
     two_fa_field.on_change = _update_totp_preview
     _update_totp_preview()
-    _schedule_totp_tick()
 
     def _on_quick_paste(_: ft.ControlEvent) -> None:
         raw = (quick_paste_field.value or "").strip()
@@ -877,8 +881,9 @@ def open_profile_dialog(
             name_error.visible = True
             page.update()
         else:
-            _stop_totp_timer()
-            page.pop_dialog()
+            _close_dialog()
+
+    name_field.on_submit = on_submit
 
     left_column = ft.Column(
         spacing=4,
@@ -1153,8 +1158,8 @@ def open_profile_dialog(
             ]
 
     def _close_dialog(_: object = None) -> None:
-        _stop_totp_timer()
-        page.pop_dialog()
+        if close is not None:
+            close(None)
 
     dlg = ft.AlertDialog(
         modal=True,
@@ -1187,21 +1192,26 @@ def open_profile_dialog(
             ),
         ],
     )
-    bind_responsive_dialog(
-        page,
-        dlg,
-        body_container,
-        base_width=940,
-        base_height=660,
-        width_ratio=0.90,
-        height_ratio=0.84,
-        min_width=520,
-        max_width=1120,
-        min_height=420,
-        max_height=860,
-        on_resize_extra=_on_dialog_resize,
-    )
-    page.show_dialog(dlg)
+
+    def prepare_dialog() -> None:
+        bind_responsive_dialog(
+            page,
+            dlg,
+            body_container,
+            base_width=940,
+            base_height=660,
+            width_ratio=0.90,
+            height_ratio=0.84,
+            min_width=520,
+            max_width=1120,
+            min_height=420,
+            max_height=860,
+            on_resize_extra=_on_dialog_resize,
+        )
+
+    close = show_profile_editor(page, dlg, prepare_dialog, local_keyboard=True)
+    if close is not None:
+        _schedule_totp_tick()
 
 
 def _field(label: str, control: ft.Control, hint: str | None = None) -> ft.Column:

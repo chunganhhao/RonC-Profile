@@ -16,6 +16,7 @@ from ..theme.styles import (
     ICON_STYLE,
     OUTLINE_STYLE,
 )
+from .modal import show_modal_dialog
 from .responsive import bind_responsive_dialog
 
 if TYPE_CHECKING:
@@ -476,7 +477,7 @@ def open_warming_dialog(
             ft.TextButton(
                 get_string("close_btn"),
                 style=ft.ButtonStyle(color=COLORS["text_sub"]),
-                on_click=lambda _: page.pop_dialog(),
+                on_click=lambda event: close(event),
             ),
         ],
     )
@@ -493,4 +494,4 @@ def open_warming_dialog(
         min_height=380,
         max_height=800,
     )
-    page.show_dialog(dlg)
+    close = show_modal_dialog(page, dlg, local_keyboard=True)

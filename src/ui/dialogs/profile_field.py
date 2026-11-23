@@ -14,6 +14,7 @@ from ...models.profile import (
 from ...utils.validation import validate_profile_name, validate_proxy_format
 from ..theme.colors import COLORS, FONT_DATA, FONT_SEMIBOLD
 from ..theme.styles import ACCENT_STYLE, DLG_FIELD_KWARGS, OUTLINE_STYLE
+from .modal import show_profile_editor
 from .responsive import bind_responsive_dialog
 
 FIELD_LABELS = {
@@ -158,13 +159,17 @@ def open_profile_field_dialog(
                 report(str(exc))
                 return
             if draft == initial_backup_codes:
-                page.pop_dialog()
+                cancel()
                 return
         message = on_save(draft)
         if message:
             report(message)
             return
-        page.pop_dialog()
+        cancel()
+
+    def cancel(_: ft.ControlEvent | None = None) -> None:
+        if close is not None:
+            close(None)
 
     entry.on_submit = (lambda _: add(entry.value or "")) if field == "tags" else submit
     controls: list[ft.Control] = []
@@ -270,21 +275,24 @@ def open_profile_field_dialog(
         title=ft.Text(get_string("edit_field", field=label), size=19, font_family=FONT_SEMIBOLD),
         content=body_container,
         actions=[
-            ft.TextButton(get_string("cancel"), on_click=lambda _: page.pop_dialog()),
+            ft.TextButton(get_string("cancel"), on_click=cancel),
             ft.Button(get_string("save_changes"), style=ACCENT_STYLE, on_click=submit),
         ],
     )
-    bind_responsive_dialog(
-        page,
-        dlg,
-        body_container,
-        base_width=480,
-        base_height=base_h,
-        width_ratio=0.58,
-        height_ratio=0.50,
-        min_width=360,
-        max_width=640,
-        min_height=base_h,
-        max_height=420,
-    )
-    page.show_dialog(dlg)
+
+    def prepare_dialog() -> None:
+        bind_responsive_dialog(
+            page,
+            dlg,
+            body_container,
+            base_width=480,
+            base_height=base_h,
+            width_ratio=0.58,
+            height_ratio=0.50,
+            min_width=360,
+            max_width=640,
+            min_height=base_h,
+            max_height=420,
+        )
+
+    close = show_profile_editor(page, dlg, prepare_dialog)
