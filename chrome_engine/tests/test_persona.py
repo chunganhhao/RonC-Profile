@@ -70,6 +70,11 @@ def test_align_seed_for_device_memory():
         ({"hardware_concurrency": 128}, "hardware_concurrency"),
         ({"timezone": "Mars/Olympus"}, "timezone"),
         ({"locale": "english"}, "locale"),
+        ({"locale": "zh-hans-cn"}, "locale"),
+        ({"locale": "de_DE"}, "locale"),
+        ({"locale": "es-41"}, "locale"),
+        ({"locale": "not_a_locale!"}, "locale"),
+        ({"locale": "../en"}, "locale"),
     ],
 )
 def test_validation(changes, message):
@@ -112,9 +117,16 @@ def test_to_args_leaves_geo_to_the_ip():
         ("en-US", "en-US,en"),
         ("en-GB", "en-GB,en"),
         ("fr", "fr,en-US,en"),
+        ("zh-Hans-CN", "zh-Hans-CN,zh,en-US,en"),
+        ("zh-Hant-TW", "zh-Hant-TW,zh,en-US,en"),
+        ("es-419", "es-419,es,en-US,en"),
+        ("en-001", "en-001,en"),
+        ("fil-PH", "fil-PH,fil,en-US,en"),
     ],
 )
 def test_accept_languages(locale, expected):
+    p = Persona(seed=7, platform="macos", platform_version="15.6.1", locale=locale)
+    assert p.locale == locale
     assert personas.accept_languages(locale) == expected
 
 

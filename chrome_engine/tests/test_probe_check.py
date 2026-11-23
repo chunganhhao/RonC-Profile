@@ -62,6 +62,13 @@ def good_fp():
             "renderer": "ANGLE (Intel, Iris Xe Direct3D11 vs_5_0 ps_5_0, D3D11)",
         },
         "cdpDetected": False,
+        "webrtcProbe": {
+            "status": "complete",
+            "error": None,
+            "candidates": [],
+            "gatheringState": "complete",
+            "scope": "host_candidates_only",
+        },
         "webrtcCandidates": [],
         "screen": {"width": 1920, "height": 1080},
         "window": {"innerWidth": 1900},
@@ -251,3 +258,85 @@ def test_worker_webgpu_checks():
     assert "shared_worker_webgpu_mismatch" in found
     assert "module_worker_webgpu_adapter" in found
     assert "module_worker_webgpu_mismatch" in found
+
+
+def test_webrtc_probe_distinguishes_complete_error_timeout_and_missing():
+    assert probe._webrtc_candidate_errors([]) == []
+    assert probe._webrtc_candidate_errors(
+        ["error: TypeError", "candidate:1 1 udp 1 127.0.0.1 9 typ host"]
+    ) == ["error: TypeError"]
+
+    fp_err = copy.deepcopy(good_fp())
+    fp_err["webrtcProbe"] = {
+        "status": "error",
+        "error": "TypeError: blocked",
+        "candidates": [],
+        "gatheringState": None,
+        "scope": "host_candidates_only",
+    }
+    assert "webrtc_error" in codes(fp_err)
+
+    fp_timeout = copy.deepcopy(good_fp())
+    fp_timeout["webrtcProbe"] = {
+        "status": "timeout",
+        "error": "ICE candidate gathering timed out after 3000ms",
+        "candidates": [],
+        "gatheringState": "gathering",
+        "scope": "host_candidates_only",
+    }
+    assert "webrtc_timeout" in codes(fp_timeout)
+
+    fp_timeout_leak = copy.deepcopy(fp_timeout)
+    fp_timeout_leak["webrtcProbe"]["candidates"] = [
+        "candidate:1 1 udp 2122260223 192.168.1.20 54321 typ host"
+    ]
+    assert {"webrtc_timeout", "webrtc_ip"} <= codes(fp_timeout_leak)
+
+    fp_missing_state = copy.deepcopy(good_fp())
+    del fp_missing_state["webrtcProbe"]
+    assert "webrtc_incomplete" in codes(fp_missing_state)
+
+    fp_gathering = copy.deepcopy(good_fp())
+    fp_gathering["webrtcProbe"]["status"] = "gathering"
+    assert "webrtc_incomplete" in codes(fp_gathering)
+
+    fp_complete_missing_candidates = copy.deepcopy(good_fp())
+    fp_complete_missing_candidates["webrtcProbe"] = {
+        "status": "complete",
+        "gatheringState": "complete",
+    }
+    assert "webrtc_incomplete" in codes(fp_complete_missing_candidates)
+
+    fp_complete_no_fields = copy.deepcopy(good_fp())
+    fp_complete_no_fields["webrtcProbe"] = {"status": "complete"}
+    assert "webrtc_incomplete" in codes(fp_complete_no_fields)
+
+    fp_complete_still_gathering = copy.deepcopy(good_fp())
+    fp_complete_still_gathering["webrtcProbe"]["gatheringState"] = "gathering"
+    assert "webrtc_incomplete" in codes(fp_complete_still_gathering)
+
+    fp_complete_new_state = copy.deepcopy(good_fp())
+    fp_complete_new_state["webrtcProbe"]["gatheringState"] = "new"
+    assert "webrtc_incomplete" in codes(fp_complete_new_state)
+
+    fp_complete_missing_gathering_state = copy.deepcopy(good_fp())
+    del fp_complete_missing_gathering_state["webrtcProbe"]["gatheringState"]
+    assert "webrtc_incomplete" in codes(fp_complete_missing_gathering_state)
+
+    fp_complete_gathering_leak = copy.deepcopy(good_fp())
+    fp_complete_gathering_leak["webrtcProbe"]["gatheringState"] = "gathering"
+    fp_complete_gathering_leak["webrtcProbe"]["candidates"] = [
+        "candidate:1 1 udp 2122260223 192.168.1.20 54321 typ host"
+    ]
+    assert {"webrtc_incomplete", "webrtc_ip"} <= codes(fp_complete_gathering_leak)
+
+    fp_legacy_err = copy.deepcopy(good_fp())
+    fp_legacy_err["webrtcCandidates"] = ["error: TypeError"]
+    assert "webrtc_error" in codes(fp_legacy_err)
+
+    del fp_legacy_err["webrtcProbe"]
+    assert {"webrtc_incomplete", "webrtc_error"} <= codes(fp_legacy_err)
+
+    fp_bad_list = copy.deepcopy(good_fp())
+    fp_bad_list["webrtcCandidates"] = "not-a-list"
+    assert "webrtc_error" in codes(fp_bad_list)

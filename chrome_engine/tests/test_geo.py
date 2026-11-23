@@ -28,7 +28,13 @@ def test_unknown_country_is_not_remembered(tmp_path):
 
 @pytest.mark.parametrize(
     "content",
-    ["{broken", "[]", '{"country": "US", "locale": 5}', '{"country": "US", "locale": "x/../y"}'],
+    [
+        "{broken",
+        "[]",
+        '{"country": "US", "locale": 5}',
+        '{"country": "US", "locale": "not_a_locale!"}',
+        '{"country": "US", "locale": "x/../y"}',
+    ],
 )
 def test_unusable_file_is_replaced(tmp_path, content):
     (tmp_path / GEO_LOCALE_FILE).write_text(content, encoding="utf-8")

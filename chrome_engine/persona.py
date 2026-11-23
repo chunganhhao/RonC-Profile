@@ -422,7 +422,7 @@ def allowed_macos_cores_for_model(
     return list(slot.cores)
 
 
-_LOCALE = re.compile(r"^[a-z]{2,3}(-[A-Z]{2})?$")
+_LOCALE = re.compile(r"^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-[A-Z]{2}|-\d{3})?$")
 _VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 
 # How well a persona OS can be presented on a host OS. fingerprint-chromium
@@ -610,7 +610,7 @@ def validate(p: Persona) -> None:
     if p.timezone is not None:
         _check_timezone(p.timezone)
     if p.locale is not None and (not isinstance(p.locale, str) or not _LOCALE.match(p.locale)):
-        raise PersonaError("locale must look like en-US or vi-VN")
+        raise PersonaError("locale must look like en-US, vi-VN, zh-Hans-CN, or es-419")
 
 
 def _check_timezone(name: str) -> None:

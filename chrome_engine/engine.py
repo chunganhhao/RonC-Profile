@@ -24,7 +24,9 @@ import json
 import os
 import re
 import sys
+import tempfile
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -125,42 +127,128 @@ WEBRTC_POLICY_PROXY = "disable_non_proxied_udp"
 WEBRTC_POLICY_DIRECT = "default_public_interface_only"
 
 
-def set_webrtc_policy(profile_dir: Path, policy: str) -> None:
+class EngineError(RuntimeError):
+    pass
+
+
+class EngineNotInstalled(EngineError):
+    pass
+
+
+def _preserve_corrupt_preferences(path: Path, raw: bytes) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    for idx in range(1000):
+        suffix = f".{idx}" if idx else ""
+        backup = path.with_name(f"{path.name}.corrupt.{stamp}{suffix}.bak")
+        try:
+            fd = os.open(backup, flags, 0o600)
+        except FileExistsError:
+            continue
+        try:
+            try:
+                handle = os.fdopen(fd, "wb")
+            except BaseException:
+                os.close(fd)
+                raise
+            with handle:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(handle.fileno(), 0o600)
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except BaseException:
+            with contextlib.suppress(OSError):
+                backup.unlink(missing_ok=True)
+            raise
+        return backup
+    raise EngineError(f"Could not allocate unique backup name for corrupt Preferences: {path}")
+
+
+def _load_preferences(path: Path, *, recover_corrupt: bool = False) -> dict[str, Any]:
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError as exc:
+        if os.path.lexists(path):
+            raise EngineError(f"Profile Preferences is an unreadable symlink: {path}") from exc
+        return {}
+    except OSError as exc:
+        raise EngineError(f"Could not read profile Preferences ({path}): {exc}") from exc
+
+    try:
+        prefs = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        if not recover_corrupt:
+            raise EngineError(
+                f"Profile Preferences is corrupt ({path}); "
+                "refusing to overwrite without explicit recovery"
+            ) from exc
+        _preserve_corrupt_preferences(path, raw)
+        return {}
+
+    if not isinstance(prefs, dict):
+        if not recover_corrupt:
+            raise EngineError(
+                f"Profile Preferences root must be a JSON object ({path}); "
+                "refusing to overwrite without explicit recovery"
+            )
+        _preserve_corrupt_preferences(path, raw)
+        return {}
+
+    return prefs
+
+
+def _write_preferences(path: Path, prefs: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix="Preferences.foxprofile-",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(json.dumps(prefs))
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        tmp_path.replace(path)
+    except BaseException:
+        if tmp_path is not None:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def set_webrtc_policy(profile_dir: Path, policy: str, *, recover_corrupt: bool = False) -> None:
     """Write webrtc.ip_handling_policy into the profile's Default/Preferences."""
     path = profile_dir / "Default" / "Preferences"
-    try:
-        prefs = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(prefs, dict):
-            prefs = {}
-    except (OSError, ValueError):
-        prefs = {}
+    prefs = _load_preferences(path, recover_corrupt=recover_corrupt)
     webrtc = prefs.get("webrtc")
     if not isinstance(webrtc, dict):
         webrtc = prefs["webrtc"] = {}
     if webrtc.get("ip_handling_policy") == policy:
         return
     webrtc["ip_handling_policy"] = policy
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name("Preferences.foxprofile-tmp")
-    tmp.write_text(json.dumps(prefs), encoding="utf-8")
-    tmp.replace(path)
+    _write_preferences(path, prefs)
 
 
 def set_extension_pins(
     profile_dir: Path,
     pinned_ids: tuple[str, ...] | list[str] = (),
     unpinned_ids: tuple[str, ...] | list[str] = (),
+    *,
+    recover_corrupt: bool = False,
 ) -> None:
     """Apply toolbar pin/unpin rules in Default/Preferences without clobbering custom pins."""
     if not pinned_ids and not unpinned_ids:
         return
     path = profile_dir / "Default" / "Preferences"
-    try:
-        prefs = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(prefs, dict):
-            prefs = {}
-    except (OSError, ValueError):
-        prefs = {}
+    prefs = _load_preferences(path, recover_corrupt=recover_corrupt)
     ext_cfg = prefs.get("extensions")
     if not isinstance(ext_cfg, dict):
         ext_cfg = prefs["extensions"] = {}
@@ -176,18 +264,7 @@ def set_extension_pins(
     if current_raw == updated:
         return
     ext_cfg["pinned_extensions"] = updated
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name("Preferences.foxprofile-tmp")
-    tmp.write_text(json.dumps(prefs), encoding="utf-8")
-    tmp.replace(path)
-
-
-class EngineError(RuntimeError):
-    pass
-
-
-class EngineNotInstalled(EngineError):
-    pass
+    _write_preferences(path, prefs)
 
 
 def default_sandbox() -> bool:
@@ -285,13 +362,38 @@ def _has_verified_apple_silicon_026(
     )
 
 
+_PIXELSCAN_RED_BOX_DIGEST = "bf9da7959d914298f9ce9e41a480fd66f76fac5c6f5e0a9b5a99b18cfc6fd997"
+_EXPECTED_027_LANGS = ["de-DE", "de", "en-US", "en"]
+_EXPECTED_027_REALM = {
+    "dtf": "de-DE",
+    "nf": "de-DE",
+    "num": "123.456,789",
+    "langs": _EXPECTED_027_LANGS,
+}
+_EXPECTED_027_POPUP_FIRST = {
+    "lang": "de-DE",
+    "langs": _EXPECTED_027_LANGS,
+    "dtf": "de-DE",
+    "nf": "de-DE",
+    "num": "123.456,789",
+}
+
+
+def _is_positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _is_zero_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value == 0
+
+
 def _has_verified_locale_speech_font_027(
     executable: Path,
     target: personas.Persona | str,
     *,
     cache: dict[tuple[Path, str | None], tuple[dict[str, Any], str] | None] | None = None,
 ) -> bool:
-    """True when `executable` sits inside a pinned Chromium.app bundle verified for 027."""
+    """True when `executable` sits inside a pinned bundle with verified 027+028 acceptance."""
     platform_name = target if isinstance(target, str) else getattr(target, "platform", None)
     verified = _read_verified_bundle_manifest(
         executable, platform_name, require_bundle_field=True, cache=cache
@@ -299,9 +401,61 @@ def _has_verified_locale_speech_font_027(
     if verified is None:
         return False
     manifest, actual_bundle = verified
-    return actual_bundle in LOCALE_SPEECH_FONT_027_BUNDLES and isinstance(
-        manifest["cases"].get("locale_speech_font_de"), dict
-    )
+    if actual_bundle not in LOCALE_SPEECH_FONT_027_BUNDLES:
+        return False
+    cases = manifest["cases"]
+    for seed_key in ("macos:2", "macos:3"):
+        seed_case = cases.get(seed_key)
+        if (
+            not isinstance(seed_case, dict)
+            or not _is_zero_int(seed_case.get("flatMonochromeChanged"))
+            or seed_case.get("webglRedBoxDigest") != _PIXELSCAN_RED_BOX_DIGEST
+        ):
+            return False
+    locale_case = cases.get("locale_speech_font_de")
+    if not isinstance(locale_case, dict):
+        return False
+    if "host_local_voice_count" not in locale_case:
+        return False
+    host_local_voice_count = locale_case["host_local_voice_count"]
+    if host_local_voice_count is not None and not _is_positive_int(host_local_voice_count):
+        return False
+    if (
+        locale_case.get("speech_voice_gate") != "enforced"
+        or not _is_zero_int(locale_case.get("google_voice_count"))
+        or not _is_positive_int(locale_case.get("local_voice_count"))
+        or not _is_positive_int(locale_case.get("local_voice_count_3006"))
+        or not _is_zero_int(locale_case.get("core_font_missing_count"))
+        or not _is_positive_int(locale_case.get("installed_protected_font_count"))
+        or not _is_positive_int(locale_case.get("seed_3003_font_count"))
+        or not _is_positive_int(locale_case.get("seed_3006_font_count"))
+        or not _is_positive_int(locale_case.get("hidden_case_checked"))
+    ):
+        return False
+    for realm in ("window", "worker", "shared", "service"):
+        row = locale_case.get(realm)
+        if not isinstance(row, dict) or any(
+            row.get(key) != expected for key, expected in _EXPECTED_027_REALM.items()
+        ):
+            return False
+    for popup_key, require_same_origin_opener, require_opener_closed in (
+        ("noopener_popup", False, False),
+        ("same_origin_cross_nav_popup", True, False),
+        ("same_origin_close_popup", True, True),
+    ):
+        popup = locale_case.get(popup_key)
+        if not isinstance(popup, dict) or popup.get("seen") != ["de-DE"]:
+            return False
+        first = popup.get("first")
+        if not isinstance(first, dict) or any(
+            first.get(key) != expected for key, expected in _EXPECTED_027_POPUP_FIRST.items()
+        ):
+            return False
+        if require_same_origin_opener and popup.get("hadSameOriginOpener") is not True:
+            return False
+        if require_opener_closed and popup.get("openerClosed") is not True:
+            return False
+    return True
 
 
 def build_args(
@@ -448,6 +602,7 @@ class ChromeEngine:
         with launch_stage("chrome_core_resolve"):
             executable = self._resolve_executable()
             self._selected_executable = executable
+        _load_preferences(self.profile_dir / "Default" / "Preferences")
         with launch_stage("chrome_persona"):
             persona = self._resolve_persona()
         with launch_stage("chrome_native_integrity"):
@@ -514,10 +669,6 @@ class ChromeEngine:
         with launch_stage("chrome_driver"):
             self._playwright = await async_playwright().start()
         with launch_stage("chrome_preferences"):
-            self.profile_dir.mkdir(parents=True, exist_ok=True)
-            if initialize_profile_search:
-                # Browser startup creates Web Data even if the native editor later fails.
-                search_pending.touch(exist_ok=True)
             set_webrtc_policy(
                 self.profile_dir,
                 WEBRTC_POLICY_PROXY if (self.bridge or self.block_webrtc) else WEBRTC_POLICY_DIRECT,
@@ -527,6 +678,10 @@ class ChromeEngine:
                 pinned_ids=self._pinned_extension_ids,
                 unpinned_ids=self._unpinned_extension_ids,
             )
+            self.profile_dir.mkdir(parents=True, exist_ok=True)
+            if initialize_profile_search:
+                # Browser startup creates Web Data even if the native editor later fails.
+                search_pending.touch(exist_ok=True)
         with launch_stage("chrome_context_start"):
             self.context = await self._playwright.chromium.launch_persistent_context(
                 str(self.profile_dir),

@@ -554,12 +554,14 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     out = tmp_path / "report.json"
 
     launches: list[tuple[bool, list[str]]] = []
+    launch_kwargs: list[dict] = []
     persistent_launches: list[dict] = []
     context_kwargs: list[dict] = []
     close_popup_override: dict | None = None
     collect_override: dict | None = None
     font_probe_override: dict | None = None
     inventory_override: list[str] | None = None
+    bcp47_override: dict[str, dict] | None = None
 
     class FakePage:
         async def goto(self, url: str) -> None:
@@ -649,6 +651,31 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
                 elif font_probe_override:
                     res.update(font_probe_override)
                 return res
+            if "explicitNf" in script:
+                req_tag = args[0]
+                defaults = {
+                    "zh-Hans-CN": ("zh-Hans-CN", "zh-Hans-CN", ["zh-Hans-CN", "zh", "en-US", "en"]),
+                    "es-419": ("es-MX", "es-419", ["es-419", "es", "en-US", "en"]),
+                    "en-001": ("en-001", "en-001", ["en-001", "en"]),
+                }
+                exp_def, exp_exp, langs = defaults[req_tag]
+                payload = {
+                    "window": {
+                        "dtf": exp_def,
+                        "nf": exp_def,
+                        "explicitDtf": exp_exp,
+                        "explicitNf": exp_exp,
+                        "langs": list(langs),
+                    },
+                    "worker": {
+                        "dtf": exp_def,
+                        "nf": exp_def,
+                        "langs": list(langs),
+                    },
+                }
+                if bcp47_override and req_tag in bcp47_override:
+                    payload.update(bcp47_override[req_tag])
+                return payload
             if args or "globalThis.sample=" in script or "globalThis.rAll=" in script:
                 return None
             if "WEBGL_debug_renderer_info" in script:
@@ -825,6 +852,7 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
                     "BrowserType.launch: Target page, context or browser has been closed"
                 )
             launches.append((self._state["open"], kwargs["args"]))
+            launch_kwargs.append(dict(kwargs))
             return FakeBrowser()
 
         async def launch_persistent_context(self, user_data_dir, **kwargs):
@@ -860,18 +888,27 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     asyncio.run(verify_mod.verify(exe, out))
     report = json.loads(out.read_text())
     assert report["acceptance"] == "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
+    assert report["chromium_sandbox"] is True
     inventory_launches = [
         kw for kw in persistent_launches if "--disable-spoofing=font" in kw["args"]
     ]
-    assert len(launches) == 7 + len(inventory_launches)
+    assert len(launches) == 10 + len(inventory_launches)
+    assert len(launch_kwargs) == 8
+    assert all(kw.get("chromium_sandbox") is True for kw in launch_kwargs)
     assert len(persistent_launches) == 2 + len(inventory_launches)
+    assert all(kw.get("chromium_sandbox") is True for kw in persistent_launches)
     assert all(kw["no_viewport"] is True for kw in persistent_launches)
     assert all(is_open for is_open, _ in launches)
-    assert len(context_kwargs) == 7 + len(inventory_launches)
+    assert len(context_kwargs) == 10 + len(inventory_launches)
     assert all(kw == {"color_scheme": "null"} for kw in context_kwargs)
     assert "apple_silicon_m3_laptop" in report["cases"]
     assert "apple_silicon_m2_max_desktop" in report["cases"]
     assert "locale_speech_font_de" in report["cases"]
+    assert "locale_029_bcp47" in report["cases"]
+    assert report["cases"]["locale_029_bcp47"]["es-419"]["window"]["dtf"] == "es-MX"
+    assert report["cases"]["locale_029_bcp47"]["es-419"]["window"]["explicitNf"] == "es-419"
+    assert report["cases"]["locale_029_bcp47"]["zh-Hans-CN"]["worker"]["dtf"] == "zh-Hans-CN"
+    assert report["cases"]["locale_029_bcp47"]["en-001"]["window"]["dtf"] == "en-001"
     locale_case = report["cases"]["locale_speech_font_de"]
     assert locale_case["noopener_popup"]["first"]["dtf"] == "de-DE"
     assert locale_case["same_origin_cross_nav_popup"]["hadSameOriginOpener"] is True
@@ -955,6 +992,12 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
     font_probe_override = {"localVoiceCount": 0, "googleVoices": ["Google US English"]}
     with pytest.raises(ValueError, match="027 unexpected broken Google Network Speech voices"):
         asyncio.run(verify_mod.verify(exe, out))
+    font_probe_override = None
+
+    bcp47_override = {"es-419": {"worker": {"dtf": "en-US", "nf": "en-US", "langs": ["es-419"]}}}
+    with pytest.raises(ValueError, match="029 BCP-47 locale mismatch \\(es-419/worker\\)"):
+        asyncio.run(verify_mod.verify(exe, out))
+    bcp47_override = None
 
 
 def test_verify_speech_voice_host_probe_and_checkpoint_compat(monkeypatch):
@@ -973,6 +1016,7 @@ def test_verify_speech_voice_host_probe_and_checkpoint_compat(monkeypatch):
     responses: list[object] = [
         types.SimpleNamespace(returncode=0, stdout="191\n"),
         types.SimpleNamespace(returncode=0, stdout="0\n"),
+        types.SimpleNamespace(returncode=0, stdout="UNAVAILABLE\n"),
         types.SimpleNamespace(returncode=0, stdout="not-a-number\n"),
         types.SimpleNamespace(returncode=1, stdout="191\n"),
         subprocess.TimeoutExpired(cmd="osascript", timeout=10),
@@ -990,10 +1034,47 @@ def test_verify_speech_voice_host_probe_and_checkpoint_compat(monkeypatch):
     assert verify_mod._host_macos_speech_voice_count() is None
     assert verify_mod._host_macos_speech_voice_count() is None
     assert verify_mod._host_macos_speech_voice_count() is None
+    assert verify_mod._host_macos_speech_voice_count() is None
 
     verify_src = verify_path.read_text(encoding="utf-8")
     assert "if (current.length > 0) finish(current);" in verify_src
     assert "setTimeout(() => finish(read()), 3000)" in verify_src
+    assert "vs ? vs.count : 0" not in verify_src
+    assert "isKindOfClass($.NSArray)" in verify_mod._HOST_SPEECH_VOICE_COUNT_JXA
+    assert "!vs.isNil()" in verify_mod._HOST_SPEECH_VOICE_COUNT_JXA
+    assert '"UNAVAILABLE"' in verify_mod._HOST_SPEECH_VOICE_COUNT_JXA
+
+    if __import__("sys").platform == "darwin":
+        monkeypatch.undo()
+        jxa_probe = (
+            'ObjC.import("AVFoundation"); ObjC.import("Foundation"); '
+            "const evalList = (vs) => "
+            '(vs && typeof vs.isNil === "function" && !vs.isNil() '
+            '&& typeof vs.isKindOfClass === "function" && vs.isKindOfClass($.NSArray)) '
+            '? String(Number(vs.count)) : "UNAVAILABLE"; '
+            "JSON.stringify({"
+            "emptyArray: evalList($.NSArray.array), "
+            "objcNil: evalList($()), "
+            "jsNull: evalList(null), "
+            "jsUndef: evalList(undefined), "
+            'nonArray: evalList($.NSString.stringWithString("x"))'
+            "})"
+        )
+        proc = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", "-e", jxa_probe],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        parsed = json.loads(proc.stdout)
+        assert parsed == {
+            "emptyArray": "0",
+            "objcNil": "UNAVAILABLE",
+            "jsNull": "UNAVAILABLE",
+            "jsUndef": "UNAVAILABLE",
+            "nonArray": "UNAVAILABLE",
+        }
 
     cspec = importlib.util.spec_from_file_location(
         "native_checkpoint_verify_compat", KIT / "checkpoint.py"

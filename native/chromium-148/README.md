@@ -291,23 +291,54 @@ startup `CHECK(!loaded_locale.empty())` crash when `--lang` carries a region
 subtag whose `.lproj/locale.pak` directory is unbundled (for example `de-DE`,
 `vi-VN`, `ja-JP`):
 
+- **Supported BCP-47 locale contract (`language[-Script][-REGION]`)**: accepts
+  2- or 3-letter language subtags (`en`, `de`, `fil`), optional 4-letter ISO-15924
+  script subtags (`zh-Hans-CN`, `zh-Hant-TW`), and either 2-letter ISO-3166 alpha-2
+  regions (`de-DE`, `vi-VN`) or 3-digit UN M.49 numeric regions (`es-419`, `en-001`),
+  aligned across `chrome_engine/persona.py`, `chrome_engine/geo.py`, and
+  `src/utils/validation.py`.
 - `RenderProcessHostImpl::AppendRendererCommandLine`
   (`render_process_host_impl.cc`) resolves `switches::kLang` through
   `l10n_util::CheckAndResolveLocale(..., CheckLocaleMode::kUseKnownLocalesList)`
   (in-memory `kPlatformLocales` lookup, zero UI-thread disk I/O) so `ResourceBundle`
   always loads an existing bundled `.lproj/locale.pak` (such as `de`, `vi`,
-  `en-US`, `en-GB`, `zh-CN`, `zh-TW`), while forwarding the full requested
+  `es_419`, `en`, `en_GB`, `zh_CN`, `zh_TW`), while forwarding the full requested
   BCP-47 tag via `--fingerprint-locale` (unless `--disable-spoofing=locale` is set).
 - `LocaleController::Init()` (`locale_controller.cc`) prefers `--fingerprint-locale`
-  over `--lang`, preserving full region formatting (`de-DE`, `123.456,789`) across
-  Window, Worker, SharedWorker, ServiceWorker, and popups.
-- `verify.py` waits up to `3000ms` for non-empty `speechSynthesis.getVoices()`
-  (ignoring empty intermediate `voiceschanged` events) and checks host macOS
-  `AVSpeechSynthesisVoice.speechVoices` parity without adding C++ voice spoofing:
-  when the host exposes voices (or cannot be probed), `localVoiceCount > 0` fails
-  closed; when a headless CI runner reports `0` OS voices, `googleVoices == []`
-  remains strictly enforced and `native-acceptance.json` records
-  `speech_voice_gate: "host_unavailable_on_runner"`.
+  over `--lang`, preserving full region/script formatting across Window, Worker,
+  SharedWorker, ServiceWorker, and popups. Note: `es-419` loads `es_419.lproj/locale.pak`
+  and forwards `--fingerprint-locale=es-419`, matching upstream Chromium/ICU
+  `Emulation.setLocaleOverride('es-419')` (`Intl` default `es-MX`, explicit
+  `Intl.NumberFormat('es-419')` -> `es-419`). Known deferred P2 nuance: 3-part
+  non-default-region Chinese tags such as `zh-Hant-TW` and `zh-Hant-HK` resolve
+  through Chromium `l10n_util` to `zh_CN.lproj/locale.pak` for internal Blink UI
+  strings while keeping `Intl` and `navigator.languages` on `zh-Hant-TW` /
+  `zh-Hant-HK` without crashing (`zh-TW` and `zh-HK` load `zh_TW.lproj` /
+  `zh_HK.lproj`). Malformed locale tags such as `"not_a_locale!"` are blocked at
+  RonCProfile's Python boundaries (`src/utils/validation.py`,
+  `chrome_engine/persona.py`, `chrome_engine/geo.py`); strict raw-CLI BCP-47
+  validation in `027` (`locale_controller.cc`) is deferred to the next C++ cycle.
+- `verify.py` launches every acceptance browser with `chromium_sandbox=True`
+  (matching `ChromeEngine`'s macOS runtime default and recording
+  `"chromium_sandbox": true` in the report), verifies `de-DE` across all
+  realms/popups plus `locale_029_bcp47` (`zh-Hans-CN`, `es-419`, `en-001`), waits
+  up to `3000ms` for non-empty `speechSynthesis.getVoices()` (ignoring empty
+  intermediate `voiceschanged` events), and checks host macOS
+  `AVSpeechSynthesisVoice.speechVoices` parity with an explicit `NSArray` +
+  `!isNil()` check (`UNAVAILABLE` maps to `None` so missing/nil lists never relax
+  the gate): when the host exposes voices or cannot be probed, `localVoiceCount > 0`
+  fails closed; when a headless CI runner confirms an empty `NSArray` (`0` OS
+  voices), `googleVoices == []` remains strictly enforced and
+  `native-acceptance.json` records `speech_voice_gate: "host_unavailable_on_runner"`.
+  In `chrome_engine/engine.py`, `_has_verified_locale_speech_font_027()` rejects
+  waived `host_unavailable_on_runner` manifests and verifies `028` + `027`
+  semantic evidence before unlocking `LOCALE_SPEECH_FONT_027_BUNDLES`.
+- **Build security/update model:** `safe_browsing_mode=0` and `enable_updater=false`
+  in `args.gn` come directly from pinned `ungoogled-chromium` /
+  `fingerprint-chromium` defaults to prevent unproxied Google telemetry/API key
+  failures and protect bundle SHA-256 integrity (`chrome_engine/native_bundle.py`).
+  Security updates are delivered exclusively via maintainer-pinned SHA-256 core
+  releases (`chrome_engine/release.py` / `chrome_engine/fetch.py`).
 - Only two `.cc` files are modified (no header or `BUILD.gn` edits), allowing fast
   incremental resume from post-`028` checkpoints such as Run `45217857712`.
 
