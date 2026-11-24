@@ -154,8 +154,10 @@ class App:
             color=COLORS["text_main"],
         )
         proxy_count = len(self.proxy_pool.list_entries())
+        warming_count = len(self.warming.list_tasks())
         self._sidebar_proxy_badge = ft.Text(str(proxy_count))
         self._sidebar_extension_badge = ft.Text(str(len(self.extensions.list_entries())))
+        self._sidebar_warming_badge = ft.Text(str(warming_count))
         self._footer_proxy_text = ft.Text(
             get_string("footer_proxy_pool", count=proxy_count),
             size=11.5,
@@ -163,7 +165,7 @@ class App:
             color=COLORS["text_sub"],
         )
         self._footer_warming_text = ft.Text(
-            get_string("footer_warming_tasks", count=len(self.warming.list_tasks())),
+            get_string("footer_warming_tasks", count=warming_count),
             size=11.5,
             font_family=FONT_DATA,
             color=COLORS["text_sub"],
@@ -333,7 +335,7 @@ class App:
             on_toggle_theme=self._set_theme,
             proxy_pool_count=self._sidebar_proxy_badge,
             extension_count=self._sidebar_extension_badge,
-            warming_task_count=len(self.warming.list_tasks()),
+            warming_task_count=self._sidebar_warming_badge,
         )
         content = build_content_area(
             r.content_subtitle,
@@ -794,9 +796,9 @@ class App:
         proxy_count = len(self.proxy_pool.list_entries())
         self._sidebar_proxy_badge.value = str(proxy_count)
         self._footer_proxy_text.value = get_string("footer_proxy_pool", count=proxy_count)
-        self._footer_warming_text.value = get_string(
-            "footer_warming_tasks", count=len(self.warming.list_tasks())
-        )
+        warming_count = len(self.warming.list_tasks())
+        self._sidebar_warming_badge.value = str(warming_count)
+        self._footer_warming_text.value = get_string("footer_warming_tasks", count=warming_count)
         r.page_label.value = get_string(
             "page_of",
             current=self.state.current_page,

@@ -202,7 +202,7 @@ def build_sidebar(
     on_toggle_theme: Callable[[str], None] | None = None,
     proxy_pool_count: int | ft.Text = 0,
     extension_count: int | ft.Text = 0,
-    warming_task_count: int = 0,
+    warming_task_count: int | ft.Text = 0,
     on_open_cores: Callable | None = None,
 ) -> ft.Container:
     log_toggle_btn.on_click = on_toggle_log
@@ -270,7 +270,9 @@ def build_sidebar(
                     _nav_action_row(
                         ft.Icons.AUTO_MODE_OUTLINED,
                         get_string("nav_warming"),
-                        str(warming_task_count),
+                        str(warming_task_count)
+                        if isinstance(warming_task_count, int)
+                        else warming_task_count,
                         on_open_warming,
                     )
                 ]

@@ -20,6 +20,65 @@ def run_js(script):
     return json.loads(result.stdout)
 
 
+@pytest.mark.parametrize(
+    "scenario,expected",
+    [
+        ("current", ["", None, True]),
+        ("new_login", ["fake-B", "fake-B", False]),
+        ("other_tab", ["", "fake-B", True]),
+    ],
+)
+def test_panel_401_only_drops_the_rejected_login(scenario, expected):
+    storage = PANEL[PANEL.index("const store = {") : PANEL.index("function applyTheme()")]
+    api = PANEL[PANEL.index("let authEpoch = 0;") : PANEL.index("const enc =")]
+    boot = PANEL[PANEL.index("let listTimer = null;") : PANEL.index("async function openCores()")]
+    result = run_js(
+        f"""
+        const scenario = {json.dumps(scenario)};
+        const data = new Map([['foxprofile.token', 'fake-A']]);
+        const localStorage = {{
+          getItem: key => data.get(key) ?? null,
+          setItem: (key, value) => data.set(key, value),
+          removeItem: key => data.delete(key),
+        }};
+        let loginVisible = false;
+        const nodes = {{
+          app: {{classList: {{add() {{}}, remove() {{}}}}}},
+          viewer: {{classList: {{add() {{}}}}}},
+          login: {{classList: {{add() {{ loginVisible = false; }}, remove() {{ loginVisible = true; }}}}}},
+          token: {{value: 'fake-B', focus() {{}}}},
+          'login-form': {{}},
+          'login-err': {{}},
+          'logout-btn': {{classList: {{toggle() {{}}}}}},
+        }};
+        const $ = id => nodes[id];
+        const t = key => key;
+        let viewTimer = null, viewing = null, rejectOld;
+        const setInterval = () => 1;
+        const clearInterval = () => {{}};
+        const refresh = async () => {{}};
+        async function fetch(_, {{headers}}) {{
+          if (headers.Authorization === 'Bearer fake-A') {{
+            return new Promise(resolve => rejectOld = () => resolve({{status: 401}}));
+          }}
+          return {{ok: true, headers: {{get: () => 'application/json'}}, json: async () => ({{}})}};
+        }}
+        {storage}
+        {api}
+        {boot}
+        const pending = api('GET', '/profiles').catch(error => error.status);
+        if (scenario === 'new_login') {{
+          $('logout-btn').onclick();
+          await $('login-form').onsubmit({{preventDefault() {{}}}});
+        }}
+        if (scenario === 'other_tab') localStorage.setItem('foxprofile.token', 'fake-B');
+        rejectOld();
+        console.log(JSON.stringify([await pending, token, localStorage.getItem('foxprofile.token'), loginVisible]));
+        """
+    )
+    assert result == [401, *expected]
+
+
 @pytest.mark.parametrize("overlay", ["modal", "viewer", None])
 @pytest.mark.parametrize("tag", ["BUTTON", "INPUT", "TEXTAREA"])
 def test_search_shortcut_only_focuses_search_when_no_modal_is_open(overlay, tag):

@@ -194,13 +194,21 @@ class ProxyPoolService:
             return entry
 
     def bulk_import(self, text: str, default_label: str = "") -> tuple[int, int]:
-        """Parse multi-line proxy list. Supports `proxy|label` or `proxy #label`.
+        """Return the total accepted and invalid line counts."""
+        _, _, accepted, invalid = self._bulk_import(text, default_label)
+        return accepted, invalid
 
-        Returns (added_or_updated_count, invalid_count).
-        """
-        added = 0
+    def bulk_import_counts(self, text: str, default_label: str = "") -> tuple[int, int, int]:
+        """Return new entries, changed existing entries, and invalid lines."""
+        added, updated, _, invalid = self._bulk_import(text, default_label)
+        return added, updated, invalid
+
+    def _bulk_import(self, text: str, default_label: str) -> tuple[int, int, int, int]:
+        """Parse lines in `proxy|label` or `proxy #label` form."""
+        accepted = 0
         invalid = 0
         with self._write_transaction():
+            initial_labels = {pid: entry.label for pid, entry in self._entries.items()}
             for raw_line in (text or "").splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -214,12 +222,16 @@ class ProxyPoolService:
                             label = label_part.strip()
                         break
                 if self._upsert_locked(line, label) is not None:
-                    added += 1
+                    accepted += 1
                 else:
                     invalid += 1
-            if added > 0:
+            added = len(self._entries) - len(initial_labels)
+            updated = sum(
+                self._entries[pid].label != label for pid, label in initial_labels.items()
+            )
+            if accepted:
                 self._save()
-        return added, invalid
+        return added, updated, accepted, invalid
 
     def remove_proxy(self, proxy_id: str) -> bool:
         with self._write_transaction():

@@ -502,11 +502,12 @@ def open_profile_dialog(
         status_color = COLORS["success"]
 
         trait_sig = f"{info.get('trait_hash') or '#--------'} · Win {info.get('window_inner') or info.get('screen') or 'Auto'}"
+        dpr_text = f" · DPR {info['dpr']}" if info["dpr"] is not None else ""
         fp_summary_col.controls = [
             _kv("OS / Platform", f"{info['os'].upper()} · {info['platform']}"),
             _kv(
                 "Screen / Display",
-                f"{info.get('screen') or 'Auto'} · DPR {info['dpr']} · {info['color_depth']}-bit",
+                f"{info.get('screen') or 'Auto'}{dpr_text} · {info['color_depth']}-bit",
             ),
             _kv("CPU Concurrency", f"{info['hardware_concurrency']} Cores"),
             _kv("WebGL Vendor", str(info.get("gpu_vendor") or "Auto")),

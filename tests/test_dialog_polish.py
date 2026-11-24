@@ -146,3 +146,36 @@ def test_chrome_picker_uses_saved_launch_persona_and_updates_after_roll(monkeypa
         assert_gpu_matches_launch()
     finally:
         dialog.on_dismiss(None)
+
+
+@pytest.mark.parametrize("dpr", [None, 1.5])
+def test_chrome_display_summary_only_shows_pinned_dpr(monkeypatch, dpr):
+    from chrome_engine.persona import Persona
+    from src.ui.dialogs import profile as ui
+
+    persona = Persona(
+        seed=18, platform="macos", platform_version="15.0.0", device_scale_factor=dpr
+    ).to_json()
+    monkeypatch.setattr(ui.fp_service, "load_saved_chrome_persona", lambda _: persona)
+    page = page_fake()
+    open_profile_dialog(
+        page, None, Mock(), Profile("Scout Chromium", engine="chrome", os_type="macos")
+    )
+    dialog = page.show_dialog.call_args.args[0]
+    try:
+        display_row = next(
+            c
+            for c in walk(dialog.content)
+            if isinstance(c, ft.Row)
+            and c.controls
+            and isinstance(c.controls[0], ft.Text)
+            and c.controls[0].value == "Screen / Display"
+        )
+        summary = display_row.controls[1].value
+        assert summary == (
+            "C++ Seed / Viewport · 24-bit"
+            if dpr is None
+            else "C++ Seed / Viewport · DPR 1.5 · 24-bit"
+        )
+    finally:
+        dialog.on_dismiss(None)
