@@ -197,6 +197,7 @@ Mọi cấu hình đều không bắt buộc. Muốn đổi thì sao chép `.env
 | --- | --- | --- |
 | `FOXPROFILE_LANG` | `en` | Ngôn ngữ giao diện: `en` hoặc `vi` |
 | `FOXPROFILE_PROFILES_FILE` | `profiles.json` | File lưu danh sách profile |
+| `FOXPROFILE_PREFERENCES_FILE` | `preferences.json` | Lựa chọn của app desktop được giữ sau khi mở lại: ngôn ngữ, giao diện, màu nhấn, số dòng mỗi trang, kích thước và vị trí cửa sổ |
 | `FOXPROFILE_DATA_DIR` | `camoufox_data` | Thư mục dữ liệu, mỗi profile một thư mục con |
 | `FOXPROFILE_LOG_DIR` | `logs` | Thư mục log |
 | `FOXPROFILE_LOG_LEVEL` | `INFO` | Mức log |

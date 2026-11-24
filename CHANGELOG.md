@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- App desktop nhớ ngôn ngữ, giao diện sáng/tối, màu nhấn, số dòng mỗi trang cùng kích thước và vị trí cửa sổ sau khi thoát và mở lại (vị trí chỉ khôi phục khi còn nằm trên một màn hình); bộ lọc profile vẫn trở về Tất cả.
+
 - App desktop đồng bộ số lịch ngâm tài khoản, không đoán DPR khi Chromium dùng cấu hình tự động và tách số proxy được thêm/cập nhật khi nhập; web xóa token bị từ chối mà không ảnh hưởng lần đăng nhập mới.
 
 - API giữ đủ các thay đổi khi nhiều yêu cầu PATCH sửa các trường khác nhau của cùng một profile; phím `/` không chuyển tiêu điểm ra sau hộp thoại web; số tiện ích trên thanh bên desktop cập nhật ngay sau khi cài hoặc xóa.

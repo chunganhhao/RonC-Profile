@@ -184,6 +184,7 @@ proxies.json
 warming_tasks.json
 extensions.json
 extensions_data/
+preferences.json
 logs/
 
 # Tooling artefacts

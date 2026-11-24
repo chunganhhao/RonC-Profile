@@ -6,13 +6,14 @@ from collections.abc import Callable
 
 import flet as ft
 
-from ..core.config import DATA_DIR
+from ..core.config import DATA_DIR, PREFERENCES_FILE
 from ..core.container import Container
 from ..core.logging import get_logger
 from ..core.strings import current_language, get_string, localize_launch_error, set_language
 from ..interfaces.protocols import IBrowserLauncher, IProfileManager, IProxyService
 from ..services.browser import fingerprint
 from ..utils.totp import generate_totp
+from . import preferences
 from .components import (
     build_content_area,
     build_empty_state,
@@ -65,6 +66,8 @@ class App:
         self._reconcile_started = False
         self.refs: UIRefs | None = None
         self.filter = "all"
+        self.preferences_file = PREFERENCES_FILE
+        self._saved_preferences = preferences.Preferences()
         self._live_since: dict[str, str] = {}
         self._feedback_until: dict[tuple[str, str], float] = {}
         self._toast_until: float = 0.0
@@ -108,7 +111,9 @@ class App:
         self._filter_cache_key = None
         self._search_seq = 0
         self.page = page
-        configure_page(page)
+        saved = self._apply_preferences()
+        configure_page(page, saved.window)
+        page.window.on_event = self._on_window_event
         fp = ft.FilePicker()
         page.services.append(fp)
         self.clipboard = ft.Clipboard()
@@ -220,23 +225,64 @@ class App:
             else ft.Icons.KEYBOARD_ARROW_DOWN
         )
 
+    def _apply_preferences(self) -> preferences.Preferences:
+        saved = preferences.load(self.preferences_file)
+        if saved.language:
+            set_language(saved.language)
+        if saved.theme:
+            set_theme_mode(saved.theme)
+        if saved.accent:
+            set_accent_color(saved.accent)
+        if saved.page_size:
+            self.state.items_per_page = saved.page_size
+        self._saved_preferences = saved
+        return saved
+
+    def _window_bounds(self) -> preferences.Bounds | None:
+        window = self.page.window if self.page is not None else None
+        if window is None or window.full_screen or window.minimized:
+            return self._saved_preferences.window
+        bounds = (window.left, window.top, window.width, window.height)
+        if any(value is None for value in bounds):
+            return self._saved_preferences.window
+        left, top, width, height = map(float, bounds)
+        return left, top, width, height
+
+    def _save_preferences(self) -> None:
+        current = preferences.Preferences(
+            language=current_language(),
+            theme=current_theme_mode(),
+            accent=current_accent_color(),
+            page_size=self.state.items_per_page,
+            window=self._window_bounds(),
+        )
+        if current != self._saved_preferences and preferences.save(self.preferences_file, current):
+            self._saved_preferences = current
+
+    def _on_window_event(self, e: ft.WindowEvent) -> None:
+        if e.type in (ft.WindowEventType.MOVED, ft.WindowEventType.RESIZED):
+            self._save_preferences()
+
     def _set_language(self, code: str) -> None:
         if code == current_language():
             return
         set_language(code)
         self.state.search_query = ""
+        self._save_preferences()
         self._build_ui()
 
     def _set_theme(self, mode: str) -> None:
         if mode == current_theme_mode():
             return
         set_theme_mode(mode)
+        self._save_preferences()
         self._build_ui()
 
     def _set_accent(self, preset: str) -> None:
         if preset == current_accent_color():
             return
         set_accent_color(preset)
+        self._save_preferences()
         self._build_ui()
 
     def _open_appearance(self, _: object = None) -> None:
@@ -407,6 +453,7 @@ class App:
             return
         self.state.items_per_page = size
         self.state.current_page = 1
+        self._save_preferences()
         self._search_seq = getattr(self, "_search_seq", 0) + 1
         self._refresh_profiles()
 
