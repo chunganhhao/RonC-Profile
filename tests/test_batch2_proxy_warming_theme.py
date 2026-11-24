@@ -1137,6 +1137,9 @@ def test_full_app_e2e_lifecycle_theme_and_dialogs(tmp_path, monkeypatch):
         app._open_warming()
         assert page.dialog is not None
         page.pop_dialog()
+        assert app._refresh_warming_dialog is not None
+        app._main(FullDummyPage())
+        assert app._refresh_warming_dialog is None
     finally:
         app.warming.stop_daemon()
 
@@ -1608,6 +1611,11 @@ def test_open_warming_dialog_follows_background_status(tmp_path, monkeypatch):
         asyncio.run(app._ui_reconcile_loop())
         assert page.dialog is dialog
         assert task_action() == icon
+
+    app.page = page
+    dialog.actions[0].content.on_click(None)
+    assert page.closed
+    assert app._refresh_warming_dialog is None
 
 
 @pytest.mark.parametrize("run_immediately", [False, True])

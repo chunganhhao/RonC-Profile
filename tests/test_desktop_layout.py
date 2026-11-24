@@ -162,6 +162,7 @@ def test_sheet_batches_responsive_changes_for_200_rows():
         for i in range(200)
     ]
     header = build_header_row(False, False, noop, layout_width=610)
+    measured_widths = []
     area = build_content_area(
         ft.Text(""),
         ft.Column(controls=cards),
@@ -170,6 +171,7 @@ def test_sheet_batches_responsive_changes_for_200_rows():
         ft.Text(),
         header_slot=ft.Container(content=header),
         initial_table_width=610,
+        on_table_resize=measured_widths.append,
     )
     controls = {getattr(c, "key", None): c for c in walk(area)}
     table = controls["profiles_table_container"]
@@ -186,6 +188,7 @@ def test_sheet_batches_responsive_changes_for_200_rows():
 
         sheet.on_size_change(SimpleNamespace(width=652))
         update.assert_not_called()
+        assert measured_widths == [650, 650]
 
         sheet.on_size_change(SimpleNamespace(width=1092))
         update.assert_called_once_with(table)

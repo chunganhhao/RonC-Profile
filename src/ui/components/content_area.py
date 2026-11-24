@@ -103,9 +103,9 @@ def build_content_area(
     def resize_table(event: ft.LayoutSizeChangeEvent) -> None:
         ft.context.disable_auto_update()
         width = max(1, event.width - 2)
+        if on_table_resize is not None:
+            on_table_resize(width)
         if table.width != width:
-            if on_table_resize is not None:
-                on_table_resize(width)
             if header_slot is not None and isinstance(header_slot.content, ProfileRow):
                 header_slot.content.set_layout_width(width, header=True)
             for row in profile_list.controls:

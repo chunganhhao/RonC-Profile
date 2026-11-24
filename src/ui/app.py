@@ -94,6 +94,7 @@ class App:
         ft.run(self._main, assets_dir=ASSETS_DIR)
 
     def _main(self, page: ft.Page) -> None:
+        self._refresh_warming_dialog = None
         self.page = page
         configure_page(page)
         fp = ft.FilePicker()
