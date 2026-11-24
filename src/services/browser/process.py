@@ -8,6 +8,7 @@ from collections.abc import Callable
 from contextlib import suppress
 
 from ...core.logging import get_logger
+from ...core.strings import current_language
 from ...models.profile import Profile
 from . import display
 
@@ -41,6 +42,7 @@ def runner_command(profile: Profile) -> list[str]:
 def spawn_browser(profile: Profile) -> subprocess.Popen:
     """Spawn the browser subprocess for the given profile."""
     env = os.environ.copy()
+    env["FOXPROFILE_LANG"] = current_language()
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = _PROJECT_ROOT + (
         os.pathsep + existing_pythonpath if existing_pythonpath else ""

@@ -100,6 +100,28 @@ sys.exit(runner.main())
     assert output == "BROWSER_STARTED\n"
 
 
+def test_spawn_uses_the_active_language_for_launch_failures(monkeypatch):
+    from src.core import strings
+    from src.services.browser import process
+
+    monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["vi"])
+    script = (
+        "from src.services.browser.cores import ProfileStoreBusyError;"
+        "print(f'LAUNCH_FAILED: {ProfileStoreBusyError()}', flush=True)"
+    )
+    monkeypatch.setattr(process, "runner_command", lambda _: [sys.executable, "-c", script])
+    proc = process.spawn_browser(Profile("qa", engine="chrome"))
+    launcher = BrowserLauncher()
+    messages = []
+    result = launcher_mod._LaunchResult()
+    try:
+        launcher._monitor_process(proc, "qa", messages.append, None, lambda: None, result)
+    finally:
+        process.terminate(proc, "qa")
+    assert result.error == "Kho profile đang bận. Hãy thử lại sau giây lát."
+    assert messages == [f"[qa] LAUNCH_FAILED: {result.error}"]
+
+
 @pytest.fixture
 def bl(monkeypatch):
     spawned = []

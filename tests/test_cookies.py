@@ -56,6 +56,31 @@ def test_cookie_tool_binding_errors_use_result(monkeypatch, tmp_path, capsys, fa
     assert capsys.readouterr().out == 'RESULT:{"error": "CoreError: binding refused"}\n'
 
 
+def test_cookie_tool_reports_store_busy_without_internal_metadata(monkeypatch, tmp_path, capsys):
+    from src.core import strings
+    from src.services.browser import cookie_tool, lease
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cookie_tool.sys, "argv", ["cookie_tool.py", "export", "p", "linux", "chrome"]
+    )
+    monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["vi"])
+    monkeypatch.setattr(lease, "store_lease", Mock(side_effect=lease.StoreLeaseTimeout))
+
+    assert cookie_tool.main() == 1
+    result = json.loads(capsys.readouterr().out.removeprefix("RESULT:"))
+    assert result == {"error": "Kho profile đang bận. Hãy thử lại sau giây lát."}
+
+    def run(*args, env, **kwargs):
+        assert env["FOXPROFILE_LANG"] == "vi"
+        return SimpleNamespace(stdout=f"RESULT:{json.dumps(result)}")
+
+    monkeypatch.setattr(cookies.subprocess, "run", run)
+    with pytest.raises(cookies.CookieError) as caught:
+        cookies._call_tool("export", "p", "linux", engine="chrome")
+    assert str(caught.value) == result["error"]
+
+
 def test_cookie_tool_holds_profile_lease(monkeypatch, tmp_path):
     from src.services.browser import cookie_tool
     from src.services.browser.lease import profile_lease

@@ -18,6 +18,7 @@ from pathlib import Path
 from chrome_engine import fetch
 from chrome_engine.release import RELEASES, Asset, Release, UnsupportedPlatformError, host_platform
 
+from ...core.strings import get_string
 from .lease import profile_lease
 
 # Reviewed paired stack. Add candidates only after compatibility/E2E review.
@@ -43,6 +44,11 @@ _LAUNCH_BINDING_WAIT_SECONDS = 5.0
 
 class CoreError(ValueError):
     pass
+
+
+class ProfileStoreBusyError(CoreError):
+    def __init__(self) -> None:
+        super().__init__(get_string("launch_store_busy"))
 
 
 def _default_storage_root() -> Path:
@@ -466,7 +472,6 @@ def backup_and_apply(
 def launch_binding(name: str, engine: str, requested: str = "") -> str:
     """Resolve persisted binding under store lease; refuse corrupt/stale launch data."""
     from ...core.config import PROFILES_FILE
-    from ...core.strings import LAUNCH_STORE_BUSY_CODE, STRINGS
     from .lease import StoreLeaseTimeout, store_lease
 
     path = Path(PROFILES_FILE)
@@ -474,9 +479,7 @@ def launch_binding(name: str, engine: str, requested: str = "") -> str:
         try:
             stack.enter_context(store_lease(path, timeout=_LAUNCH_BINDING_WAIT_SECONDS))
         except StoreLeaseTimeout as exc:
-            raise CoreError(
-                f"{LAUNCH_STORE_BUSY_CODE}: {STRINGS['en']['launch_store_busy']}"
-            ) from exc
+            raise ProfileStoreBusyError() from exc
         if not path.exists():
             return requested  # Standalone runner with no managed profile store.
         data = json.loads(path.read_text(encoding="utf-8"))
