@@ -87,7 +87,7 @@ def test_resize_preserves_fields_selection_and_actions(width):
     ledger = card.content
     original = {id(c) for c in walk(ledger)}
     with patch.object(ft.Container, "update"):
-        card.on_size_change(SimpleNamespace(width=width))
+        card.set_layout_width(width)
         assert (original - {id(ledger)}).issubset({id(c) for c in walk(card)})
         checkbox = next(c for c in walk(card) if isinstance(c, ft.Checkbox))
         assert checkbox.value
@@ -97,9 +97,9 @@ def test_resize_preserves_fields_selection_and_actions(width):
         assert identity.col == (7 if width >= 820 else 12)
         assert actions.col == (5 if width >= 820 else 12)
         compact = card.content
-        card.on_size_change(SimpleNamespace(width=width - 1))
+        card.set_layout_width(width - 1)
         assert card.content is compact
-        card.on_size_change(SimpleNamespace(width=1700))
+        card.set_layout_width(1700)
         assert card.content is ledger
         assert {id(c) for c in walk(ledger)} == original
 
@@ -109,10 +109,10 @@ def test_compact_header_keeps_select_all():
     header = build_header_row(False, False, clicked.append)
     ledger = header.content
     with patch.object(ft.Container, "update"):
-        header.on_size_change(SimpleNamespace(width=610))
+        header.set_layout_width(610, header=True)
         next(c for c in walk(header) if isinstance(c, ft.Checkbox)).on_change(None)
         assert clicked == [True]
-        header.on_size_change(SimpleNamespace(width=1700))
+        header.set_layout_width(1700, header=True)
         assert header.content is ledger
 
 
@@ -130,7 +130,7 @@ def test_refreshed_rows_start_in_measured_layout_without_a_ledger_flash():
         assert isinstance(card.content, ft.Column)
         compact = card.content
         update.assert_not_called()
-        card.on_size_change(SimpleNamespace(width=610))
+        card.set_layout_width(610)
         assert card.content is compact
         update.assert_not_called()
 
@@ -143,6 +143,59 @@ def test_workspace_fits_viewport_instead_of_forcing_horizontal_scroll():
         for width in (610, 890, 1150, 1700, 890):
             controls["profiles_sheet_container"].on_size_change(SimpleNamespace(width=width))
             assert table.width == width - 2
+
+
+def test_sheet_batches_responsive_changes_for_200_rows():
+    def noop(_):
+        pass
+
+    cards = [
+        build_profile_card(
+            Profile(f"Demo {i}", engine="chrome"),
+            False,
+            False,
+            noop,
+            noop,
+            noop,
+            layout_width=610,
+        )
+        for i in range(200)
+    ]
+    header = build_header_row(False, False, noop, layout_width=610)
+    area = build_content_area(
+        ft.Text(""),
+        ft.Column(controls=cards),
+        ft.IconButton(),
+        ft.IconButton(),
+        ft.Text(),
+        header_slot=ft.Container(content=header),
+        initial_table_width=610,
+    )
+    controls = {getattr(c, "key", None): c for c in walk(area)}
+    table = controls["profiles_table_container"]
+    sheet = controls["profiles_sheet_container"]
+    assert all(row.on_size_change is None for row in [header, *cards])
+
+    compact = [card.content for card in cards]
+    compact_header = header.content
+    with patch.object(ft.Container, "update", autospec=True) as update:
+        sheet.on_size_change(SimpleNamespace(width=652))
+        update.assert_called_once_with(table)
+        assert all(card.content is layout for card, layout in zip(cards, compact, strict=True))
+        update.reset_mock()
+
+        sheet.on_size_change(SimpleNamespace(width=652))
+        update.assert_not_called()
+
+        sheet.on_size_change(SimpleNamespace(width=1092))
+        update.assert_called_once_with(table)
+        assert header.content is compact_header
+        assert all(card.content.controls[1].controls[0].col == 3 for card in cards)
+        update.reset_mock()
+
+        sheet.on_size_change(SimpleNamespace(width=1402))
+        update.assert_called_once_with(table)
+        assert all(isinstance(row.content, ft.Row) for row in [header, *cards])
 
 
 def test_profile_dialog_reflows_without_losing_draft():

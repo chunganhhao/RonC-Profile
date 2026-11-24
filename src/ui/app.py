@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import time
+from collections.abc import Callable
 
 import flet as ft
 
@@ -70,6 +71,7 @@ class App:
         self._filter_column = ft.Column(spacing=2)
         self._header_slot = ft.Container()
         self._profile_table_width: float | None = None
+        self._refresh_warming_dialog: Callable[[], None] | None = None
         self._total_count_text = ft.Text("", size=12, font_family=FONT_SEMIBOLD)
         self._footer_proxy_text = ft.Text("", size=11.5, font_family=FONT_DATA)
         self._footer_warming_text = ft.Text("", size=11.5, font_family=FONT_DATA)
@@ -257,7 +259,12 @@ class App:
         if not self.page:
             return
         selected = sorted(self.state.selected_names())
-        open_warming_dialog(
+
+        def clear_dialog_refresh() -> None:
+            if self._refresh_warming_dialog is refresh:
+                self._refresh_warming_dialog = None
+
+        refresh = open_warming_dialog(
             self.page,
             self.warming,
             self.pm,
@@ -265,7 +272,9 @@ class App:
             target_profile_names=selected or None,
             log_fn=self._log,
             refresh_fn=self._refresh_profiles,
+            on_dismiss=clear_dialog_refresh,
         )
+        self._refresh_warming_dialog = refresh
 
     def _open_extensions(self, _: object = None) -> None:
         if not self.page:
@@ -834,7 +843,10 @@ class App:
                 changed = running_now != self.state._last_running_snapshot
                 if changed:
                     self.state._last_running_snapshot = running_now
-                if changed or expired_keys or toast_expired or self.state.consume_refresh():
+                refresh_requested = self.state.consume_refresh()
+                if refresh_requested and self._refresh_warming_dialog is not None:
+                    self._refresh_warming_dialog()
+                if changed or expired_keys or toast_expired or refresh_requested:
                     self._refresh_profiles()
             except Exception as e:
                 logger.error("Error in UI reconcile loop: %s", e)

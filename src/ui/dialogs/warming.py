@@ -34,7 +34,8 @@ def open_warming_dialog(
     target_profile_names: list[str] | None = None,
     log_fn: Callable[[str], None] | None = None,
     refresh_fn: Callable[[], None] | None = None,
-) -> None:
+    on_dismiss: Callable[[], None] | None = None,
+) -> Callable[[], None]:
     """Open the Account Warming Scheduler & Automated Interaction dialog."""
     all_names = [p.name for p in pm.list_profiles()]
     targets = list(target_profile_names) if target_profile_names else all_names
@@ -450,6 +451,7 @@ def open_warming_dialog(
 
     dlg = ft.AlertDialog(
         modal=True,
+        on_dismiss=lambda _: on_dismiss() if on_dismiss is not None else None,
         bgcolor=COLORS["card_bg"],
         shape=ft.RoundedRectangleBorder(radius=12),
         title_padding=ft.Padding.only(left=24, right=24, top=20, bottom=0),
@@ -495,3 +497,9 @@ def open_warming_dialog(
         max_height=800,
     )
     close = show_modal_dialog(page, dlg, local_keyboard=True)
+
+    def refresh_tasks() -> None:
+        if dlg.open:
+            _rebuild_tasks()
+
+    return refresh_tasks

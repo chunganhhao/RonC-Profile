@@ -1,9 +1,12 @@
 import json
+from types import SimpleNamespace
 
+import flet as ft
 from fastapi.testclient import TestClient
 
 from src.api import mcp_http
 from src.services import mcp_setup
+from src.ui.dialogs import mcp_guide
 
 URL = "https://vps.example.com/mcp"
 
@@ -47,6 +50,19 @@ def test_local_desktop_config_uses_stdio_bridge():
     assert desktop["args"] == [str(mcp_setup.MCP_SCRIPT)]
     assert desktop["env"] == {"FOXPROFILE_URL": "http://127.0.0.1:8000"}
     assert mcp_setup.MCP_SCRIPT.exists()
+
+
+def test_desktop_mcp_guide_does_not_expand_children_of_wrapping_rows(monkeypatch):
+    monkeypatch.setattr(
+        mcp_guide.threading, "Thread", lambda **_: SimpleNamespace(start=lambda: None)
+    )
+    shown = []
+    page = SimpleNamespace(show_dialog=shown.append, update=lambda: None)
+    mcp_guide.open_mcp_guide(page, ft.Clipboard())
+
+    for control in shown[0].content.content.controls:
+        if isinstance(control, ft.Row) and control.wrap:
+            assert all(not child.expand for child in control.controls)
 
 
 def _mcp_client(token):

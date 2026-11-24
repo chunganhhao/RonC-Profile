@@ -127,9 +127,7 @@ def open_mcp_guide(page: ft.Page, clipboard: ft.Clipboard) -> None:
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    wrap=True,
                     spacing=8,
-                    run_spacing=6,
                     controls=[
                         ft.Container(content=where, expand=True),
                         ft.Button(
