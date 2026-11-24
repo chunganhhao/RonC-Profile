@@ -14,6 +14,10 @@
 
 ### Sửa
 
+- App desktop: giảm tải CPU khi đổi kích thước cửa sổ ở trang có nhiều profile.
+
+- App desktop: cập nhật trạng thái lịch ngâm tài khoản ngay trong hộp thoại đang mở và hiển thị lại hướng dẫn, đoạn cấu hình cùng nút sao chép trong phần kết nối MCP.
+
 - App desktop: vô hiệu hóa nút khi đang dừng profile, hiển thị lỗi do kho profile bận theo ngôn ngữ đang dùng và hướng dẫn giải phóng dung lượng khi giải nén core bị đầy ổ.
 
 - App desktop: dừng hàng loạt hiển thị đúng “Đang dừng”, mở nhiều profile không còn lỗi do tranh chấp khóa ngắn khi đọc dữ liệu, và Quản lý core hướng dẫn giải phóng dung lượng khi ổ đĩa đầy.

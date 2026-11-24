@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import errno
 import json
@@ -1136,6 +1137,10 @@ def test_full_app_e2e_lifecycle_theme_and_dialogs(tmp_path, monkeypatch):
         app._open_warming()
         assert page.dialog is not None
         page.pop_dialog()
+        assert app._refresh_warming_dialog is not None
+        monkeypatch.setattr(app.warming, "start_daemon", lambda *args, **kwargs: None)
+        app._main(FullDummyPage())
+        assert app._refresh_warming_dialog is None
     finally:
         app.warming.stop_daemon()
 
@@ -1562,6 +1567,56 @@ def test_warming_ui_mutation_save_feedback(tmp_path, monkeypatch, operation, out
         assert logs == []
         assert refreshed == ([True] if operation == "delete_task" else [])
         assert (ws.get_task(task.id) is None) == (operation == "delete_task")
+
+
+def test_open_warming_dialog_follows_background_status(tmp_path, monkeypatch):
+    from src.ui.app import App
+    from src.ui.state import AppState
+
+    app = App.__new__(App)
+    app.state = AppState()
+    app.pm = SimpleNamespace(list_profiles=lambda: [])
+    app.bl = SimpleNamespace(running_profile_names=set)
+    app.warming = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    app._feedback_until = {}
+    app._toast_banner = ft.Container(visible=False)
+    app._refresh_profiles = lambda: None
+    app._log = lambda _: None
+    page = _DummyPage()
+    app.page = page
+    task = app.warming.add_task("Scheduled", ["profile"], schedule_time="08:00")
+    app._open_warming()
+    page.dialog.open = True
+    dialog = page.dialog
+
+    def task_action():
+        return next(
+            c.icon
+            for c in _walk_controls(dialog)
+            if isinstance(c, ft.IconButton)
+            and c.icon in (ft.Icons.PLAY_ARROW_ROUNDED, ft.Icons.STOP_ROUNDED)
+        )
+
+    async def run_once(_):
+        app.page = None
+
+    monkeypatch.setattr("src.ui.app.asyncio.sleep", run_once)
+    assert task_action() == ft.Icons.PLAY_ARROW_ROUNDED
+    for status, icon in (
+        ("running", ft.Icons.STOP_ROUNDED),
+        ("completed", ft.Icons.PLAY_ARROW_ROUNDED),
+    ):
+        task.status = status
+        app.page = page
+        app.state.schedule_refresh()
+        asyncio.run(app._ui_reconcile_loop())
+        assert page.dialog is dialog
+        assert task_action() == icon
+
+    app.page = page
+    dialog.actions[0].content.on_click(None)
+    assert page.closed
+    assert app._refresh_warming_dialog is None
 
 
 @pytest.mark.parametrize("run_immediately", [False, True])

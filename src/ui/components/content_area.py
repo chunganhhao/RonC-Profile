@@ -14,6 +14,7 @@ from ..theme.colors import (
     current_theme_mode,
 )
 from ..theme.styles import ICON_STYLE, OUTLINE_STYLE
+from .profile_card import ProfileRow
 
 
 def _host_ram_gb() -> int:
@@ -100,10 +101,16 @@ def build_content_area(
     )
 
     def resize_table(event: ft.LayoutSizeChangeEvent) -> None:
+        ft.context.disable_auto_update()
         width = max(1, event.width - 2)
         if on_table_resize is not None:
             on_table_resize(width)
         if table.width != width:
+            if header_slot is not None and isinstance(header_slot.content, ProfileRow):
+                header_slot.content.set_layout_width(width, header=True)
+            for row in profile_list.controls:
+                if isinstance(row, ProfileRow):
+                    row.set_layout_width(width)
             table.width = width
             table.update()
 
