@@ -223,7 +223,7 @@ def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog, ex
             error = FetchError("Download failed: https://example.test/core.dmg")
             if explicit:
                 raise error from exc
-            raise error
+            raise error  # noqa: B904 - exercise implicit exception chaining
 
     monkeypatch.setattr(cores.cores, "stage", fail)
     page = DialogPage()
