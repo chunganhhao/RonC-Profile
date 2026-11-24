@@ -13,13 +13,15 @@ def build_launch_button(
     is_loading: bool,
     is_running: bool,
     on_launch: Callable,
+    *,
+    is_stopping: bool = False,
 ) -> ft.Button:
     """Create the Launch ('🌐 Mở') / Stop ('✕ Đóng') / Loading button."""
     is_dark = current_theme_mode() == "dark"
     shape = ft.RoundedRectangleBorder(radius=7)
     label_style = ft.TextStyle(font_family=FONT_SEMIBOLD, size=13)
 
-    if is_loading:
+    if is_loading and not is_stopping:
         return ft.Button(
             content=ft.ProgressRing(width=15, height=15, stroke_width=2, color=COLORS["text_sub"]),
             width=_WIDTH,
@@ -31,7 +33,7 @@ def build_launch_button(
                 bgcolor=COLORS["paper_sunk"],
             ),
         )
-    if is_running:
+    if is_running or is_stopping:
         # In dark mode, running stop button is crisp white with dark ink
         stop_bg = "#F9FAFB" if is_dark else COLORS["ink_button"]
         stop_fg = "#0B0C0E" if is_dark else "#FFFFFF"
@@ -40,6 +42,7 @@ def build_launch_button(
             icon=ft.Icons.CLOSE_ROUNDED,
             width=_WIDTH,
             height=_HEIGHT,
+            disabled=is_stopping,
             style=ft.ButtonStyle(
                 shape=shape,
                 bgcolor={
@@ -51,7 +54,7 @@ def build_launch_button(
                 padding=ft.Padding.symmetric(horizontal=10),
                 elevation=0,
             ),
-            on_click=lambda _, n=name: on_launch(n),
+            on_click=None if is_stopping else lambda _, n=name: on_launch(n),
         )
 
     launch_bg = COLORS["paper_sunk"] if is_dark else "#FFFFFF"

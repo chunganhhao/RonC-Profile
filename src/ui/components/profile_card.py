@@ -319,7 +319,13 @@ def build_profile_card(
                         alignment=ft.MainAxisAlignment.END,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            build_launch_button(profile.name, is_busy, is_running, on_launch),
+                            build_launch_button(
+                                profile.name,
+                                is_loading,
+                                is_running,
+                                on_launch,
+                                is_stopping=is_stopping,
+                            ),
                             ft.Container(width=4),
                             *_action_buttons(
                                 profile,

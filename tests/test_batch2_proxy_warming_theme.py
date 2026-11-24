@@ -865,6 +865,15 @@ def test_desktop_bulk_stop_shows_stopping_until_stop_finishes(tmp_path, monkeypa
     stopping_labels = labels()
     assert "Đang dừng" in stopping_labels
     assert "Đang mở" not in stopping_labels
+    (stop_button,) = [
+        c
+        for c in _walk_controls(app.refs.profile_list_area)
+        if isinstance(c, ft.Button) and c.icon == ft.Icons.CLOSE_ROUNDED
+    ]
+    assert stop_button.disabled and stop_button.on_click is None
+    assert not any(
+        isinstance(c, ft.ProgressRing) for c in _walk_controls(app.refs.profile_list_area)
+    )
     (stop,) = pending
     stop()
     assert "Đã dừng" in labels()
