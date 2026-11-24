@@ -1003,6 +1003,7 @@ def test_verify_launches_apple_silicon_cases_inside_live_playwright_context(tmp_
 def test_verify_speech_voice_host_probe_and_checkpoint_compat(monkeypatch):
     import types
 
+    host_is_macos = sys.platform == "darwin"
     verify_path = KIT / "verify.py"
     vspec = importlib.util.spec_from_file_location("native_verify_speech", verify_path)
     assert vspec is not None and vspec.loader is not None
@@ -1044,7 +1045,7 @@ def test_verify_speech_voice_host_probe_and_checkpoint_compat(monkeypatch):
     assert "!vs.isNil()" in verify_mod._HOST_SPEECH_VOICE_COUNT_JXA
     assert '"UNAVAILABLE"' in verify_mod._HOST_SPEECH_VOICE_COUNT_JXA
 
-    if __import__("sys").platform == "darwin":
+    if host_is_macos:
         monkeypatch.undo()
         jxa_probe = (
             'ObjC.import("AVFoundation"); ObjC.import("Foundation"); '
