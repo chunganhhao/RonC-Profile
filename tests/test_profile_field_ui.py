@@ -157,6 +157,34 @@ def test_order_rejects_invalid_values(value):
     assert not page.closed and saved == []
 
 
+@pytest.mark.parametrize(
+    ("row_index", "display_order", "draft", "expected"),
+    [
+        (1, None, "1", []),
+        (5, 5, "5", []),
+        (3, 5, "5", []),
+        (3, 5, "05", []),
+        (1, None, "2", [2]),
+    ],
+    ids=[
+        "fallback-id-unchanged",
+        "explicit-id-in-position",
+        "explicit-id-out-of-position",
+        "normalized-id-unchanged",
+        "id-changed",
+    ],
+)
+def test_order_submission_only_saves_a_changed_id(row_index, display_order, draft, expected):
+    page, saved = Page(), []
+    profile = Profile("Bravo", engine="chrome", display_order=display_order)
+    open_profile_field_dialog(page, profile, "display_order", saved.append, row_index=row_index)
+    field = next(c for c in walk(page.dialog.content) if c.__class__.__name__ == "TextField")
+    assert field.value == str(display_order or row_index)
+    field.value = draft
+    page.dialog.actions[-1].on_click(None)
+    assert page.closed and saved == expected
+
+
 def test_tags_are_local_and_removable():
     page, saved = Page(), []
     p = Profile("fixture", group="Gmail")
