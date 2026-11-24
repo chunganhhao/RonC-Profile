@@ -906,10 +906,17 @@ def test_stop_clears_stopping_after_exception(monkeypatch, from_worker):
         "threading",
         SimpleNamespace(Thread=lambda target, daemon: SimpleNamespace(start=lambda: start(target))),
     )
-    with pytest.raises(RuntimeError, match="stop failed"):
+    if from_worker:
         browser.launch_or_stop(name, pm, bl, state, lambda _: None)
+        assert state.is_stopping(name)
+        assert state.consume_refresh()
         (stop,) = pending
-        stop()
+        with pytest.raises(RuntimeError, match="stop failed"):
+            stop()
+    else:
+        with pytest.raises(RuntimeError, match="stop failed"):
+            browser.launch_or_stop(name, pm, bl, state, lambda _: None)
+        assert not pending
     assert not state.is_stopping(name)
     assert state.consume_refresh()
 
