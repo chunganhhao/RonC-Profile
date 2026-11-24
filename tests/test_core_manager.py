@@ -474,6 +474,44 @@ def test_launch_binding_retries_busy_profile_store(tmp_path, monkeypatch):
     assert attempts == [path, path]
 
 
+def test_busy_store_retry_does_not_block_an_unrelated_store(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+
+    from src.services.browser import lease
+
+    busy = tmp_path / "profiles.json"
+    other = tmp_path / "proxies.json"
+    real_lease = lease.profile_lease
+    real_monotonic = lease.time.monotonic
+    retrying = False
+
+    @contextmanager
+    def initially_busy(path):
+        if path == busy and not retrying:
+            raise BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable")
+        with real_lease(path):
+            yield
+
+    def use_other_store():
+        with lease.store_lease(other):
+            return True
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+
+        def during_retry(_delay):
+            nonlocal retrying
+            assert pool.submit(use_other_store).result(timeout=2)
+            retrying = True
+
+        monkeypatch.setattr(lease, "profile_lease", initially_busy)
+        monkeypatch.setattr(
+            lease, "time", SimpleNamespace(monotonic=real_monotonic, sleep=during_retry)
+        )
+        with lease.store_lease(busy, timeout=5):
+            assert retrying
+
+
 def test_stale_rename_rejected_before_moving_data(apply_fixture):
     from src.services.profile import manager
 

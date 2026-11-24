@@ -130,11 +130,17 @@ def discard_lease(path) -> None:
 @contextmanager
 def waiting_lease(path, timeout: float):
     """profile_lease, retried until `timeout` seconds pass while another process holds it."""
+    with _retry_lease(lambda: profile_lease(path), timeout):
+        yield
+
+
+@contextmanager
+def _retry_lease(acquire, timeout: float):
     deadline = time.monotonic() + timeout
     with ExitStack() as stack:
         while True:
             try:
-                stack.enter_context(profile_lease(path))
+                stack.enter_context(acquire())
                 break
             # flock reports a held lock as BlockingIOError, msvcrt.locking as PermissionError.
             except (BlockingIOError, PermissionError):
@@ -145,16 +151,26 @@ def waiting_lease(path, timeout: float):
 
 
 @contextmanager
-def store_lease(path, *, timeout: float = 0):
+def _store_lease_once(path):
     key = str(Path(path).resolve())
     with _STORE_MUTEX:
         if getattr(_STORE_OWNER, "key", None) == key:
             yield
         else:
-            with waiting_lease(path, timeout) if timeout else profile_lease(path):
+            with profile_lease(path):
                 previous = getattr(_STORE_OWNER, "key", None)
                 _STORE_OWNER.key = key
                 try:
                     yield
                 finally:
                     _STORE_OWNER.key = previous
+
+
+@contextmanager
+def store_lease(path, *, timeout: float = 0):
+    with (
+        _retry_lease(lambda: _store_lease_once(path), timeout)
+        if timeout
+        else _store_lease_once(path)
+    ):
+        yield
