@@ -16,6 +16,7 @@ from camoufox.async_api import AsyncCamoufox
 from camoufox.virtdisplay import VirtualDisplay
 
 from src.core.config import DATA_DIR, HEADLESS, PROFILES_FILE, RESTORE_TABS
+from src.core.strings import LAUNCH_STORE_BUSY_CODE
 from src.services.browser import control, session
 from src.services.browser import display as xvfb
 from src.services.browser.fingerprint import available_gpus, load_or_create
@@ -420,8 +421,8 @@ async def run_browser(
 async def _async_main() -> int:
     loop = asyncio.get_running_loop()
     _setup_signals(loop)
-    watch_launcher(_shutdown)
-    from src.services.browser.cores import launch_binding
+    managed = watch_launcher(_shutdown)
+    from src.services.browser.cores import ProfileStoreBusyError, launch_binding
     from src.services.browser.gpu_probe import install_headless_gpu_probe
     from src.services.browser.lease import profile_lease
 
@@ -433,6 +434,9 @@ async def _async_main() -> int:
                 version = launch_binding(
                     args[0], "camoufox", sys.argv[6] if len(sys.argv) > 6 else ""
                 )
+        except ProfileStoreBusyError as exc:
+            _safe_print(f"LAUNCH_FAILED: {LAUNCH_STORE_BUSY_CODE if managed else exc}")
+            return 1
         except (ValueError, OSError, RuntimeError) as exc:
             _safe_print(f"LAUNCH_FAILED: {_compact_error(exc, 220)}")
             return 1

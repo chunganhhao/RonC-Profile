@@ -1,7 +1,7 @@
 import threading
 from collections.abc import Callable
 
-from ...core.strings import get_string
+from ...core.strings import ProfileStoreBusyMessage, get_string
 from ...interfaces.protocols import IBrowserLauncher, IProfileManager
 from ...services.browser.launcher import ProfileBusyError
 from ..state import AppState
@@ -60,7 +60,11 @@ def launch_or_stop(
 
     def _launch_log(message: str) -> None:
         if "LAUNCH_FAILED:" in message and not state.is_stopping(name):
-            reason = message.split("LAUNCH_FAILED:", 1)[1].strip()
+            reason = (
+                ProfileStoreBusyMessage()
+                if isinstance(message, ProfileStoreBusyMessage)
+                else message.split("LAUNCH_FAILED:", 1)[1].strip()
+            )
             state.failed[name] = reason or get_string("stamp_failed")
         log(message)
 

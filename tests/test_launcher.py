@@ -100,17 +100,21 @@ sys.exit(runner.main())
     assert output == "BROWSER_STARTED\n"
 
 
-def test_spawn_uses_the_active_language_for_launch_failures(monkeypatch):
+def test_store_busy_failure_uses_current_language_after_spawn(monkeypatch):
     from src.core import strings
     from src.services.browser import process
 
-    monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["vi"])
+    monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["en"])
     script = (
-        "from src.services.browser.cores import ProfileStoreBusyError;"
-        "print(f'LAUNCH_FAILED: {ProfileStoreBusyError()}', flush=True)"
+        "import errno, asyncio;"
+        "from chrome_engine import runner;"
+        "from src.services.browser import lease;"
+        "lease.store_lease = lambda *a, **kw: (_ for _ in ()).throw(lease.StoreLeaseTimeout());"
+        "raise SystemExit(asyncio.run(runner._async_main(['qa', 'None', 'macos'])))"
     )
     monkeypatch.setattr(process, "runner_command", lambda _: [sys.executable, "-c", script])
     proc = process.spawn_browser(Profile("qa", engine="chrome"))
+    strings.set_language("vi")
     launcher = BrowserLauncher()
     messages = []
     result = launcher_mod._LaunchResult()
@@ -119,7 +123,16 @@ def test_spawn_uses_the_active_language_for_launch_failures(monkeypatch):
     finally:
         process.terminate(proc, "qa")
     assert result.error == "Kho profile đang bận. Hãy thử lại sau giây lát."
-    assert messages == [f"[qa] LAUNCH_FAILED: {result.error}"]
+    assert messages[-1] == f"[qa] LAUNCH_FAILED: {result.error}"
+    launcher._launch_results["qa"] = result
+    strings.set_language("en")
+    assert launcher.wait_for_launch("qa", 0) == (
+        False,
+        "The profile store is busy. Try again in a moment.",
+    )
+    assert strings.localize_launch_error(messages[-1]) == (
+        "[qa] LAUNCH_FAILED: The profile store is busy. Try again in a moment."
+    )
 
 
 @pytest.fixture

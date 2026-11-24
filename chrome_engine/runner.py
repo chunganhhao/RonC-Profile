@@ -25,6 +25,7 @@ from chrome_engine import fetch
 from chrome_engine.engine import ChromeEngine, EngineError
 from src.core.config import DATA_DIR, HEADLESS, LOG_DIR, LOG_LEVEL, RESTORE_TABS
 from src.core.logging import get_logger, setup_logging
+from src.core.strings import LAUNCH_STORE_BUSY_CODE
 from src.services.browser import control, session
 from src.services.browser.process import watch_launcher
 from src.services.browser.runner import _read_profile_extra, restore_tabs, snapshot_tabs
@@ -214,8 +215,8 @@ async def _async_main(argv: list[str]) -> int:
             loop.add_signal_handler(sig, _shutdown.set)
     except NotImplementedError:
         pass
-    watch_launcher(_shutdown)
-    from src.services.browser.cores import launch_binding
+    managed = watch_launcher(_shutdown)
+    from src.services.browser.cores import ProfileStoreBusyError, launch_binding
     from src.services.browser.lease import profile_lease
 
     with profile_lease(os.path.join(os.getcwd(), DATA_DIR, argv[0])):
@@ -224,6 +225,9 @@ async def _async_main(argv: list[str]) -> int:
         try:
             with launch_stage("launch_binding"):
                 version = launch_binding(args[0], "chrome", argv[5] if len(argv) > 5 else "")
+        except ProfileStoreBusyError as exc:
+            _say(f"LAUNCH_FAILED: {LAUNCH_STORE_BUSY_CODE if managed else exc}")
+            return 1
         except (ValueError, OSError, RuntimeError) as exc:
             _say(f"LAUNCH_FAILED: {_compact(exc, 220)}")
             return 1
