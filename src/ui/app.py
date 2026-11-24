@@ -70,6 +70,7 @@ class App:
         self.preferences_file = PREFERENCES_FILE
         self._saved_preferences = preferences.Preferences()
         self._window_save_seq = 0
+        self._window_save_pending = False
         self._live_since: dict[str, str] = {}
         self._feedback_until: dict[tuple[str, str], float] = {}
         self._toast_until: float = 0.0
@@ -245,10 +246,7 @@ class App:
         if window is None or window.full_screen or window.maximized or window.minimized:
             return self._saved_preferences.window
         bounds = (window.left, window.top, window.width, window.height)
-        if any(value is None for value in bounds):
-            return self._saved_preferences.window
-        left, top, width, height = map(float, bounds)
-        return left, top, width, height
+        return preferences.valid_bounds(bounds) or self._saved_preferences.window
 
     def _save_preferences(self) -> None:
         current = preferences.Preferences(
@@ -262,14 +260,23 @@ class App:
             self._saved_preferences = current
 
     def _on_window_event(self, e: ft.WindowEvent) -> None:
-        if e.type in (ft.WindowEventType.MOVED, ft.WindowEventType.RESIZED):
-            self._window_save_seq += 1
-            self.page.run_task(self._save_window_later, self._window_save_seq)
+        if self.page is None or e.type not in (
+            ft.WindowEventType.MOVED,
+            ft.WindowEventType.RESIZED,
+        ):
+            return
+        # The first event of a burst is written at once, so quitting right after a move keeps
+        # it; the rest are coalesced into one write once the window settles.
+        if not self._window_save_pending:
+            self._save_preferences()
+        self._window_save_pending = True
+        self._window_save_seq += 1
+        self.page.run_task(self._save_window_later, self._window_save_seq)
 
     async def _save_window_later(self, seq: int) -> None:
-        # Coalesces a burst of move/resize events into one write once the window settles.
         await asyncio.sleep(self._WINDOW_SAVE_DELAY_S)
         if seq == self._window_save_seq:
+            self._window_save_pending = False
             self._save_preferences()
 
     def _set_language(self, code: str) -> None:

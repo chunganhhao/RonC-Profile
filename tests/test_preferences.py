@@ -226,7 +226,7 @@ def test_full_screen_maximized_or_minimized_geometry_is_not_saved(tmp_path, monk
     assert preferences.load(tmp_path / "preferences.json").window is None
 
 
-def test_a_drag_is_written_once_with_the_final_bounds(tmp_path, monkeypatch):
+def test_a_drag_is_written_at_its_start_and_once_more_when_it_settles(tmp_path, monkeypatch):
     app, page = _launch(tmp_path, monkeypatch)
     writes = []
     real_save = preferences.save
@@ -244,7 +244,27 @@ def test_a_drag_is_written_once_with_the_final_bounds(tmp_path, monkeypatch):
         )
         page.window.on_event(SimpleNamespace(type=ft.WindowEventType.MOVED))
     page.settle_window()
-    assert writes == [(180.0, 90.0, 1100.0, 700.0)]
+    assert writes == [(100.0, 90.0, 1100.0, 700.0), (180.0, 90.0, 1100.0, 700.0)]
+
+
+def test_a_single_move_is_saved_before_the_app_can_quit(tmp_path, monkeypatch):
+    app, page = _launch(tmp_path, monkeypatch)
+    page.window.left, page.window.top, page.window.width, page.window.height = 120, 90, 1100, 700
+    page.window.on_event(SimpleNamespace(type=ft.WindowEventType.MOVED))
+    assert preferences.load(tmp_path / "preferences.json").window == (120.0, 90.0, 1100.0, 700.0)
+    page.settle_window()
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -5, None])
+def test_unusable_live_bounds_keep_the_last_saved_window(tmp_path, monkeypatch, bad):
+    app, page = _launch(tmp_path, monkeypatch)
+    page.window.left, page.window.top, page.window.width, page.window.height = 120, 90, 1100, 700
+    page.window.on_event(SimpleNamespace(type=ft.WindowEventType.MOVED))
+    page.settle_window()
+    page.window.width = bad
+    page.window.on_event(SimpleNamespace(type=ft.WindowEventType.RESIZED))
+    page.settle_window()
+    assert preferences.load(tmp_path / "preferences.json").window == (120.0, 90.0, 1100.0, 700.0)
 
 
 def test_launch_with_a_corrupt_file_uses_defaults(tmp_path, monkeypatch):

@@ -6,6 +6,7 @@ import json
 import math
 import os
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,16 +39,20 @@ def _page_size(value: object) -> int | None:
     return value if type(value) is int and value in PAGE_SIZE_OPTIONS else None
 
 
-def _bounds(value: object) -> Bounds | None:
-    if not isinstance(value, dict):
-        return None
-    numbers = [value.get(key) for key in _BOUNDS_KEYS]
-    if not all(
+def valid_bounds(numbers: Sequence[object]) -> Bounds | None:
+    """(left, top, width, height) as floats, or None unless all are finite and the size positive."""
+    if len(numbers) != 4 or not all(
         isinstance(n, int | float) and not isinstance(n, bool) and math.isfinite(n) for n in numbers
     ):
         return None
     left, top, width, height = map(float, numbers)
     return (left, top, width, height) if width > 0 and height > 0 else None
+
+
+def _bounds(value: object) -> Bounds | None:
+    if not isinstance(value, dict):
+        return None
+    return valid_bounds([value.get(key) for key in _BOUNDS_KEYS])
 
 
 def load(path: str | os.PathLike) -> Preferences:
@@ -95,6 +100,8 @@ def save(path: str | os.PathLike, prefs: Preferences) -> bool:
         ) as f:
             tmp = Path(f.name)
             json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
     except OSError as e:
         logger.warning("Could not save preferences to %s: %s", path, e)
