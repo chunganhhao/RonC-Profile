@@ -96,16 +96,16 @@ def manage_cookies(
         )
 
     info = fingerprint.summary(profile_dir)
-    fingerprint_line = (
-        get_string(
-            "fingerprint_current",
+    if info:
+        screen = info["screen"]
+        fingerprint_line = get_string(
+            "fingerprint_current" if screen else "fingerprint_current_no_screen",
             platform=info["platform"],
-            screen=info["screen"],
+            screen=screen,
             cores=info["hardware_concurrency"],
         )
-        if info
-        else get_string("fingerprint_none")
-    )
+    else:
+        fingerprint_line = get_string("fingerprint_none")
     open_cookie_dialog(
         page,
         name,

@@ -583,7 +583,6 @@ def test_flet_all_tags_scrollable_notes_backup_codes_pagination_and_running_filt
         refs.prev_btn,
         refs.next_btn,
         refs.page_label,
-        refs.bulk_bar,
         refs.search_field,
         first_btn=refs.first_btn,
         last_btn=refs.last_btn,

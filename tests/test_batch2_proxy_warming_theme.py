@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.core.container import Container
+from src.core.strings import get_string
 from src.services.profile import manager as pm_mod
 from src.services.proxy.pool import ProxyPoolService
 from src.services.warming.scheduler import WarmingSchedulerService
@@ -816,6 +817,72 @@ def test_proxy_pool_sidebar_tracks_import_and_delete(tmp_path, monkeypatch):
     delete_button.on_click(None)
     assert app._footer_proxy_text.value == get_string("footer_proxy_pool", count=2)
     assert badge.value == "2"
+
+
+@pytest.mark.parametrize("sheet_width", [514, 700, 1400])
+def test_desktop_selection_uses_the_same_header_height(tmp_path, monkeypatch, sheet_width):
+    from src.core import config
+    from src.ui.app import App
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    app = App()
+    for name in ("Atlas", "Lotus"):
+        assert app.pm.add_profile(name, "", "macos", engine="chrome")
+    page = _DummyPage()
+    page.controls = []
+    page.add = page.controls.append
+    app.page = page
+    app._file_picker = None
+    app._profile_table_width = sheet_width
+    app._build_ui()
+
+    table = next(c for c in _walk_controls(page.controls[0]) if c.key == "profiles_table_container")
+    rows = app.refs.profile_list_area
+    header_height = app._header_slot.content.height
+    checkbox = next(c for c in _walk_controls(rows) if isinstance(c, ft.Checkbox))
+    checkbox.on_change(None)
+    app._refresh_profiles()
+
+    assert table.content.controls == [app._header_slot, rows]
+    assert app._header_slot.content.height == header_height
+    assert any(c is app.refs.bulk_bar for c in _walk_controls(app._header_slot))
+    assert sum(isinstance(c, ft.Checkbox) for c in _walk_controls(app._header_slot)) == 1
+
+    app._on_search("Lotus")
+    bar = app.refs.bulk_bar
+    layout_buttons = [c for c in bar.controls if isinstance(c, (ft.Button, ft.OutlinedButton))]
+    clear = next(c for c in bar.controls if isinstance(c, ft.TextButton))
+    labels = [get_string(key) for key in ("launch", "stop", "delete")]
+    icons = [ft.Icons.PLAY_ARROW_ROUNDED, ft.Icons.STOP_ROUNDED, ft.Icons.DELETE_OUTLINE]
+
+    def action_contents():
+        return [
+            c.content.icon if isinstance(c.content, ft.Icon) else c.content for c in layout_buttons
+        ]
+
+    assert [button.tooltip for button in layout_buttons] == labels
+    assert action_contents() == (icons if sheet_width == 514 else labels)
+    assert clear.content == get_string("clear")
+    assert bar.controls[0].controls[1].value == get_string("selected_hidden_count", count=1)
+    assert bar.controls[0].controls[1].visible
+
+    sheet = next(c for c in _walk_controls(page.controls[0]) if c.key == "profiles_sheet_container")
+    monkeypatch.setattr(ft.context, "disable_auto_update", lambda: None)
+    monkeypatch.setattr(ft.Container, "update", lambda _: None)
+    for width, expected in ((700, labels), (514, icons)):
+        sheet.on_size_change(SimpleNamespace(width=width + 2))
+        assert action_contents() == expected
+        assert app._header_slot.content.height == header_height
+        assert clear in bar.controls
+
+    clear.on_click(None)
+    app._refresh_profiles()
+    assert table.content.controls == [app._header_slot, rows]
+    assert app._header_slot.content.height == header_height
+    assert not any(c is app.refs.bulk_bar for c in _walk_controls(app._header_slot))
 
 
 def test_desktop_bulk_stop_shows_stopping_until_stop_finishes(tmp_path, monkeypatch):

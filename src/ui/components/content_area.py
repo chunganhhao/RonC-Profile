@@ -62,7 +62,6 @@ def build_content_area(
     prev_btn: ft.IconButton,
     next_btn: ft.IconButton,
     page_label: ft.Text,
-    bulk_bar: ft.Control | None = None,
     search_field: ft.Control | None = None,
     header_slot: ft.Container | None = None,
     on_open_warming: Callable | None = None,
@@ -93,7 +92,6 @@ def build_content_area(
             spacing=0,
             expand=True,
             controls=[
-                *([] if bulk_bar is None else [bulk_bar]),
                 *([] if header_slot is None else [header_slot]),
                 profile_list,
             ],

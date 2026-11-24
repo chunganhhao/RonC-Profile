@@ -137,29 +137,48 @@ def _tag_colors(tag: str) -> tuple[str, str]:
 def build_header_row(
     all_selected: bool,
     any_selected: bool,
-    on_select_all: Callable[[bool], None],
+    on_select_all: Callable[[bool], None] | None,
     layout_width: float | None = None,
-) -> ProfileRow:
+    bulk_actions: ft.Row | None = None,
+) -> ft.Container:
     def label(key: str) -> ft.Text:
         return ft.Text(
             get_string(key), size=12, font_family=FONT_SEMIBOLD, color=COLORS["text_sub"]
         )
 
-    box = ft.Checkbox(
-        value=all_selected,
-        tooltip=get_string("deselect_page") if all_selected else get_string("select_page"),
-        on_change=lambda e: on_select_all(not all_selected),
+    select_cell = _cell(
+        "select",
+        ft.Checkbox(
+            value=all_selected,
+            tooltip=get_string("deselect_page") if all_selected else get_string("select_page"),
+            on_change=lambda e: on_select_all(not all_selected),
+        )
+        if on_select_all is not None
+        else None,
     )
-    container = ProfileRow(
+    frame = dict(
         height=40,
         padding=ft.Padding.symmetric(horizontal=14),
         bgcolor=COLORS["paper_sunk"],
         border=ft.Border.only(bottom=ft.BorderSide(1, COLORS["card_border"])),
+    )
+    if bulk_actions is not None:
+        return ft.Container(
+            **frame,
+            content=ft.Row(
+                spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[select_cell, bulk_actions],
+            ),
+        )
+
+    container = ProfileRow(
+        **frame,
         content=ft.Row(
             spacing=10,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
-                _cell("select", box),
+                select_cell,
                 _cell("id", label("col_id")),
                 _cell("name", label("col_profile")),
                 _cell("group", label("col_group")),

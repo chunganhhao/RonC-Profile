@@ -1,3 +1,4 @@
+import json
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -7,10 +8,35 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.routes import profiles
+from src.core import strings
 from src.core.strings import get_string
 from src.models.profile import Profile
 from src.services.browser.launcher import BrowserLauncher
 from src.ui.actions import cookies
+
+
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [
+        ("en", "Current device: MacIntel, 12 cores"),
+        ("vi", "Fingerprint hiện tại: MacIntel, 12 CPU"),
+    ],
+)
+def test_cookie_dialog_omits_automatic_chrome_screen(tmp_path, monkeypatch, language, expected):
+    profile_dir = tmp_path / "p"
+    profile_dir.mkdir()
+    (profile_dir / cookies.fingerprint.CHROME_PERSONA_FILE).write_text(
+        json.dumps({"platform": "macos", "hardware_concurrency": 12}), encoding="utf-8"
+    )
+    monkeypatch.setattr(cookies, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS[language])
+    dialog = Mock()
+    monkeypatch.setattr(cookies, "open_cookie_dialog", dialog)
+    pm = SimpleNamespace(profiles={"p": Profile(name="p", engine="chrome")})
+
+    cookies.manage_cookies(None, "p", None, pm, BrowserLauncher(), Mock())
+
+    assert dialog.call_args.args[2] == expected
 
 
 @pytest.fixture
