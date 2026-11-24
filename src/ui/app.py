@@ -52,6 +52,7 @@ logger = get_logger("app")
 
 class App:
     _SEARCH_DEBOUNCE_S = 0.15
+    _WINDOW_SAVE_DELAY_S = 0.5
 
     def __init__(self, container: Container | None = None) -> None:
         c = container or Container()
@@ -68,6 +69,7 @@ class App:
         self.filter = "all"
         self.preferences_file = PREFERENCES_FILE
         self._saved_preferences = preferences.Preferences()
+        self._window_save_seq = 0
         self._live_since: dict[str, str] = {}
         self._feedback_until: dict[tuple[str, str], float] = {}
         self._toast_until: float = 0.0
@@ -240,7 +242,7 @@ class App:
 
     def _window_bounds(self) -> preferences.Bounds | None:
         window = self.page.window if self.page is not None else None
-        if window is None or window.full_screen or window.minimized:
+        if window is None or window.full_screen or window.maximized or window.minimized:
             return self._saved_preferences.window
         bounds = (window.left, window.top, window.width, window.height)
         if any(value is None for value in bounds):
@@ -261,6 +263,13 @@ class App:
 
     def _on_window_event(self, e: ft.WindowEvent) -> None:
         if e.type in (ft.WindowEventType.MOVED, ft.WindowEventType.RESIZED):
+            self._window_save_seq += 1
+            self.page.run_task(self._save_window_later, self._window_save_seq)
+
+    async def _save_window_later(self, seq: int) -> None:
+        # Coalesces a burst of move/resize events into one write once the window settles.
+        await asyncio.sleep(self._WINDOW_SAVE_DELAY_S)
+        if seq == self._window_save_seq:
             self._save_preferences()
 
     def _set_language(self, code: str) -> None:

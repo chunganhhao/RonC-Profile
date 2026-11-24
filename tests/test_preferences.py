@@ -1,5 +1,6 @@
 """Desktop choices survive a restart; the profile filter does not."""
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -146,6 +147,7 @@ class _Page:
         self.bgcolor = ""
         self.services = []
         self.controls = []
+        self.window_saves = []
 
     def add(self, ctrl):
         self.controls.append(ctrl)
@@ -153,8 +155,18 @@ class _Page:
     def update(self):
         pass
 
-    def run_task(self, *_args):
-        pass
+    def run_task(self, fn, *args):
+        if fn.__name__ == "_save_window_later":
+            self.window_saves.append(fn(*args))
+
+    def settle_window(self):
+        saves, self.window_saves = self.window_saves, []
+
+        async def run_all():
+            for save in saves:
+                await save
+
+        asyncio.run(run_all())
 
 
 def _launch(tmp_path, monkeypatch):
@@ -165,6 +177,7 @@ def _launch(tmp_path, monkeypatch):
     monkeypatch.setattr(app_config, "EXTENSIONS_FILE", str(tmp_path / "extensions.json"))
     monkeypatch.setattr(app_config, "EXTENSIONS_DIR", str(tmp_path / "extensions"))
     monkeypatch.setattr(page_theme, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(App, "_WINDOW_SAVE_DELAY_S", 0)
     app = App(Container())
     app.preferences_file = tmp_path / "preferences.json"
     monkeypatch.setattr(app.warming, "start_daemon", lambda *a, **k: None)
@@ -183,6 +196,7 @@ def test_choices_survive_a_restart_but_the_filter_resets(tmp_path, monkeypatch):
     app.filter = "running"
     page.window.left, page.window.top, page.window.width, page.window.height = 120, 90, 1100, 700
     page.window.on_event(SimpleNamespace(type=ft.WindowEventType.MOVED))
+    page.settle_window()
 
     set_language("en")
     set_theme_mode("dark")
@@ -202,12 +216,35 @@ def test_choices_survive_a_restart_but_the_filter_resets(tmp_path, monkeypatch):
     assert "filter" not in json.loads((tmp_path / "preferences.json").read_text())
 
 
-def test_full_screen_geometry_is_not_saved(tmp_path, monkeypatch):
+@pytest.mark.parametrize("state", ["full_screen", "maximized", "minimized"])
+def test_full_screen_maximized_or_minimized_geometry_is_not_saved(tmp_path, monkeypatch, state):
     app, page = _launch(tmp_path, monkeypatch)
     page.window.left, page.window.top, page.window.width, page.window.height = 0, 0, 1600, 1118
-    page.window.full_screen = True
+    setattr(page.window, state, True)
     page.window.on_event(SimpleNamespace(type=ft.WindowEventType.RESIZED))
+    page.settle_window()
     assert preferences.load(tmp_path / "preferences.json").window is None
+
+
+def test_a_drag_is_written_once_with_the_final_bounds(tmp_path, monkeypatch):
+    app, page = _launch(tmp_path, monkeypatch)
+    writes = []
+    real_save = preferences.save
+    monkeypatch.setattr(
+        preferences,
+        "save",
+        lambda path, prefs: writes.append(prefs.window) or real_save(path, prefs),
+    )
+    for left in (100, 140, 180):
+        page.window.left, page.window.top, page.window.width, page.window.height = (
+            left,
+            90,
+            1100,
+            700,
+        )
+        page.window.on_event(SimpleNamespace(type=ft.WindowEventType.MOVED))
+    page.settle_window()
+    assert writes == [(180.0, 90.0, 1100.0, 700.0)]
 
 
 def test_launch_with_a_corrupt_file_uses_defaults(tmp_path, monkeypatch):

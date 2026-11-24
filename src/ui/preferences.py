@@ -5,6 +5,7 @@ import contextlib
 import json
 import math
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -81,14 +82,24 @@ def save(path: str | os.PathLike, prefs: Preferences) -> bool:
     }
     if prefs.window is not None:
         data["window"] = dict(zip(_BOUNDS_KEYS, prefs.window, strict=True))
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp = Path(f.name)
+            json.dump(data, f, indent=2)
         os.replace(tmp, path)
     except OSError as e:
         logger.warning("Could not save preferences to %s: %s", path, e)
-        with contextlib.suppress(OSError):
-            tmp.unlink(missing_ok=True)
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
         return False
     return True
