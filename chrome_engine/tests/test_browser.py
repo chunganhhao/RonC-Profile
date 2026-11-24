@@ -8,6 +8,7 @@ local servers, and geo lookups are stubbed.
 from __future__ import annotations
 
 import asyncio
+import socket
 
 import pytest
 
@@ -181,6 +182,9 @@ def test_authenticated_proxy(chrome_exe, tmp_path, proxy_cls):
             issues = probe.check(eng.persona, fp)
             assert issues == [], "\n".join(map(str, issues))
             assert fp["webrtcCandidates"] == []
+            assert fp["webrtcProbe"]["status"] == "complete"
+            assert fp["webrtcProbe"]["gatheringState"] == "complete"
+            assert fp["webrtcProbe"]["scope"] == "host_candidates_only"
             if isinstance(upstream, Socks5Proxy):
                 # Names reach the proxy unresolved: no DNS leak.
                 assert ("domain", "localhost", origin.port) in upstream.targets
@@ -216,6 +220,48 @@ def test_wrong_proxy_credentials_never_fall_back_to_direct(chrome_exe, tmp_path)
                 await eng.stop()
             assert origin.hits == []
             assert upstream.rejected >= 1
+        finally:
+            await upstream.stop()
+            await origin.stop()
+
+    run(go())
+
+
+@pytest.mark.parametrize("proxy_cls", [HttpProxy, Socks5Proxy])
+def test_proxy_upstream_down_never_falls_back_to_direct(chrome_exe, tmp_path, proxy_cls):
+    async def go():
+        origin = await Origin("localhost").start()
+        upstream = await proxy_cls().start()
+        try:
+            eng = ChromeEngine(
+                tmp_path,
+                executable=chrome_exe,
+                persona=persona(),
+                proxy=upstream.url,
+                headless=True,
+                extra_args=THROUGH_PROXY,
+            )
+            context = await eng.start()
+            try:
+                page = context.pages[0]
+                resp_up = await page.goto(origin.url + "/?phase=up")
+                assert resp_up is not None and resp_up.status == 200
+                assert "origin-ok" in await page.content()
+                hits_up = len(origin.hits)
+                assert hits_up >= 1
+                await upstream.stop()
+                if upstream._server is not None:
+                    await upstream._server.wait_closed()
+                try:
+                    resp_down = await page.goto(origin.url + "/?phase=down", timeout=15_000)
+                except Exception:  # noqa: BLE001 - tunnel/navigation failure is fail-closed
+                    resp_down = None
+                if resp_down is not None:
+                    assert resp_down.status == 502
+                    assert "origin-ok" not in await page.content()
+                assert len(origin.hits) == hits_up
+            finally:
+                await eng.stop()
         finally:
             await upstream.stop()
             await origin.stop()
@@ -671,3 +717,213 @@ window.checkLocale = async () => {
         else:
             assert sample["firstInline"]["dtf"] == "de-DE", (name, sample["firstInline"])
             assert sample["seenLocales"] == ["de-DE"], (name, sample["seenLocales"])
+
+
+def test_webrtc_disable_non_proxied_udp_blocks_dual_stack_stun(chrome_exe, tmp_path):
+    """Local dual-stack UDP observer proves direct sends STUN and proxy mode sends 0 UDP packets."""
+
+    async def measure(profile_dir, ice_urls, *, proxy_url=None, extra_args=()):
+        origin = await Origin("127.0.0.1").start()
+        try:
+            eng = ChromeEngine(
+                profile_dir,
+                executable=chrome_exe,
+                persona=persona(),
+                proxy=proxy_url,
+                headless=True,
+                extra_args=extra_args,
+            )
+            ctx = await eng.start()
+            try:
+                page = ctx.pages[0]
+                await page.goto(origin.url + "/")
+                webrtc_res = await page.evaluate(
+                    """async (urls) => await new Promise((resolve) => {
+                      const out = [];
+                      let pc = null;
+                      let settled = false;
+                      let timer = null;
+                      const finish = (status, error = null) => {
+                        if (settled) return;
+                        settled = true;
+                        if (timer !== null) clearTimeout(timer);
+                        const gatheringState = pc ? pc.iceGatheringState : null;
+                        try { if (pc) pc.close(); } catch (_) {}
+                        resolve({status, error, candidates: out, gatheringState});
+                      };
+                      try {
+                        pc = new RTCPeerConnection({iceServers: urls.map(u => ({urls: u}))});
+                        pc.createDataChannel('stun-probe');
+                        const maybeComplete = () => {
+                          if (pc && pc.iceGatheringState === 'complete') finish('complete');
+                        };
+                        pc.onicecandidate = (e) => {
+                          if (e.candidate === null) {
+                            maybeComplete();
+                            return;
+                          }
+                          if (typeof e.candidate.candidate !== 'string' || e.candidate.candidate === '') {
+                            return;
+                          }
+                          out.push(e.candidate.candidate);
+                        };
+                        pc.onicegatheringstatechange = maybeComplete;
+                        pc.createOffer()
+                          .then((o) => pc.setLocalDescription(o))
+                          .then(maybeComplete)
+                          .catch((e) => finish('error', String(e)));
+                      } catch (e) {
+                        finish('error', String(e));
+                      }
+                      timer = setTimeout(() => finish('timeout'), 1500);
+                    })""",
+                    ice_urls,
+                )
+                fp = await probe.collect(ctx)
+                return eng.persona, webrtc_res, fp
+            finally:
+                await eng.stop()
+        finally:
+            await origin.stop()
+
+    async def go():
+        s4 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s4.bind(("127.0.0.1", 0))
+        s4.setblocking(False)
+        ice_urls = [f"stun:127.0.0.1:{s4.getsockname()[1]}"]
+        s6 = None
+        try:
+            s6 = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            s6.bind(("::1", 0))
+            s6.setblocking(False)
+            ice_urls.append(f"stun:[::1]:{s6.getsockname()[1]}")
+        except OSError:
+            if s6 is not None:
+                s6.close()
+                s6 = None
+
+        pkts4: list[bytes] = []
+        pkts6: list[bytes] = []
+
+        async def drain(sock, bucket):
+            loop = asyncio.get_running_loop()
+            while True:
+                try:
+                    data, _ = await loop.sock_recvfrom(sock, 2048)
+                    bucket.append(data)
+                except asyncio.CancelledError:
+                    break
+
+        t4 = asyncio.create_task(drain(s4, pkts4))
+        t6 = asyncio.create_task(drain(s6, pkts6)) if s6 is not None else None
+        try:
+            # 1. Positive control: direct policy permits outbound UDP STUN requests.
+            direct_persona, _, direct_fp = await measure(tmp_path / "direct", ice_urls)
+            assert probe.check(direct_persona, direct_fp) == []
+            assert direct_fp["webrtcProbe"]["status"] == "complete"
+            assert direct_fp["webrtcProbe"]["gatheringState"] == "complete"
+            assert any(
+                len(d) >= 20 and d[:2] == b"\x00\x01" and d[4:8] == b"\x21\x12\xa4\x42"
+                for d in pkts4
+            )
+            if s6 is not None:
+                assert any(
+                    len(d) >= 20 and d[:2] == b"\x00\x01" and d[4:8] == b"\x21\x12\xa4\x42"
+                    for d in pkts6
+                )
+
+            pkts4.clear()
+            pkts6.clear()
+
+            # 2. Proxy policy (disable_non_proxied_udp): 0 IPv4 and 0 IPv6 UDP STUN packets.
+            upstream = await HttpProxy().start()
+            try:
+                proxy_persona, proxy_stun, proxy_fp = await measure(
+                    tmp_path / "proxy",
+                    ice_urls,
+                    proxy_url=upstream.url,
+                    extra_args=THROUGH_PROXY,
+                )
+            finally:
+                await upstream.stop()
+            assert pkts4 == []
+            assert pkts6 == []
+            assert proxy_stun["status"] == "complete"
+            assert proxy_stun["gatheringState"] == "complete"
+            assert proxy_stun["candidates"] == []
+            assert proxy_fp["webrtcProbe"]["status"] == "complete"
+            assert proxy_fp["webrtcProbe"]["gatheringState"] == "complete"
+            assert probe.check(proxy_persona, proxy_fp) == []
+        finally:
+            t4.cancel()
+            if t6 is not None:
+                t6.cancel()
+            await asyncio.gather(*(t for t in (t4, t6) if t is not None), return_exceptions=True)
+            s4.close()
+            if s6 is not None:
+                s6.close()
+
+    run(go())
+
+
+def test_webrtc_probe_ignores_end_of_generation_empty_candidate_sentinel(chrome_exe, tmp_path):
+    """Empty e.candidate.candidate signals generation end, not whole-connection completion."""
+
+    async def go():
+        eng = ChromeEngine(
+            tmp_path,
+            executable=chrome_exe,
+            persona=persona(),
+            headless=True,
+        )
+        ctx = await eng.start()
+        try:
+            await ctx.add_init_script(
+                """(() => {
+                  window.RTCPeerConnection = class FakeRTCPeerConnection {
+                    constructor() {
+                      this.iceGatheringState = 'gathering';
+                      this.onicecandidate = null;
+                      this.onicegatheringstatechange = null;
+                    }
+                    createDataChannel() {}
+                    async createOffer() { return {type: 'offer', sdp: ''}; }
+                    async setLocalDescription() {
+                      setTimeout(() => {
+                        if (this.onicecandidate) this.onicecandidate({candidate: {candidate: ''}});
+                      }, 20);
+                      setTimeout(() => {
+                        if (this.onicecandidate) {
+                          this.onicecandidate({
+                            candidate: {
+                              candidate: 'candidate:1 1 udp 2122260223 192.168.1.99 54321 typ host',
+                            },
+                          });
+                        }
+                      }, 45);
+                      setTimeout(() => {
+                        if (this.onicecandidate) this.onicecandidate({candidate: null});
+                      }, 70);
+                      setTimeout(() => {
+                        this.iceGatheringState = 'complete';
+                        if (this.onicegatheringstatechange) this.onicegatheringstatechange();
+                      }, 95);
+                    }
+                    close() {}
+                  };
+                })();"""
+            )
+            fp = await probe.collect(ctx)
+        finally:
+            await eng.stop()
+
+        assert fp["webrtcProbe"]["status"] == "complete"
+        assert fp["webrtcProbe"]["gatheringState"] == "complete"
+        assert fp["webrtcProbe"]["candidates"] == [
+            "candidate:1 1 udp 2122260223 192.168.1.99 54321 typ host"
+        ]
+        codes = {issue.code for issue in probe.check(eng.persona, fp)}
+        assert "webrtc_ip" in codes
+        assert "webrtc_incomplete" not in codes
+
+    run(go())

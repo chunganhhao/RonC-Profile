@@ -3,6 +3,8 @@
 `collect()` serves a probe page on loopback, opens it in the profile and reads
 the values fingerprinting scripts look at, from the window, a dedicated worker
 and an iframe, together with the request headers the page was loaded with.
+Its WebRTC check (`iceServers: []`) measures local host-candidate exposure only
+(`scope: "host_candidates_only"`), not external STUN/TURN or WAN proxy egress.
 `check()` compares that against the persona and reports every mismatch:
 detectors rarely flag a single value, they flag values that disagree.
 """
@@ -148,15 +150,55 @@ async () => {
   Object.defineProperty(err, 'stack', { get() { cdpDetected = true; return ''; } });
   console.debug(err);
 
-  const candidates = await new Promise((resolve) => {
+  const webrtcProbe = await new Promise((resolve) => {
     const out = [];
+    let pc = null;
+    let settled = false;
+    let timer = null;
+    const finish = (status, error = null) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      const gatheringState = pc ? pc.iceGatheringState : null;
+      try { if (pc) pc.close(); } catch (_) {}
+      resolve({
+        status,
+        error,
+        candidates: out,
+        gatheringState,
+        scope: 'host_candidates_only',
+      });
+    };
     try {
-      const pc = new RTCPeerConnection({iceServers: []});
+      pc = new RTCPeerConnection({iceServers: []});
       pc.createDataChannel('probe');
-      pc.onicecandidate = (e) => { if (!e.candidate) resolve(out); else out.push(e.candidate.candidate); };
-      pc.createOffer().then((o) => pc.setLocalDescription(o));
-    } catch (e) { resolve(['error: ' + e]); }
-    setTimeout(() => resolve(out), 3000);
+      const maybeComplete = () => {
+        if (pc && pc.iceGatheringState === 'complete') finish('complete');
+      };
+      pc.onicecandidate = (e) => {
+        if (e.candidate === null) {
+          maybeComplete();
+          return;
+        }
+        if (typeof e.candidate.candidate !== 'string' || e.candidate.candidate === '') {
+          // Empty candidate strings mark end-of-candidates for one generation/m-line,
+          // not full-connection ICE gathering completion.
+          return;
+        }
+        out.push(e.candidate.candidate);
+      };
+      pc.onicegatheringstatechange = maybeComplete;
+      pc.createOffer()
+        .then((o) => pc.setLocalDescription(o))
+        .then(maybeComplete)
+        .catch((e) => finish('error', String(e)));
+    } catch (e) {
+      finish('error', String(e));
+    }
+    timer = setTimeout(
+      () => finish('timeout', 'ICE candidate gathering timed out after 3000ms'),
+      3000
+    );
   });
 
   let uaData = null;
@@ -190,9 +232,10 @@ async () => {
     ...Object.getOwnPropertyNames(document).filter((k) => reLeak.test(k)),
   ];
 
-  return {
+    return {
     main: identity, worker, iframe, serviceWorker, sharedWorker, uaData, canvasHash, audioHash, webgl, webgpu, workerWebgpu, sharedWorkerWebgpu, moduleWorkerWebgpu, cdpDetected, cdpLeaks,
-    webrtcCandidates: candidates,
+    webrtcProbe,
+    webrtcCandidates: webrtcProbe.candidates,
     screen: {width: screen.width, height: screen.height, availWidth: screen.availWidth,
              availHeight: screen.availHeight, colorDepth: screen.colorDepth, dpr: devicePixelRatio},
     window: {outerWidth, outerHeight, innerWidth, innerHeight},
@@ -389,6 +432,8 @@ def _webgpu_matches(platform: str, webgpu: dict[str, Any]) -> bool:
 def _private_ip_candidates(candidates: list[str]) -> list[str]:
     leaks = []
     for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
         for token in candidate.split():
             try:
                 ip = ipaddress.ip_address(token)
@@ -397,6 +442,105 @@ def _private_ip_candidates(candidates: list[str]) -> list[str]:
             if not ip.is_loopback:
                 leaks.append(str(ip))
     return leaks
+
+
+def _webrtc_candidate_errors(candidates: list[Any]) -> list[str]:
+    errors: list[str] = []
+    for item in candidates:
+        if not isinstance(item, str):
+            errors.append(repr(item))
+        elif item.strip().lower().startswith("error:"):
+            errors.append(item)
+    return errors
+
+
+def _check_webrtc(fp: dict[str, Any]) -> list[Issue]:
+    issues: list[Issue] = []
+    webrtc_probe = fp.get("webrtcProbe")
+    has_probe_error = False
+    if not isinstance(webrtc_probe, dict):
+        issues.append(
+            Issue(
+                "webrtc_incomplete",
+                "WebRTC measurement missing completion state (webrtcProbe)",
+            )
+        )
+    else:
+        status = webrtc_probe.get("status")
+        if status == "error":
+            has_probe_error = True
+            issues.append(
+                Issue(
+                    "webrtc_error",
+                    f"WebRTC probe failed: {webrtc_probe.get('error') or 'unknown error'}",
+                )
+            )
+        elif status == "timeout":
+            issues.append(
+                Issue(
+                    "webrtc_timeout",
+                    "WebRTC ICE gathering timed out "
+                    f"(gatheringState={webrtc_probe.get('gatheringState')!r})",
+                )
+            )
+        elif status != "complete":
+            issues.append(
+                Issue(
+                    "webrtc_incomplete",
+                    f"WebRTC probe did not complete (status={status!r})",
+                )
+            )
+        else:
+            if "candidates" not in webrtc_probe:
+                issues.append(
+                    Issue(
+                        "webrtc_incomplete",
+                        "WebRTC complete receipt missing candidates list",
+                    )
+                )
+            gathering_state = webrtc_probe.get("gatheringState")
+            if gathering_state != "complete":
+                issues.append(
+                    Issue(
+                        "webrtc_incomplete",
+                        "WebRTC probe reported complete with non-complete "
+                        f"gatheringState={gathering_state!r}",
+                    )
+                )
+
+    raw_lists: list[list[Any]] = []
+    bad_list = False
+    if isinstance(webrtc_probe, dict) and "candidates" in webrtc_probe:
+        probe_candidates = webrtc_probe["candidates"]
+        if isinstance(probe_candidates, list):
+            raw_lists.append(probe_candidates)
+        else:
+            bad_list = True
+    if "webrtcCandidates" in fp:
+        legacy_candidates = fp["webrtcCandidates"]
+        if isinstance(legacy_candidates, list):
+            raw_lists.append(legacy_candidates)
+        else:
+            bad_list = True
+
+    if bad_list and not has_probe_error:
+        has_probe_error = True
+        issues.append(Issue("webrtc_error", "WebRTC candidates payload is not a list"))
+
+    combined: list[Any] = []
+    for candidate_list in raw_lists:
+        for item in candidate_list:
+            if item not in combined:
+                combined.append(item)
+
+    errs = _webrtc_candidate_errors(combined)
+    if errs and not has_probe_error:
+        issues.append(Issue("webrtc_error", f"WebRTC probe reported candidate error: {errs}"))
+
+    leaks = _private_ip_candidates([c for c in combined if isinstance(c, str)])
+    if leaks:
+        issues.append(Issue("webrtc_ip", f"WebRTC exposes {leaks}"))
+    return issues
 
 
 def check(persona: Persona, fp: dict[str, Any]) -> list[Issue]:
@@ -602,8 +746,7 @@ def check(persona: Persona, fp: dict[str, Any]) -> list[Issue]:
             f"automation globals visible on window/document: {cdp_leaks}",
         )
 
-    leaks = _private_ip_candidates(fp.get("webrtcCandidates") or [])
-    expect(not leaks, "webrtc_ip", f"WebRTC exposes {leaks}")
+    issues.extend(_check_webrtc(fp))
 
     screen = fp.get("screen") or {}
     window = fp.get("window") or {}

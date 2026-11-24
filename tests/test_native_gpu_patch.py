@@ -2469,6 +2469,11 @@ int main() {
     assert(child.GetSwitchValueASCII(switches::kLang) == "en-US");
     assert(!child.HasSwitch("fingerprint-locale"));
 
+    browser.values = {{"fingerprint", "3006"}, {"disable-spoofing", "locale,font"}, {"lang", "de-DE"}};
+    child = BuildChildCommandLine(browser);
+    assert(child.GetSwitchValueASCII(switches::kLang) == "en-US");
+    assert(!child.HasSwitch("fingerprint-locale"));
+
     browser.values = {{"fingerprint", "3006"}, {"lang", ""}};
     child = BuildChildCommandLine(browser);
     assert(child.GetSwitchValueASCII(switches::kLang) == "en-US");
@@ -2497,6 +2502,7 @@ int main() {
       {"en-AU", "en-GB", "en-AU"},
       {"en-CA", "en-GB", "en-CA"},
       {"en-PH", "en-US", "en-PH"},
+      {"en-001", "en-GB", "en-001"},
       {"en", "en", "en"},
       {"zh-CN", "zh-CN", "zh-CN"},
       {"zh-cn", "zh-CN", "zh-cn"},

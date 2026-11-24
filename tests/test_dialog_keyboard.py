@@ -199,8 +199,8 @@ def _walk(control):
         yield from _walk(control.content)
 
 
-@pytest.mark.parametrize("explicit", [True, False])
-def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog, explicit):
+@pytest.mark.parametrize("explicit_from", [True, False], ids=["explicit_from", "implicit_context"])
+def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog, explicit_from):
     monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["vi"])
     monkeypatch.setattr(
         cores.cores,
@@ -221,7 +221,7 @@ def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog, ex
             raise OSError(errno.ENOSPC, "No space left on device")
         except OSError as exc:
             error = FetchError("Download failed: https://example.test/core.dmg")
-            if explicit:
+            if explicit_from:
                 raise error from exc
             raise error  # noqa: B904 - exercise implicit exception chaining
 
@@ -386,3 +386,36 @@ def test_enter_in_profile_name_runs_the_save_button_path(is_edit):
     finally:
         if page.dialogs:
             page.pop_dialog()
+
+
+def test_unclosed_previous_profile_dialog_does_not_pollute_next_totp_timer(monkeypatch):
+    import threading
+    import time
+
+    real_timer = threading.Timer
+    first_timers = []
+
+    def short_real_timer(_interval, fn):
+        t = real_timer(0.01, fn)
+        first_timers.append(t)
+        return t
+
+    monkeypatch.setattr("src.ui.dialogs.profile.threading.Timer", short_real_timer)
+    first_page = DialogPage(notify_dismiss=False)
+    open_profile_dialog(
+        first_page, None, Mock(return_value=None), Profile("Old dialog", engine="chrome")
+    )
+
+    second_timer = Mock()
+    second_factory = Mock(return_value=second_timer)
+    monkeypatch.setattr("src.ui.dialogs.profile.threading.Timer", second_factory)
+    second_page = DialogPage(notify_dismiss=False)
+    open_profile_dialog(
+        second_page, None, Mock(return_value=None), Profile("New dialog", engine="chrome")
+    )
+
+    time.sleep(0.03)
+    second_factory.assert_called_once()
+    second_timer.start.assert_called_once_with()
+    _send_key(second_page, "Escape")
+    assert all(not t.is_alive() for t in first_timers)

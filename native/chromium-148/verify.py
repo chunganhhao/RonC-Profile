@@ -33,6 +33,16 @@ def _protected_macos_fonts() -> frozenset[str]:
     return fonts
 
 
+_HOST_SPEECH_VOICE_COUNT_JXA = (
+    'ObjC.import("AVFoundation"); '
+    'ObjC.import("Foundation"); '
+    "const vs = $.AVSpeechSynthesisVoice.speechVoices; "
+    '(vs && typeof vs.isNil === "function" && !vs.isNil() '
+    '&& typeof vs.isKindOfClass === "function" && vs.isKindOfClass($.NSArray)) '
+    '? String(Number(vs.count)) : "UNAVAILABLE"'
+)
+
+
 def _host_macos_speech_voice_count() -> int | None:
     if sys.platform != "darwin":
         return None
@@ -43,11 +53,7 @@ def _host_macos_speech_voice_count() -> int | None:
                 "-l",
                 "JavaScript",
                 "-e",
-                (
-                    'ObjC.import("AVFoundation"); '
-                    "const vs = $.AVSpeechSynthesisVoice.speechVoices; "
-                    "vs ? vs.count : 0"
-                ),
+                _HOST_SPEECH_VOICE_COUNT_JXA,
             ],
             capture_output=True,
             text=True,
@@ -1001,7 +1007,12 @@ async def verify(executable: Path, output: Path) -> None:
     resolved_executable = executable.resolve()
     with resolved_executable.open("rb") as binary:
         binary_sha256 = hashlib.file_digest(binary, "sha256").hexdigest()
-    report = {"binary_sha256": binary_sha256, "acceptance": "FAILED_OR_INCOMPLETE", "cases": {}}
+    report = {
+        "binary_sha256": binary_sha256,
+        "chromium_sandbox": True,
+        "acceptance": "FAILED_OR_INCOMPLETE",
+        "cases": {},
+    }
     if resolved_executable.parts[-4:-1] == ("Chromium.app", "Contents", "MacOS"):
         # Load native_bundle directly so CI need not install full app runtime deps (aiohttp/src).
         bundle_mod_path = Path(__file__).resolve().parents[2] / "chrome_engine/native_bundle.py"
@@ -1022,6 +1033,7 @@ async def verify(executable: Path, output: Path) -> None:
                 browser = await pw.chromium.launch(
                     executable_path=str(executable),
                     headless=True,
+                    chromium_sandbox=True,
                     ignore_default_args=["--enable-automation"],
                     args=[
                         f"--fingerprint={seed}",
@@ -1165,6 +1177,7 @@ async def verify(executable: Path, output: Path) -> None:
                 browser = await pw.chromium.launch(
                     executable_path=str(executable),
                     headless=True,
+                    chromium_sandbox=True,
                     ignore_default_args=["--enable-automation"],
                     args=[
                         f"--fingerprint={seed}",
@@ -1345,6 +1358,7 @@ async def verify(executable: Path, output: Path) -> None:
                         tmp_profile_dir,
                         executable_path=str(executable),
                         headless=True,
+                        chromium_sandbox=True,
                         color_scheme="null",
                         no_viewport=True,
                         ignore_default_args=[
@@ -1672,6 +1686,97 @@ async def verify(executable: Path, output: Path) -> None:
                 "same_origin_cross_nav_popup": r3003["sameOriginCrossNavPopup"],
                 "same_origin_close_popup": r3003["sameOriginClosePopup"],
             }
+
+            async def _verify_locale_bcp47_029(
+                tag: str,
+                accept_lang: str,
+                expected_default: str,
+                expected_explicit: str,
+            ) -> dict:
+                browser = await pw.chromium.launch(
+                    executable_path=str(executable),
+                    headless=True,
+                    chromium_sandbox=True,
+                    ignore_default_args=["--enable-automation"],
+                    args=[
+                        "--fingerprint=3003",
+                        "--fingerprint-platform=macos",
+                        "--fingerprint-brand=Chrome",
+                        f"--lang={tag}",
+                        f"--accept-lang={accept_lang}",
+                        "--disable-background-networking",
+                    ],
+                )
+                try:
+                    context = await browser.new_context(color_scheme="null")
+                    await context.route(
+                        "**/*",
+                        lambda route: (
+                            route.continue_()
+                            if route.request.url.startswith(
+                                f"http://127.0.0.1:{server.server_port}/"
+                            )
+                            else route.abort()
+                        ),
+                    )
+                    page = await context.new_page()
+                    await page.goto(f"http://127.0.0.1:{server.server_port}/")
+                    payload = await page.evaluate(
+                        """async (requestedTag) => {
+                        const timeout = (p) => Promise.race([
+                          p,
+                          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000)),
+                        ]);
+                        const w = new Worker('/locale-worker.js');
+                        const worker = await timeout(new Promise((res, rej) => {
+                          w.onmessage = e => res(e.data);
+                          w.onerror = e => rej(new Error(e.message));
+                          w.postMessage('go');
+                        }));
+                        w.terminate();
+                        return {
+                          window: {
+                            dtf: Intl.DateTimeFormat().resolvedOptions().locale,
+                            nf: Intl.NumberFormat().resolvedOptions().locale,
+                            explicitDtf: Intl.DateTimeFormat(requestedTag).resolvedOptions().locale,
+                            explicitNf: Intl.NumberFormat(requestedTag).resolvedOptions().locale,
+                            langs: Array.from(navigator.languages || []),
+                          },
+                          worker,
+                        };
+                    }""",
+                        tag,
+                    )
+                finally:
+                    await browser.close()
+                for realm_name in ("window", "worker"):
+                    row = payload[realm_name]
+                    langs = row.get("langs") or []
+                    if (
+                        row.get("dtf") != expected_default
+                        or row.get("nf") != expected_default
+                        or not langs
+                        or langs[0] != tag
+                    ):
+                        raise ValueError(f"029 BCP-47 locale mismatch ({tag}/{realm_name}): {row}")
+                win = payload["window"]
+                if (
+                    win.get("explicitDtf") != expected_explicit
+                    or win.get("explicitNf") != expected_explicit
+                ):
+                    raise ValueError(f"029 BCP-47 explicit locale mismatch ({tag}): {win}")
+                return payload
+
+            bcp47_cases: dict[str, dict] = {}
+            for tag, accept_lang, exp_default, exp_explicit in (
+                ("zh-Hans-CN", "zh-Hans-CN,zh,en-US,en", "zh-Hans-CN", "zh-Hans-CN"),
+                ("es-419", "es-419,es,en-US,en", "es-MX", "es-419"),
+                ("en-001", "en-001,en", "en-001", "en-001"),
+            ):
+                bcp47_cases[tag] = await _verify_locale_bcp47_029(
+                    tag, accept_lang, exp_default, exp_explicit
+                )
+            report["cases"]["locale_029_bcp47"] = bcp47_cases
         report["acceptance"] = "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL"
     finally:
         server.shutdown()

@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+import os
+import stat
+from pathlib import Path
 
 import pytest
 
@@ -252,15 +255,282 @@ def test_webrtc_policy_keeps_other_preferences(tmp_path):
     assert not list(path.parent.glob("*tmp*"))
 
 
-def test_webrtc_policy_replaces_a_corrupt_file(tmp_path):
+def test_webrtc_policy_aborts_on_unreadable_preferences(tmp_path, monkeypatch):
     path = tmp_path / "Default" / "Preferences"
     path.parent.mkdir()
-    path.write_text("{broken")
-    engine_mod.set_webrtc_policy(tmp_path, engine_mod.WEBRTC_POLICY_PROXY)
+    original = '{"other_setting":true}'
+    path.write_text(original, encoding="utf-8")
+
+    orig_read_bytes = Path.read_bytes
+
+    def deny_read(self):
+        if self == path:
+            raise PermissionError(13, "Permission denied", str(self))
+        return orig_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", deny_read)
+    with pytest.raises(EngineError, match="Could not read profile Preferences"):
+        engine_mod.set_webrtc_policy(tmp_path, engine_mod.WEBRTC_POLICY_PROXY)
+    with pytest.raises(EngineError, match="Could not read profile Preferences"):
+        engine_mod.set_webrtc_policy(tmp_path, engine_mod.WEBRTC_POLICY_PROXY, recover_corrupt=True)
+    monkeypatch.undo()
+
+    assert path.read_text(encoding="utf-8") == original
+    assert not list(path.parent.glob("*.bak"))
+    assert not list(path.parent.glob("*tmp*"))
+
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        path.chmod(0o000)
+        try:
+            with pytest.raises(EngineError, match="Could not read profile Preferences"):
+                engine_mod.set_webrtc_policy(tmp_path, engine_mod.WEBRTC_POLICY_PROXY)
+        finally:
+            path.chmod(0o600)
+        assert path.read_text(encoding="utf-8") == original
+        assert not list(path.parent.glob("*.bak"))
+        assert not list(path.parent.glob("*tmp*"))
+
+
+@pytest.mark.parametrize("raw_bytes", [b"{broken", b"[1, 2]", b"\xff\xfe"])
+def test_webrtc_policy_preserves_corrupt_preferences_and_backs_up_on_recovery(tmp_path, raw_bytes):
+    path = tmp_path / "Default" / "Preferences"
+    path.parent.mkdir()
+    path.write_bytes(raw_bytes)
+
+    with pytest.raises(EngineError, match="refusing to overwrite without explicit recovery"):
+        engine_mod.set_webrtc_policy(tmp_path, engine_mod.WEBRTC_POLICY_PROXY)
+    assert path.read_bytes() == raw_bytes
+    assert not list(path.parent.glob("*.bak"))
+
+    engine_mod.set_webrtc_policy(tmp_path, engine_mod.WEBRTC_POLICY_PROXY, recover_corrupt=True)
+    backups = sorted(path.parent.glob("Preferences.corrupt.*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == raw_bytes
+    if os.name == "posix":
+        assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
     assert (
         json.loads(path.read_text("utf-8"))["webrtc"]["ip_handling_policy"]
         == "disable_non_proxied_udp"
     )
+    assert not list(path.parent.glob("*tmp*"))
+
+    # Second explicit recovery must create an additional backup without clobbering the first.
+    second_corrupt = b"{corrupt-again"
+    path.write_bytes(second_corrupt)
+    engine_mod.set_webrtc_policy(tmp_path, engine_mod.WEBRTC_POLICY_PROXY, recover_corrupt=True)
+    backups_after = sorted(path.parent.glob("Preferences.corrupt.*.bak"))
+    assert len(backups_after) == 2
+    assert sorted(b.read_bytes() for b in backups_after) == sorted([raw_bytes, second_corrupt])
+    if os.name == "posix":
+        assert all(stat.S_IMODE(b.stat().st_mode) == 0o600 for b in backups_after)
+
+
+def test_webrtc_policy_refuses_broken_symlink(tmp_path):
+    path = tmp_path / "Default" / "Preferences"
+    path.parent.mkdir()
+    missing_target = tmp_path / "missing-prefs.json"
+    path.symlink_to(missing_target)
+
+    with pytest.raises(EngineError, match="unreadable symlink"):
+        engine_mod.set_webrtc_policy(tmp_path, engine_mod.WEBRTC_POLICY_PROXY)
+    assert path.is_symlink()
+    assert not missing_target.exists()
+
+
+def test_extension_pins_aborts_on_unreadable_and_preserves_corrupt_preferences(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "Default" / "Preferences"
+    path.parent.mkdir()
+    original = '{"other_setting":true}'
+    path.write_text(original, encoding="utf-8")
+
+    orig_read_bytes = Path.read_bytes
+
+    def deny_read(self):
+        if self == path:
+            raise PermissionError(13, "Permission denied", str(self))
+        return orig_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", deny_read)
+    with pytest.raises(EngineError, match="Could not read profile Preferences"):
+        engine_mod.set_extension_pins(tmp_path, pinned_ids=["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+    monkeypatch.undo()
+    assert path.read_text(encoding="utf-8") == original
+
+    path.write_text("{broken", encoding="utf-8")
+    with pytest.raises(EngineError, match="refusing to overwrite without explicit recovery"):
+        engine_mod.set_extension_pins(tmp_path, pinned_ids=["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+    assert path.read_text(encoding="utf-8") == "{broken"
+    assert not list(path.parent.glob("*.bak"))
+
+    engine_mod.set_extension_pins(
+        tmp_path,
+        pinned_ids=["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        recover_corrupt=True,
+    )
+    backups = list(path.parent.glob("Preferences.corrupt.*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text("utf-8") == "{broken"
+    if os.name == "posix":
+        assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
+    assert json.loads(path.read_text("utf-8"))["extensions"]["pinned_extensions"] == [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]
+
+
+def test_start_aborts_without_writing_on_unreadable_preferences(tmp_path, monkeypatch):
+    import playwright.async_api as pw
+
+    from chrome_engine import persona as personas
+
+    monkeypatch.setattr(engine_mod, "host_os", lambda: "windows")
+    exe = tmp_path / "chrome.exe"
+    exe.write_bytes(b"")
+
+    def make_mocks():
+        state = {"launched": False, "bridge_started": False, "bridge_stopped": False}
+
+        class FakeChromium:
+            async def launch_persistent_context(self, *args, **kwargs):
+                state["launched"] = True
+                raise AssertionError("browser must not launch on unreadable Preferences")
+
+        class FakePW:
+            chromium = FakeChromium()
+
+            async def stop(self):
+                pass
+
+        class FakeStarter:
+            async def start(self):
+                return FakePW()
+
+        class FakeBridge:
+            url = "http://127.0.0.1:9999"
+
+            def __init__(self, *_a):
+                pass
+
+            async def start(self):
+                state["bridge_started"] = True
+                return self
+
+            async def stop(self):
+                state["bridge_stopped"] = True
+
+        monkeypatch.setattr(pw, "async_playwright", lambda: FakeStarter())
+        monkeypatch.setattr(engine_mod, "ProxyBridge", FakeBridge)
+        return state
+
+    orig_read_bytes = Path.read_bytes
+
+    # 1. Pre-existing unreadable Preferences with NO chrome_persona.json:
+    # must abort before writing chrome_persona.json, geo_locale.json, or starting ProxyBridge.
+    prof_fresh = tmp_path / "prof_fresh"
+    prefs_fresh = prof_fresh / "Default" / "Preferences"
+    prefs_fresh.parent.mkdir(parents=True)
+    original = '{"other_setting":true}'
+    prefs_fresh.write_text(original, encoding="utf-8")
+    state1 = make_mocks()
+
+    def deny_fresh(self):
+        if self == prefs_fresh:
+            raise PermissionError(13, "Permission denied", str(self))
+        return orig_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", deny_fresh)
+    eng1 = ChromeEngine(
+        prof_fresh,
+        platform="windows",
+        executable=exe,
+        proxy="http://127.0.0.1:8888",
+        timezone="America/New_York",
+        locale="en-US",
+    )
+    with pytest.raises(EngineError, match="Could not read profile Preferences"):
+        asyncio.run(eng1.start())
+    monkeypatch.setattr(Path, "read_bytes", orig_read_bytes)
+
+    assert not personas.persona_path(prof_fresh).exists()
+    assert not (prof_fresh / "geo_locale.json").exists()
+    assert not (prof_fresh / ".search-bootstrap-pending").exists()
+    assert state1["bridge_started"] is False
+    assert state1["launched"] is False
+    assert eng1.bridge is None
+    assert prefs_fresh.read_text(encoding="utf-8") == original
+
+    # 2. Pre-existing unreadable Preferences WITH saved chrome_persona.json and new overrides:
+    # must not overwrite chrome_persona.json with the new timezone/locale.
+    prof_saved = tmp_path / "prof_saved"
+    prefs_saved = prof_saved / "Default" / "Preferences"
+    prefs_saved.parent.mkdir(parents=True)
+    prefs_saved.write_text(original, encoding="utf-8")
+    personas.save(prof_saved, P)
+    persona_before = personas.persona_path(prof_saved).read_bytes()
+    state2 = make_mocks()
+
+    def deny_saved(self):
+        if self == prefs_saved:
+            raise PermissionError(13, "Permission denied", str(self))
+        return orig_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", deny_saved)
+    eng2 = ChromeEngine(
+        prof_saved,
+        platform="windows",
+        executable=exe,
+        proxy="http://127.0.0.1:8888",
+        timezone="America/New_York",
+        locale="en-US",
+    )
+    with pytest.raises(EngineError, match="Could not read profile Preferences"):
+        asyncio.run(eng2.start())
+    monkeypatch.setattr(Path, "read_bytes", orig_read_bytes)
+
+    assert personas.persona_path(prof_saved).read_bytes() == persona_before
+    assert not (prof_saved / ".search-bootstrap-pending").exists()
+    assert state2["bridge_started"] is False
+    assert state2["launched"] is False
+    assert eng2.bridge is None
+    assert prefs_saved.read_text(encoding="utf-8") == original
+
+    # 3. Mid-launch TOCTOU: readable on preflight, unreadable at chrome_preferences.
+    prof_toctou = tmp_path / "prof_toctou"
+    prefs_toctou = prof_toctou / "Default" / "Preferences"
+    prefs_toctou.parent.mkdir(parents=True)
+    prefs_toctou.write_text(original, encoding="utf-8")
+    state3 = make_mocks()
+    reads = [0]
+
+    def deny_second_read(self):
+        if self == prefs_toctou:
+            reads[0] += 1
+            if reads[0] >= 2:
+                raise PermissionError(13, "Permission denied", str(self))
+        return orig_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", deny_second_read)
+    eng3 = ChromeEngine(
+        prof_toctou,
+        platform="windows",
+        executable=exe,
+        proxy="http://127.0.0.1:8888",
+        timezone="America/New_York",
+        locale="en-US",
+    )
+    with pytest.raises(EngineError, match="Could not read profile Preferences"):
+        asyncio.run(eng3.start())
+    monkeypatch.undo()
+
+    assert state3["bridge_started"] is True
+    assert state3["bridge_stopped"] is True
+    assert state3["launched"] is False
+    assert eng3.bridge is None
+    assert prefs_toctou.read_text(encoding="utf-8") == original
+    assert not (prof_toctou / ".search-bootstrap-pending").exists()
+    assert not list(prefs_toctou.parent.glob("*.bak"))
+    assert not list(prefs_toctou.parent.glob("*tmp*"))
 
 
 def test_webrtc_policy_switches_with_the_proxy(tmp_path):
@@ -447,6 +717,58 @@ def test_chrome_engine_hashes_verified_bundle_once_per_launch(tmp_path, monkeypa
     assert hash_calls == 2
 
 
+def _valid_027_manifest_cases() -> dict:
+    langs = ["de-DE", "de", "en-US", "en"]
+    realm = {"dtf": "de-DE", "nf": "de-DE", "num": "123.456,789", "langs": list(langs)}
+    first = {
+        "lang": "de-DE",
+        "langs": list(langs),
+        "dtf": "de-DE",
+        "nf": "de-DE",
+        "num": "123.456,789",
+    }
+    return {
+        "macos:2": {
+            "flatMonochromeChanged": 0,
+            "webglRedBoxDigest": engine_mod._PIXELSCAN_RED_BOX_DIGEST,
+        },
+        "macos:3": {
+            "flatMonochromeChanged": 0,
+            "webglRedBoxDigest": engine_mod._PIXELSCAN_RED_BOX_DIGEST,
+        },
+        "apple_silicon_m3_laptop": {},
+        "apple_silicon_m2_max_desktop": {},
+        "locale_speech_font_de": {
+            "seed_3003_font_count": 177,
+            "seed_3006_font_count": 178,
+            "speech_voice_gate": "enforced",
+            "google_voice_count": 0,
+            "local_voice_count": 180,
+            "local_voice_count_3006": 180,
+            "host_local_voice_count": 180,
+            "core_font_missing_count": 0,
+            "installed_protected_font_count": 169,
+            "hidden_case_checked": 3,
+            "window": dict(realm),
+            "worker": dict(realm),
+            "shared": dict(realm),
+            "service": dict(realm),
+            "noopener_popup": {"first": dict(first), "seen": ["de-DE"]},
+            "same_origin_cross_nav_popup": {
+                "hadSameOriginOpener": True,
+                "first": dict(first),
+                "seen": ["de-DE"],
+            },
+            "same_origin_close_popup": {
+                "hadSameOriginOpener": True,
+                "openerClosed": True,
+                "first": dict(first),
+                "seen": ["de-DE"],
+            },
+        },
+    }
+
+
 def test_runtime_cdp_locale_override_lifecycle_and_027_retirement(tmp_path, monkeypatch):
     import hashlib
     from types import SimpleNamespace
@@ -470,13 +792,7 @@ def test_runtime_cdp_locale_override_lifecycle_and_027_retirement(tmp_path, monk
         "binary_sha256": bin_sha,
         "bundle_sha256": b_sha,
         "acceptance": "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL",
-        "cases": {
-            "macos:2": {},
-            "macos:3": {},
-            "apple_silicon_m3_laptop": {},
-            "apple_silicon_m2_max_desktop": {},
-            "locale_speech_font_de": {},
-        },
+        "cases": _valid_027_manifest_cases(),
     }
     (tmp_path / "native-acceptance.json").write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -661,3 +977,88 @@ def test_runtime_cdp_locale_override_lifecycle_and_027_retirement(tmp_path, monk
     assert eng_027._cdp_locale_override is None
     assert cdp_calls == []
     asyncio.run(eng_027.stop())
+
+
+def test_027_bundle_gate_requires_semantic_non_waived_evidence(tmp_path, monkeypatch):
+    import copy
+    import hashlib
+
+    from chrome_engine.native_bundle import bundle_sha256
+
+    monkeypatch.setattr(engine_mod, "host_os", lambda: "macos")
+    app = tmp_path / "Chromium.app"
+    exe = app / "Contents/MacOS/Chromium"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"029-binary")
+    bin_sha = hashlib.sha256(b"029-binary").hexdigest()
+    b_sha = bundle_sha256(app)
+    monkeypatch.setattr(engine_mod, "LOCALE_SPEECH_FONT_027_BUNDLES", {b_sha})
+
+    def check_cases(cases: dict) -> bool:
+        manifest = {
+            "binary_sha256": bin_sha,
+            "bundle_sha256": b_sha,
+            "acceptance": "NATIVE_MATRIX_PASSED_NO_RELEASE_APPROVAL",
+            "cases": cases,
+        }
+        (tmp_path / "native-acceptance.json").write_text(json.dumps(manifest), encoding="utf-8")
+        return engine_mod._has_verified_locale_speech_font_027(exe, "macos")
+
+    base_cases = _valid_027_manifest_cases()
+    assert check_cases(base_cases) is True
+
+    unavailable_host_cases = copy.deepcopy(base_cases)
+    unavailable_host_cases["locale_speech_font_de"]["host_local_voice_count"] = None
+    assert check_cases(unavailable_host_cases) is True
+
+    mutations = [
+        lambda c: c.__setitem__("locale_speech_font_de", {}),
+        lambda c: c["locale_speech_font_de"].pop("host_local_voice_count"),
+        lambda c: c["locale_speech_font_de"].__setitem__("host_local_voice_count", 0),
+        lambda c: c["locale_speech_font_de"].__setitem__("host_local_voice_count", -1),
+        lambda c: c["locale_speech_font_de"].__setitem__("host_local_voice_count", True),
+        lambda c: c["locale_speech_font_de"].__setitem__("host_local_voice_count", False),
+        lambda c: c["locale_speech_font_de"].__setitem__("host_local_voice_count", "180"),
+        lambda c: c["locale_speech_font_de"].update(
+            {"host_local_voice_count": None, "local_voice_count": 0}
+        ),
+        lambda c: c["locale_speech_font_de"].update(
+            {"host_local_voice_count": None, "local_voice_count_3006": 0}
+        ),
+        lambda c: c["locale_speech_font_de"].__setitem__(
+            "speech_voice_gate", "host_unavailable_on_runner"
+        ),
+        lambda c: c["locale_speech_font_de"].__setitem__("google_voice_count", 1),
+        lambda c: c["locale_speech_font_de"].__setitem__("google_voice_count", False),
+        lambda c: c["locale_speech_font_de"].__setitem__("local_voice_count", 0),
+        lambda c: c["locale_speech_font_de"].__setitem__("local_voice_count", True),
+        lambda c: c["locale_speech_font_de"].__setitem__("core_font_missing_count", 1),
+        lambda c: c["locale_speech_font_de"].__setitem__("installed_protected_font_count", 0),
+        lambda c: c["locale_speech_font_de"].__setitem__("seed_3003_font_count", 0),
+        lambda c: c["locale_speech_font_de"].__setitem__("hidden_case_checked", 0),
+        lambda c: c["locale_speech_font_de"]["window"].__setitem__("dtf", "en-US"),
+        lambda c: c["locale_speech_font_de"]["worker"].__setitem__("nf", "en-US"),
+        lambda c: c["locale_speech_font_de"]["worker"].__setitem__("num", "123,456.789"),
+        lambda c: c["locale_speech_font_de"]["worker"].__setitem__("langs", ["en-US"]),
+        lambda c: c["locale_speech_font_de"]["noopener_popup"].pop("first"),
+        lambda c: c["locale_speech_font_de"]["noopener_popup"]["first"].__setitem__("nf", "en-US"),
+        lambda c: c["locale_speech_font_de"]["noopener_popup"]["first"].__setitem__(
+            "lang", "en-US"
+        ),
+        lambda c: c["locale_speech_font_de"]["same_origin_cross_nav_popup"].__setitem__(
+            "hadSameOriginOpener", False
+        ),
+        lambda c: c["locale_speech_font_de"]["same_origin_close_popup"].__setitem__(
+            "openerClosed", False
+        ),
+        lambda c: c["locale_speech_font_de"]["same_origin_close_popup"].__setitem__(
+            "seen", ["de-DE", "en-US"]
+        ),
+        lambda c: c["macos:2"].__setitem__("flatMonochromeChanged", 1),
+        lambda c: c["macos:2"].__setitem__("flatMonochromeChanged", False),
+        lambda c: c["macos:3"].__setitem__("webglRedBoxDigest", "0" * 64),
+    ]
+    for mutate in mutations:
+        mutated = copy.deepcopy(base_cases)
+        mutate(mutated)
+        assert check_cases(mutated) is False
