@@ -1138,6 +1138,7 @@ def test_full_app_e2e_lifecycle_theme_and_dialogs(tmp_path, monkeypatch):
         assert page.dialog is not None
         page.pop_dialog()
         assert app._refresh_warming_dialog is not None
+        monkeypatch.setattr(app.warming, "start_daemon", lambda *args, **kwargs: None)
         app._main(FullDummyPage())
         assert app._refresh_warming_dialog is None
     finally:
