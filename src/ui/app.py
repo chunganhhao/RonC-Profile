@@ -676,7 +676,7 @@ class App:
         self._flush_log()
         all_profiles, page_profiles, total_pages = self._get_page_profiles(everything)
         page_size = max(1, int(getattr(self.state, "items_per_page", ITEMS_PER_PAGE)))
-        start_offset = (self.state.current_page - 1) * page_size
+        global_positions = {profile.name: index for index, profile in enumerate(everything, 1)}
 
         all_names = set(self.pm.profiles)
         for stale in self.state.selected_names() - all_names:
@@ -717,7 +717,7 @@ class App:
         new_cache: dict[str, tuple[tuple, ProfileRow]] = {}
         if page_profiles:
             new_controls: list[ft.Control] = []
-            for idx, p in enumerate(page_profiles):
+            for p in page_profiles:
                 is_loading = self.state.is_loading(p.name)
                 is_running = self.bl.is_running(p.name)
                 is_selected = self.state.is_selected(p.name)
@@ -725,7 +725,7 @@ class App:
                 device = self._device_label(p.name)
                 since = self._live_since.get(p.name, "")
                 failed = self.state.failed.get(p.name, "")
-                row_index = start_offset + idx + 1
+                row_index = global_positions[p.name]
                 active_fb = self._active_feedback_for(p.name, now)
                 row_key = (
                     p.name,

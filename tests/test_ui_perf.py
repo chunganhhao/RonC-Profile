@@ -257,6 +257,11 @@ def test_app_refresh_caches_rows_and_debounces_search(tmp_path, monkeypatch):
     asyncio.run(latest_fn(*latest_args))
     refresh_mock.assert_called_once()
 
+    app.page = DummyPage()
+    app.state.search_query = "prof-2"
+    App._refresh_profiles(app)
+    assert app.refs.profile_list_area.controls == [first_rows[2]]
+
 
 def test_proxy_pool_reload_caches_unchanged_bytes(tmp_path, monkeypatch):
     path = tmp_path / "proxies.json"
