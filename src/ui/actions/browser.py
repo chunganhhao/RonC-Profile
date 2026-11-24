@@ -25,6 +25,8 @@ def launch_or_stop(
             try:
                 bl.stop_profile(name)
             finally:
+                state.failed.pop(name, None)
+                state.set_loading(name, False)
                 state.set_stopping(name, False)
                 state.schedule_refresh()
 
@@ -51,13 +53,13 @@ def launch_or_stop(
         state.schedule_refresh()
 
     def _on_stop() -> None:
-        if not ready.is_set():
+        if not ready.is_set() and not state.is_stopping(name):
             state.failed.setdefault(name, get_string("stamp_failed"))
         state.set_loading(name, False)
         state.schedule_refresh()
 
     def _launch_log(message: str) -> None:
-        if "LAUNCH_FAILED:" in message:
+        if "LAUNCH_FAILED:" in message and not state.is_stopping(name):
             reason = message.split("LAUNCH_FAILED:", 1)[1].strip()
             state.failed[name] = reason or get_string("stamp_failed")
         log(message)

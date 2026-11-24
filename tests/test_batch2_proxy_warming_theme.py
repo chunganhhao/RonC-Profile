@@ -859,6 +859,8 @@ def test_desktop_bulk_stop_shows_stopping_until_stop_finishes(tmp_path, monkeypa
         }
 
     assert "Đang chạy" in labels()
+    app.state.failed[name] = "stale failure from an earlier launch"
+    app.state.set_loading(name, True)
     app.h.on_bulk_stop()
     stopping_labels = labels()
     assert "Đang dừng" in stopping_labels
@@ -866,6 +868,8 @@ def test_desktop_bulk_stop_shows_stopping_until_stop_finishes(tmp_path, monkeypa
     (stop,) = pending
     stop()
     assert "Đã dừng" in labels()
+    assert name not in app.state.failed
+    assert not app.state.is_loading(name)
 
 
 @pytest.mark.parametrize("from_worker", [False, True])
