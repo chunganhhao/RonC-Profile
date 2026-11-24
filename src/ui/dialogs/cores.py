@@ -15,10 +15,12 @@ logger = get_logger("ui.cores")
 
 def _stage_error_key(exc: BaseException) -> str:
     cause: BaseException | None = exc
-    while cause is not None:
+    seen: set[int] = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
         if isinstance(cause, OSError) and cause.errno == errno.ENOSPC:
             return "core_stage_no_space"
-        cause = cause.__cause__
+        cause = cause.__cause__ or cause.__context__
     return "core_stage_failed"
 
 

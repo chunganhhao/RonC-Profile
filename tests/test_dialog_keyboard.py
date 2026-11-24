@@ -198,7 +198,8 @@ def _walk(control):
         yield from _walk(control.content)
 
 
-def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog):
+@pytest.mark.parametrize("explicit", [True, False])
+def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog, explicit):
     monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["vi"])
     monkeypatch.setattr(
         cores.cores,
@@ -218,7 +219,10 @@ def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog):
         try:
             raise OSError(errno.ENOSPC, "No space left on device")
         except OSError as exc:
-            raise FetchError("Download failed: https://example.test/core.dmg") from exc
+            error = FetchError("Download failed: https://example.test/core.dmg")
+            if explicit:
+                raise error from exc
+            raise error
 
     monkeypatch.setattr(cores.cores, "stage", fail)
     page = DialogPage()
@@ -240,6 +244,12 @@ def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog):
     assert not any("Download failed" in message or "Errno" in message for message in messages)
     assert "No space left on device" in caplog.text
     assert download.disabled and not confirm.value
+
+
+def test_core_staging_error_chain_can_contain_a_cycle():
+    exc = RuntimeError()
+    exc.__cause__ = exc
+    assert cores._stage_error_key(exc) == "core_stage_failed"
 
 
 def test_dropdown_escape_seen_only_by_page_preserves_the_unsaved_profile(monkeypatch):
