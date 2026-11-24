@@ -253,6 +253,15 @@ def test_core_staging_error_chain_can_contain_a_cycle():
     assert cores._stage_error_key(exc) == "core_stage_failed"
 
 
+def test_core_staging_does_not_classify_suppressed_context_as_disk_full():
+    try:
+        raise OSError(errno.ENOSPC, "earlier unrelated error")
+    except OSError:
+        with pytest.raises(RuntimeError) as caught:
+            raise RuntimeError("staging failure") from None
+    assert cores._stage_error_key(caught.value) == "core_stage_failed"
+
+
 @pytest.mark.parametrize(
     "code, key", [(errno.ENOSPC, "core_stage_no_space"), (errno.EIO, "core_stage_failed")]
 )

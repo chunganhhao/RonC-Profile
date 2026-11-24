@@ -30,7 +30,7 @@ def _stage_error_key(exc: BaseException) -> str:
             )
         ):
             return "core_stage_no_space"
-        cause = cause.__cause__ or cause.__context__
+        cause = cause.__cause__ or (None if cause.__suppress_context__ else cause.__context__)
     return "core_stage_failed"
 
 
