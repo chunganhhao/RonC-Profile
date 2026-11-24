@@ -25,27 +25,18 @@ def rebuild_bulk_bar(
         return
     hidden = len(selected - {p.name for p in shown_profiles})
     bulk_bar.visible = True
-    bulk_bar.controls = [_build_container(len(selected), hidden, cbs)]
 
-
-def _build_container(count: int, hidden: int, cbs: BulkCallbacks) -> ft.Container:
     def btn(label: str, icon: str, key: str, style: ft.ButtonStyle) -> ft.Control:
         cls = ft.Button if style is ACCENT_STYLE else ft.OutlinedButton
         return cls(label, icon=icon, height=32, style=style, on_click=lambda _: cbs[key]())
 
-    return ft.Container(
-        expand=True,
-        bgcolor=COLORS["paper_sunk"],
-        padding=ft.Padding.symmetric(horizontal=14, vertical=9),
-        border=ft.Border.only(bottom=ft.BorderSide(1, COLORS["card_border"])),
-        content=ft.Row(
-            spacing=8,
-            wrap=True,
-            run_spacing=8,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    bulk_bar.controls = [
+        ft.Column(
+            spacing=0,
+            alignment=ft.MainAxisAlignment.CENTER,
             controls=[
                 ft.Text(
-                    get_string("selected_count", count=count),
+                    get_string("selected_count", count=len(selected)),
                     size=13.5,
                     font_family=FONT_SEMIBOLD,
                     color=COLORS["text_main"],
@@ -56,15 +47,16 @@ def _build_container(count: int, hidden: int, cbs: BulkCallbacks) -> ft.Containe
                     color=COLORS["text_sub"],
                     visible=hidden > 0,
                 ),
-                ft.Container(width=6),
-                btn(get_string("launch"), ft.Icons.PLAY_ARROW_ROUNDED, "launch", ACCENT_STYLE),
-                btn(get_string("stop"), ft.Icons.STOP_ROUNDED, "stop", OUTLINE_STYLE),
-                btn(get_string("delete"), ft.Icons.DELETE_OUTLINE, "delete", OUTLINE_STYLE),
-                ft.TextButton(
-                    get_string("clear"),
-                    on_click=lambda _: cbs["clear"](),
-                    style=ft.ButtonStyle(color=COLORS["text_sub"]),
-                ),
             ],
         ),
-    )
+        ft.Container(width=6),
+        btn(get_string("launch"), ft.Icons.PLAY_ARROW_ROUNDED, "launch", ACCENT_STYLE),
+        btn(get_string("stop"), ft.Icons.STOP_ROUNDED, "stop", OUTLINE_STYLE),
+        btn(get_string("delete"), ft.Icons.DELETE_OUTLINE, "delete", OUTLINE_STYLE),
+        ft.TextButton(
+            get_string("clear"),
+            height=32,
+            on_click=lambda _: cbs["clear"](),
+            style=ft.ButtonStyle(color=COLORS["text_sub"]),
+        ),
+    ]

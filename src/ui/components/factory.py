@@ -140,7 +140,12 @@ def build_ui_refs(
             font_family=FONT_SEMIBOLD,
             color=COLORS["text_sub"],
         ),
-        bulk_bar=ft.Row(visible=False, spacing=0, controls=[]),
+        bulk_bar=ft.Row(
+            visible=False,
+            expand=True,
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
         file_picker=file_picker,
         search_field=ft.TextField(
             hint_text=get_string("search_hint"),

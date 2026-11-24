@@ -320,7 +320,6 @@ class App:
             r.prev_btn,
             r.next_btn,
             r.page_label,
-            r.bulk_bar,
             r.search_field,
             header_slot=self._header_slot,
             on_open_warming=self._open_warming,
@@ -601,20 +600,6 @@ class App:
             self._on_filter,
             group_counts=group_counts,
         )
-        names = [p.name for p in page_profiles]
-        all_sel = bool(names) and all(self.state.is_selected(n) for n in names)
-        any_sel = any(self.state.is_selected(n) for n in names)
-        self._header_slot.content = (
-            build_header_row(
-                all_sel,
-                any_sel,
-                lambda select: self.h.on_select_all_page() if select else self.h.on_deselect_page(),
-                layout_width=self._profile_table_width,
-            )
-            if page_profiles
-            else None
-        )
-
         now = time.monotonic()
         self._set_toast_visible(now < self._toast_until and bool(self._toast_text.value))
         r.profile_list_area.controls = (
@@ -659,6 +644,26 @@ class App:
                 "deselect_page": self.h.on_deselect_page,
                 "clear": self.h.on_clear_selection,
             },
+        )
+        names = [p.name for p in page_profiles]
+        all_sel = bool(names) and all(self.state.is_selected(n) for n in names)
+        any_sel = any(self.state.is_selected(n) for n in names)
+        self._header_slot.content = (
+            build_header_row(
+                all_sel,
+                any_sel,
+                (
+                    lambda select: (
+                        self.h.on_select_all_page() if select else self.h.on_deselect_page()
+                    )
+                )
+                if page_profiles
+                else None,
+                layout_width=self._profile_table_width,
+                bulk_actions=r.bulk_bar if r.bulk_bar.visible else None,
+            )
+            if page_profiles or r.bulk_bar.visible
+            else None
         )
         self._set_subtitle(r.content_subtitle)
         self._total_count_text.value = get_string("footer_total", count=len(all_profiles))

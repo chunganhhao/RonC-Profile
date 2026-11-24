@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- App desktop: bỏ màn hình chưa xác định khỏi dòng fingerprint và giữ nguyên vị trí các profile khi chọn hoặc bỏ chọn.
+
 - App desktop: giảm tải CPU khi đổi kích thước cửa sổ ở trang có nhiều profile.
 
 - App desktop: cập nhật trạng thái lịch ngâm tài khoản ngay trong hộp thoại đang mở và hiển thị lại hướng dẫn, đoạn cấu hình cùng nút sao chép trong phần kết nối MCP.
