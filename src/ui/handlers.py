@@ -44,6 +44,7 @@ class AppHandlers:
         self._importing = False
 
     def on_launch(self, name: str) -> None:
+        ft.context.disable_auto_update()
         launch_or_stop(name, self._pm, self._bl, self._state, self._log)
 
     def on_delete(self, name: str) -> None:
@@ -104,15 +105,18 @@ class AppHandlers:
     # --- Selection handlers ---
 
     def on_toggle_select(self, name: str) -> None:
+        ft.context.disable_auto_update()
         self._state.toggle_selection(name)
         self._state.schedule_refresh()
 
     def on_select_all_page(self) -> None:
+        ft.context.disable_auto_update()
         _, page_profiles, _ = self._get_page_profiles()
         self._state.select_all([p.name for p in page_profiles])
         self._state.schedule_refresh()
 
     def on_deselect_page(self) -> None:
+        ft.context.disable_auto_update()
         _, page_profiles, _ = self._get_page_profiles()
         for p in page_profiles:
             if self._state.is_selected(p.name):
@@ -120,6 +124,7 @@ class AppHandlers:
         self._state.schedule_refresh()
 
     def on_clear_selection(self) -> None:
+        ft.context.disable_auto_update()
         self._state.clear_selection()
         self._state.schedule_refresh()
 
@@ -143,10 +148,12 @@ class AppHandlers:
             )
 
     def on_bulk_launch(self) -> None:
+        ft.context.disable_auto_update()
         if names := list(self._state.selected_names()):
             bulk_launch_profiles(names, self._pm, self._bl, self._state, self._log)
 
     def on_bulk_stop(self) -> None:
+        ft.context.disable_auto_update()
         if names := list(self._state.selected_names()):
             bulk_stop_profiles(names, self._pm, self._bl, self._state, self._log)
 

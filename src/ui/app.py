@@ -22,7 +22,7 @@ from .components import (
     rebuild_bulk_bar,
 )
 from .components.bulk_bar import layout_bulk_bar
-from .components.profile_card import build_header_row
+from .components.profile_card import ProfileRow, build_header_row
 from .components.sidebar import build_filter_buttons
 from .dialogs.appearance import open_appearance_dialog
 from .dialogs.cores import open_core_manager
@@ -50,6 +50,8 @@ logger = get_logger("app")
 
 
 class App:
+    _SEARCH_DEBOUNCE_S = 0.15
+
     def __init__(self, container: Container | None = None) -> None:
         c = container or Container()
         self.pm: IProfileManager = c.profile_manager
@@ -73,6 +75,11 @@ class App:
         self._header_slot = ft.Container()
         self._profile_table_width: float | None = None
         self._refresh_warming_dialog: Callable[[], None] | None = None
+        self._row_cache: dict[str, tuple[tuple, ProfileRow]] = {}
+        self._header_cache_key: tuple | None = None
+        self._filter_cache_key: tuple | None = None
+        self._search_seq: int = 0
+        self._sidebar_extension_badge = ft.Text("0")
         self._total_count_text = ft.Text("", size=12, font_family=FONT_SEMIBOLD)
         self._footer_proxy_text = ft.Text("", size=11.5, font_family=FONT_DATA)
         self._footer_warming_text = ft.Text("", size=11.5, font_family=FONT_DATA)
@@ -96,6 +103,10 @@ class App:
 
     def _main(self, page: ft.Page) -> None:
         self._refresh_warming_dialog = None
+        self._row_cache = {}
+        self._header_cache_key = None
+        self._filter_cache_key = None
+        self._search_seq = 0
         self.page = page
         configure_page(page)
         fp = ft.FilePicker()
@@ -118,6 +129,10 @@ class App:
     def _build_ui(self) -> None:
         """(Re)build every control; strings and theme colors are read at build time."""
         assert self.page is not None
+        self._row_cache = {}
+        self._header_cache_key = None
+        self._filter_cache_key = None
+        self._search_seq = getattr(self, "_search_seq", 0) + 1
         refresh_styles()
         apply_page_theme(self.page)
         self.refs = build_ui_refs(
@@ -363,11 +378,23 @@ class App:
     def _on_search(self, query: str) -> None:
         self.state.search_query = query.strip().lower()
         self.state.current_page = 1
+        seq = getattr(self, "_search_seq", 0) + 1
+        self._search_seq = seq
+        if isinstance(self.page, ft.Page):
+            ft.context.disable_auto_update()
+            self.page.run_task(self._debounced_search, seq)
+            return
         self._refresh_profiles()
+
+    async def _debounced_search(self, seq: int) -> None:
+        await asyncio.sleep(self._SEARCH_DEBOUNCE_S)
+        if seq == getattr(self, "_search_seq", 0) and self.page:
+            self._refresh_profiles()
 
     def _on_filter(self, fid: str) -> None:
         self.filter = fid
         self.state.current_page = 1
+        self._search_seq = getattr(self, "_search_seq", 0) + 1
         self._refresh_profiles()
 
     def _toggle_running_filter(self) -> None:
@@ -378,11 +405,13 @@ class App:
             return
         self.state.items_per_page = size
         self.state.current_page = 1
+        self._search_seq = getattr(self, "_search_seq", 0) + 1
         self._refresh_profiles()
 
     def _go_to_page(self, target: str) -> None:
         _, _, total = self._get_page_profiles()
         self.state.current_page = 1 if target == "first" else total
+        self._search_seq = getattr(self, "_search_seq", 0) + 1
         self._refresh_profiles()
 
     def _filter_tests(self) -> dict:
@@ -394,8 +423,8 @@ class App:
             "chrome": lambda p: p.engine == "chrome",
         }
 
-    def _get_page_profiles(self) -> tuple[list, list, int]:
-        all_profiles = self.pm.list_profiles()
+    def _get_page_profiles(self, all_profiles: list | None = None) -> tuple[list, list, int]:
+        all_profiles = self.pm.list_profiles() if all_profiles is None else list(all_profiles)
         if self.filter.startswith("group:"):
             target_group = self.filter.split(":", 1)[1]
             all_profiles = [
@@ -577,9 +606,10 @@ class App:
     def _refresh_profiles(self) -> None:
         r = self.refs
         assert r is not None
+        everything = self.pm.list_profiles()
         self._update_stats()
         self._flush_log()
-        all_profiles, page_profiles, total_pages = self._get_page_profiles()
+        all_profiles, page_profiles, total_pages = self._get_page_profiles(everything)
         page_size = max(1, int(getattr(self.state, "items_per_page", ITEMS_PER_PAGE)))
         start_offset = (self.state.current_page - 1) * page_size
 
@@ -595,51 +625,109 @@ class App:
         for name in set(self._live_since) - running:
             del self._live_since[name]
 
-        everything = self.pm.list_profiles()
         tests = self._filter_tests()
         group_counts: dict[str, int] = {}
         for p in everything:
             for tag in p.tags or ([p.group] if p.group else []):
                 group_counts[tag] = group_counts.get(tag, 0) + 1
-
-        self._filter_column.controls = build_filter_buttons(
+        filter_counts = {fid: sum(1 for p in everything if test(p)) for fid, test in tests.items()}
+        filter_key = (
             self.filter,
-            {fid: sum(1 for p in everything if test(p)) for fid, test in tests.items()},
-            self._on_filter,
-            group_counts=group_counts,
+            tuple(sorted(filter_counts.items())),
+            tuple(sorted(group_counts.items())),
         )
+        if filter_key != getattr(self, "_filter_cache_key", None):
+            self._filter_cache_key = filter_key
+            self._filter_column.controls = build_filter_buttons(
+                self.filter,
+                filter_counts,
+                self._on_filter,
+                group_counts=group_counts,
+            )
+
+        dirty_rows: list[ProfileRow] = []
         now = time.monotonic()
         self._set_toast_visible(now < self._toast_until and bool(self._toast_text.value))
-        r.profile_list_area.controls = (
-            [
-                build_profile_card(
-                    p,
-                    self.state.is_loading(p.name),
-                    self.bl.is_running(p.name),
-                    self.h.on_launch,
-                    self.h.on_edit,
-                    self.h.on_delete,
-                    is_selected=self.state.is_selected(p.name),
-                    on_select=self.h.on_toggle_select,
-                    on_cookies=self.h.on_cookies,
-                    on_copy_user=self._on_copy_user,
-                    on_copy_recovery=self._on_copy_recovery,
-                    on_edit_field=self._on_edit_field,
-                    on_copy_pass=self._on_copy_pass,
-                    on_copy_2fa=self._on_copy_2fa,
-                    device=self._device_label(p.name),
-                    since=self._live_since.get(p.name, ""),
-                    failed=self.state.failed.get(p.name, ""),
-                    row_index=start_offset + idx + 1,
-                    active_feedback=self._active_feedback_for(p.name, now),
-                    layout_width=self._profile_table_width,
-                    is_stopping=self.state.is_stopping(p.name),
+        prev_cache: dict[str, tuple[tuple, ProfileRow]] = getattr(self, "_row_cache", {})
+        new_cache: dict[str, tuple[tuple, ProfileRow]] = {}
+        if page_profiles:
+            new_controls: list[ft.Control] = []
+            for idx, p in enumerate(page_profiles):
+                is_loading = self.state.is_loading(p.name)
+                is_running = self.bl.is_running(p.name)
+                is_selected = self.state.is_selected(p.name)
+                is_stopping = self.state.is_stopping(p.name)
+                device = self._device_label(p.name)
+                since = self._live_since.get(p.name, "")
+                failed = self.state.failed.get(p.name, "")
+                row_index = start_offset + idx + 1
+                active_fb = self._active_feedback_for(p.name, now)
+                row_key = (
+                    p.name,
+                    p.proxy,
+                    p.os_type,
+                    p.timezone,
+                    p.engine,
+                    p.group,
+                    tuple(p.tags or ()),
+                    p.display_order,
+                    p.account_uid,
+                    bool(p.account_password),
+                    bool(p.two_fa_secret),
+                    p.recovery_email,
+                    p.backup_codes,
+                    p.notes,
+                    is_loading,
+                    is_running,
+                    is_selected,
+                    device,
+                    since,
+                    failed,
+                    row_index,
+                    frozenset(active_fb),
+                    is_stopping,
                 )
-                for idx, p in enumerate(page_profiles)
-            ]
-            if page_profiles
-            else [self._build_empty_or_no_results()]
-        )
+                cached = prev_cache.get(p.name)
+                if cached is not None and cached[0] == row_key:
+                    row = cached[1]
+                    if self._profile_table_width is not None and row.set_layout_width(
+                        self._profile_table_width
+                    ):
+                        dirty_rows.append(row)
+                else:
+                    row = build_profile_card(
+                        p,
+                        is_loading,
+                        is_running,
+                        self.h.on_launch,
+                        self.h.on_edit,
+                        self.h.on_delete,
+                        is_selected=is_selected,
+                        on_select=self.h.on_toggle_select,
+                        on_cookies=self.h.on_cookies,
+                        on_copy_user=self._on_copy_user,
+                        on_copy_recovery=self._on_copy_recovery,
+                        on_edit_field=self._on_edit_field,
+                        on_copy_pass=self._on_copy_pass,
+                        on_copy_2fa=self._on_copy_2fa,
+                        device=device,
+                        since=since,
+                        failed=failed,
+                        row_index=row_index,
+                        active_feedback=active_fb,
+                        layout_width=self._profile_table_width,
+                        is_stopping=is_stopping,
+                    )
+                new_cache[p.name] = (row_key, row)
+                new_controls.append(row)
+        else:
+            new_controls = [self._build_empty_or_no_results()]
+        self._row_cache = new_cache
+        old_controls = r.profile_list_area.controls
+        if len(old_controls) != len(new_controls) or any(
+            a is not b for a, b in zip(old_controls, new_controls, strict=True)
+        ):
+            r.profile_list_area.controls = new_controls
         rebuild_bulk_bar(
             r.bulk_bar,
             self.state,
@@ -657,23 +745,50 @@ class App:
         names = [p.name for p in page_profiles]
         all_sel = bool(names) and all(self.state.is_selected(n) for n in names)
         any_sel = any(self.state.is_selected(n) for n in names)
-        self._header_slot.content = (
-            build_header_row(
-                all_sel,
-                any_sel,
-                (
-                    lambda select: (
-                        self.h.on_select_all_page() if select else self.h.on_deselect_page()
-                    )
+        bulk_visible = bool(r.bulk_bar.visible)
+        header_key = (bool(page_profiles), all_sel, any_sel, bulk_visible)
+        want_header = bool(page_profiles) or bulk_visible
+        header_matches = header_key == getattr(self, "_header_cache_key", None) and (
+            not want_header
+            or (
+                self._header_slot.content is not None
+                and (
+                    not isinstance(self._header_slot.content, ProfileRow)
+                    if bulk_visible
+                    else isinstance(self._header_slot.content, ProfileRow)
                 )
-                if page_profiles
-                else None,
-                layout_width=self._profile_table_width,
-                bulk_actions=r.bulk_bar if r.bulk_bar.visible else None,
             )
-            if page_profiles or r.bulk_bar.visible
-            else None
         )
+        if header_matches:
+            if (
+                not bulk_visible
+                and page_profiles
+                and self._profile_table_width is not None
+                and isinstance(self._header_slot.content, ProfileRow)
+                and self._header_slot.content.set_layout_width(
+                    self._profile_table_width, header=True
+                )
+            ):
+                dirty_rows.append(self._header_slot.content)
+        else:
+            self._header_cache_key = header_key
+            self._header_slot.content = (
+                build_header_row(
+                    all_sel,
+                    any_sel,
+                    (
+                        lambda select: (
+                            self.h.on_select_all_page() if select else self.h.on_deselect_page()
+                        )
+                    )
+                    if page_profiles
+                    else None,
+                    layout_width=self._profile_table_width,
+                    bulk_actions=r.bulk_bar if bulk_visible else None,
+                )
+                if want_header
+                else None
+            )
         self._set_subtitle(r.content_subtitle)
         self._total_count_text.value = get_string("footer_total", count=len(all_profiles))
         proxy_count = len(self.proxy_pool.list_entries())
@@ -719,7 +834,11 @@ class App:
                 bgcolor=COLORS["live_tint"] if is_run_active else COLORS["card_bg"],
                 color=COLORS["live_ink"] if is_run_active else COLORS["text_main"],
             )
-        self._safe_update()
+        try:
+            self._safe_update()
+        finally:
+            for row in dirty_rows:
+                row.mark_layout_clean()
 
     @staticmethod
     def _device_label(name: str) -> str:
@@ -758,6 +877,7 @@ class App:
     def _clear_filters(self) -> None:
         self.filter = "all"
         self.state.search_query = ""
+        self._search_seq = getattr(self, "_search_seq", 0) + 1
         if self.refs and self.refs.search_field is not None:
             self.refs.search_field.value = ""
         self._refresh_profiles()
@@ -844,6 +964,26 @@ class App:
         except Exception as e:
             logger.error("Error updating UI: %s", e)
 
+    def _update_toast_only(self) -> None:
+        if not self.page:
+            return
+        if (
+            isinstance(self.page, ft.Page)
+            and getattr(self._toast_banner, "_parent", None) is not None
+        ):
+            try:
+                with self.state._ui_update_lock:
+                    self._toast_banner.update()
+                    if (
+                        self.refs is not None
+                        and getattr(self.refs.content_subtitle, "_parent", None) is not None
+                    ):
+                        self.refs.content_subtitle.update()
+                return
+            except Exception:
+                pass
+        self._safe_update()
+
     async def _ui_reconcile_loop(self) -> None:
         while self.page:
             try:
@@ -863,8 +1003,10 @@ class App:
                     if self._refresh_warming_dialog is not None:
                         self._refresh_warming_dialog()
                     self._refresh_profiles_and_extensions()
-                elif changed or expired_keys or toast_expired:
+                elif changed or expired_keys:
                     self._refresh_profiles()
+                elif toast_expired:
+                    self._update_toast_only()
             except Exception as e:
                 logger.error("Error in UI reconcile loop: %s", e)
             await asyncio.sleep(0.12)

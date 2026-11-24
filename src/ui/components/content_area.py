@@ -58,7 +58,7 @@ def _toolbar_btn(
 
 def build_content_area(
     subtitle: ft.Text,
-    profile_list: ft.Column,
+    profile_list: ft.Column | ft.ListView,
     prev_btn: ft.IconButton,
     next_btn: ft.IconButton,
     page_label: ft.Text,
@@ -104,13 +104,22 @@ def build_content_area(
         if on_table_resize is not None:
             on_table_resize(width)
         if table.width != width:
-            if header_slot is not None and isinstance(header_slot.content, ProfileRow):
-                header_slot.content.set_layout_width(width, header=True)
+            dirty_rows: list[ProfileRow] = []
+            if (
+                header_slot is not None
+                and isinstance(header_slot.content, ProfileRow)
+                and header_slot.content.set_layout_width(width, header=True)
+            ):
+                dirty_rows.append(header_slot.content)
             for row in profile_list.controls:
-                if isinstance(row, ProfileRow):
-                    row.set_layout_width(width)
+                if isinstance(row, ProfileRow) and row.set_layout_width(width):
+                    dirty_rows.append(row)
             table.width = width
-            table.update()
+            try:
+                table.update()
+            finally:
+                for row in dirty_rows:
+                    row.mark_layout_clean()
 
     sheet = ft.Container(
         key="profiles_sheet_container",
@@ -119,6 +128,7 @@ def build_content_area(
         border=ft.Border.all(1, COLORS["card_border"]),
         border_radius=10,
         clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+        size_change_interval=80,
         on_size_change=resize_table,
         content=ft.Row(
             key="profiles_horizontal_scroll_row",

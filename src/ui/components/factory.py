@@ -58,10 +58,10 @@ def build_ui_refs(
         ),
         log_toggle_btn=log_toggle_btn,
         content_subtitle=ft.Text("", size=13.5, color=COLORS["text_sub"]),
-        profile_list_area=ft.Column(
+        profile_list_area=ft.ListView(
             spacing=0,
-            scroll=ft.ScrollMode.AUTO,
             expand=True,
+            build_controls_on_demand=True,
         ),
         prev_btn=ft.IconButton(
             key="page_prev_btn",

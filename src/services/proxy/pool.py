@@ -74,17 +74,28 @@ class ProxyPoolService:
         self._explicit_path = file_path
         self._lock = threading.RLock()
         self._entries: dict[str, ProxyPoolEntry] = {}
+        self._last_store_key: tuple[str, bytes | None] | None = None
         self.reload()
 
     @property
     def file_path(self) -> str:
         return self._explicit_path or app_config.PROXY_POOL_FILE
 
-    def _read_entries(self) -> dict[str, ProxyPoolEntry]:
+    @staticmethod
+    def _read_raw(path: str) -> bytes | None:
         try:
-            with open(self.file_path, encoding="utf-8") as f:
-                raw = json.load(f)
-            items = raw.get("proxies", []) if isinstance(raw, dict) else raw
+            with open(path, "rb") as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+
+    @staticmethod
+    def _parse_entries(raw: bytes | None) -> dict[str, ProxyPoolEntry]:
+        if raw is None:
+            return {}
+        try:
+            data = json.loads(raw.decode("utf-8"))
+            items = data.get("proxies", []) if isinstance(data, dict) else data
             if not isinstance(items, list):
                 raise ValueError
             entries = {}
@@ -92,27 +103,38 @@ class ProxyPoolService:
                 if isinstance(item, dict) and (entry := ProxyPoolEntry.from_dict(item)):
                     entries[entry.id] = entry
             return entries
-        except FileNotFoundError:
-            return {}
         except (TypeError, ValueError, OverflowError) as exc:
             raise OSError("Invalid proxy pool store") from exc
 
+    def _read_entries(self) -> dict[str, ProxyPoolEntry]:
+        return self._parse_entries(self._read_raw(self.file_path))
+
     def reload(self) -> None:
         with self._lock:
+            path = self.file_path
             try:
-                self._entries = self._read_entries()
+                raw = self._read_raw(path)
+                store_key = (path, raw)
+                if store_key == self._last_store_key:
+                    return
+                self._entries = self._parse_entries(raw)
+                self._last_store_key = store_key
             except OSError as e:
-                logger.error("Failed to load proxy pool from %s: %s", self.file_path, e)
+                logger.error("Failed to load proxy pool from %s: %s", path, e)
 
     @contextlib.contextmanager
     def _write_transaction(self):
         with self._lock, store_lease(self.file_path):
             previous = self._entries
-            self._entries = self._read_entries()
+            path = self.file_path
+            raw = self._read_raw(path)
+            self._entries = self._parse_entries(raw)
+            self._last_store_key = (path, raw)
             try:
                 yield
             except BaseException:
                 self._entries = previous
+                self._last_store_key = None
                 raise
 
     def _save(self) -> None:
@@ -121,11 +143,13 @@ class ProxyPoolService:
             parent = os.path.dirname(os.path.abspath(path))
             os.makedirs(parent, exist_ok=True)
             payload = [e.to_dict() for e in self._entries.values()]
+            payload_bytes = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
             fd, tmp_path = tempfile.mkstemp(dir=parent, prefix=".proxies_", suffix=".tmp")
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(payload_bytes)
                 os.replace(tmp_path, path)
+                self._last_store_key = (path, payload_bytes)
             except Exception:
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)

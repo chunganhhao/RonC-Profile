@@ -4,6 +4,7 @@ import flet as ft
 
 from ...core.strings import get_string
 from ..theme.colors import COLORS, FONT_SEMIBOLD, current_theme_mode
+from ..theme.styles import StableButton
 
 _WIDTH, _HEIGHT = 96, 34
 
@@ -22,7 +23,7 @@ def build_launch_button(
     label_style = ft.TextStyle(font_family=FONT_SEMIBOLD, size=13)
 
     if is_loading and not is_stopping:
-        return ft.Button(
+        return StableButton(
             content=ft.ProgressRing(width=15, height=15, stroke_width=2, color=COLORS["text_sub"]),
             width=_WIDTH,
             height=_HEIGHT,
@@ -37,7 +38,7 @@ def build_launch_button(
         # In dark mode, running stop button is crisp white with dark ink
         stop_bg = "#F9FAFB" if is_dark else COLORS["ink_button"]
         stop_fg = "#0B0C0E" if is_dark else "#FFFFFF"
-        return ft.Button(
+        return StableButton(
             get_string("stop"),
             icon=ft.Icons.CLOSE_ROUNDED,
             width=_WIDTH,
@@ -60,7 +61,7 @@ def build_launch_button(
     launch_bg = COLORS["paper_sunk"] if is_dark else "#FFFFFF"
     launch_hover = COLORS["rule_strong"] if is_dark else COLORS["paper_sunk"]
     launch_side = ft.BorderSide(1, COLORS["rule_strong"])
-    return ft.Button(
+    return StableButton(
         get_string("launch"),
         icon=ft.Icons.LANGUAGE,
         width=_WIDTH,

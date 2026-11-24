@@ -271,29 +271,43 @@ def open_profile_dialog(
         **DLG_FIELD_KWARGS,
     )
 
-    totp_timer_state: dict[str, Any] = {"active": True, "timer": None}
+    totp_timer_state: dict[str, Any] = {"active": True, "timer": None, "last": None}
     totp_timer_lock = threading.Lock()
     timer_cls = threading.Timer
 
     def _render_totp_state(notify: bool = True) -> None:
         raw = (two_fa_field.value or "").strip()
         if not raw:
-            totp_preview_text.value = ""
-            totp_preview_text.visible = False
+            new_val = ""
+            new_color = totp_preview_text.color
+            new_visible = False
         else:
             res = generate_totp(raw)
             if res:
                 code, rem = res
-                totp_preview_text.value = f"🛡️ {get_string('two_fa_preview', code=code, rem=rem)}"
-                totp_preview_text.color = COLORS["success"]
-                totp_preview_text.visible = True
+                new_val = f"🛡️ {get_string('two_fa_preview', code=code, rem=rem)}"
+                new_color = COLORS["success"]
+                new_visible = True
             else:
-                totp_preview_text.value = get_string("two_fa_invalid")
-                totp_preview_text.color = COLORS["warning"]
-                totp_preview_text.visible = True
+                new_val = get_string("two_fa_invalid")
+                new_color = COLORS["warning"]
+                new_visible = True
+        state = (new_val, new_color, new_visible)
+        if state == totp_timer_state["last"]:
+            return
+        totp_timer_state["last"] = state
+        totp_preview_text.value = new_val
+        totp_preview_text.color = new_color
+        totp_preview_text.visible = new_visible
         if notify:
             with contextlib.suppress(Exception):
-                page.update()
+                if (
+                    isinstance(page, ft.Page)
+                    and getattr(totp_preview_text, "_parent", None) is not None
+                ):
+                    totp_preview_text.update()
+                else:
+                    page.update()
 
     def _update_totp_preview(_: object = None) -> None:
         _render_totp_state(notify=True)
@@ -335,7 +349,7 @@ def open_profile_dialog(
         object.__setattr__(totp_preview_text, "_refresh_hook", None)
 
     two_fa_field.on_change = _update_totp_preview
-    _update_totp_preview()
+    _render_totp_state(notify=False)
 
     def _on_quick_paste(_: ft.ControlEvent) -> None:
         raw = (quick_paste_field.value or "").strip()

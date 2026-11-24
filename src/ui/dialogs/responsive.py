@@ -42,6 +42,7 @@ def bind_responsive_dialog(
     def _apply_dims(notify: bool = False) -> None:
         if not state["active"]:
             return
+        prev_dims = (container.width, container.height)
         pw, ph = _read_page_dims(page)
         if pw >= 420:
             avail_w = max(min_width, pw - 72)
@@ -63,11 +64,18 @@ def bind_responsive_dialog(
             with contextlib.suppress(Exception):
                 on_resize_extra(target_w, target_h or 0)
 
-        if notify:
+        if notify and (
+            (container.width, container.height) != prev_dims or on_resize_extra is not None
+        ):
             with contextlib.suppress(Exception):
-                page.update()
+                if isinstance(page, ft.Page) and getattr(dlg, "_parent", None) is not None:
+                    dlg.update()
+                else:
+                    page.update()
 
     def _on_page_resize(e: Any = None) -> None:
+        with contextlib.suppress(Exception):
+            ft.context.disable_auto_update()
         if callable(prev_on_resize):
             with contextlib.suppress(Exception):
                 prev_on_resize(e)

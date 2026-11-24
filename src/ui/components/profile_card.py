@@ -6,7 +6,7 @@ from ...core.strings import get_string, localize_launch_error
 from ...models.profile import Profile, extract_backup_code_tokens
 from ...utils.proxy_parser import mask_proxy
 from ..theme.colors import COLORS, FONT_DATA, FONT_SEMIBOLD
-from ..theme.styles import DANGER_ICON_STYLE, ICON_STYLE
+from ..theme.styles import DANGER_ICON_STYLE, ICON_STYLE, StableIconButton
 from .launch_button import build_launch_button
 
 _OS_ICONS = {
@@ -49,8 +49,15 @@ class ProfileRow(ft.Container):
         self._ledger = self.content
         self._cells = dict(zip(COLUMNS, self._ledger.controls, strict=True))
         self._layout = (False, False, False)
+        self._dirty_subtree = False
 
-    def set_layout_width(self, width: float, *, header: bool = False) -> None:
+    def is_isolated(self) -> bool:
+        return not self._dirty_subtree
+
+    def mark_layout_clean(self) -> None:
+        self._dirty_subtree = False
+
+    def set_layout_width(self, width: float, *, header: bool = False) -> bool:
         narrow = width < TABLE_BREAKPOINT
         # ResponsiveRow's default breakpoints follow the page, not this sheet.
         # Account for the sidebar and workspace padding using the measured width.
@@ -60,7 +67,7 @@ class ProfileRow(ft.Container):
             narrow and not header and width >= 1080,
         )
         if mode == self._layout:
-            return
+            return False
         self._layout = mode
         cells = self._cells
         for key, cell in cells.items():
@@ -113,6 +120,8 @@ class ProfileRow(ft.Container):
                     ft.ResponsiveRow(controls=details, run_spacing=12),
                 ],
             )
+        self._dirty_subtree = True
+        return True
 
 
 def _cell(key: str, content: ft.Control | None) -> ft.Container:
@@ -192,6 +201,7 @@ def build_header_row(
     )
     if layout_width is not None:
         container.set_layout_width(layout_width, header=True)
+        container.mark_layout_clean()
     return container
 
 
@@ -238,7 +248,7 @@ def build_profile_card(
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 ft.Container(content, expand=True),
-                ft.IconButton(
+                StableIconButton(
                     icon=ft.Icons.CHECK_ROUNDED if is_done else ft.Icons.EDIT_OUTLINED,
                     icon_size=14,
                     width=28,
@@ -366,6 +376,7 @@ def build_profile_card(
     )
     if layout_width is not None:
         container.set_layout_width(layout_width)
+        container.mark_layout_clean()
     return container
 
 
@@ -424,7 +435,7 @@ def _profile_identity(
                 ft.Container(uid_text, expand=True),
                 *(
                     [
-                        ft.IconButton(
+                        StableIconButton(
                             icon=ft.Icons.CHECK_ROUNDED
                             if copied_user
                             else ft.Icons.CONTENT_COPY_OUTLINED,
@@ -587,7 +598,7 @@ def _recovery_cell(
     actions: list[ft.Control] = []
     if rec_mail and on_copy_recovery:
         actions.append(
-            ft.IconButton(
+            StableIconButton(
                 icon=ft.Icons.CHECK_ROUNDED if copied_rec else ft.Icons.CONTENT_COPY_OUTLINED,
                 icon_size=13,
                 width=24,
@@ -600,7 +611,7 @@ def _recovery_cell(
         )
     if on_edit_field:
         actions.append(
-            ft.IconButton(
+            StableIconButton(
                 icon=ft.Icons.CHECK_ROUNDED if edited_rec else ft.Icons.EDIT_OUTLINED,
                 icon_size=13,
                 width=24,
@@ -732,7 +743,7 @@ def _action_buttons(
     if profile.account_password and on_copy_pass:
         pass_done = "copy_pass" in fb
         buttons.append(
-            ft.IconButton(
+            StableIconButton(
                 icon=ft.Icons.CHECK_ROUNDED if pass_done else ft.Icons.KEY_OUTLINED,
                 width=30,
                 height=36,
@@ -748,7 +759,7 @@ def _action_buttons(
     if profile.two_fa_secret and on_copy_2fa:
         tfa_done = "copy_2fa" in fb
         buttons.append(
-            ft.IconButton(
+            StableIconButton(
                 icon=ft.Icons.CHECK_ROUNDED if tfa_done else ft.Icons.SECURITY_OUTLINED,
                 width=30,
                 height=36,
@@ -773,7 +784,7 @@ def _action_buttons(
             )
         )
         buttons.append(
-            ft.IconButton(
+            StableIconButton(
                 key=f"backup_codes_btn_{name}",
                 icon=ft.Icons.CHECK_ROUNDED if bkp_done else ft.Icons.PIN_OUTLINED,
                 width=30,
@@ -789,7 +800,7 @@ def _action_buttons(
         )
     if on_cookies:
         buttons.append(
-            ft.IconButton(
+            StableIconButton(
                 icon=ft.Icons.COOKIE_OUTLINED,
                 width=30,
                 height=36,
@@ -804,7 +815,7 @@ def _action_buttons(
     edit_done = "edit_profile" in fb
     return [
         *buttons,
-        ft.IconButton(
+        StableIconButton(
             icon=ft.Icons.CHECK_ROUNDED if edit_done else ft.Icons.EDIT_OUTLINED,
             icon_size=18,
             width=30,
@@ -814,7 +825,7 @@ def _action_buttons(
             style=_feedback_icon_style() if edit_done else ICON_STYLE,
             on_click=lambda _, n=name: on_edit(n),
         ),
-        ft.IconButton(
+        StableIconButton(
             icon=ft.Icons.DELETE_OUTLINE,
             icon_size=18,
             width=30,
