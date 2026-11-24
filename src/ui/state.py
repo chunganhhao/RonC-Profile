@@ -7,6 +7,12 @@ PAGE_SIZE_OPTIONS: tuple[int, ...] = (5, 10, 20, 50, 100, 200)
 ITEMS_PER_PAGE = 20
 
 
+def _display_log_line(message: str) -> str:
+    if "LAUNCH_FAILED:" in message:
+        message = localize_launch_error(message)
+    return f"> {message}"
+
+
 class AppState:
     def __init__(self) -> None:
         self.current_page: int = 1
@@ -68,10 +74,8 @@ class AppState:
             or "Error" in message
         )
         now = time.monotonic()
-        if "LAUNCH_FAILED:" in message:
-            message = localize_launch_error(message)
         with self._log_lock:
-            self._log_lines.append(f"> {message}")
+            self._log_lines.append(message)
             if force or now - self._last_log_ui_update >= 0.15:
                 self._last_log_ui_update = now
                 self._pending_log_flush = True
@@ -83,11 +87,11 @@ class AppState:
             if not self._pending_log_flush:
                 return None
             self._pending_log_flush = False
-            return "\n".join(self._log_lines[-50:])
+            return "\n".join(_display_log_line(message) for message in self._log_lines[-50:])
 
     def get_all_log_lines(self) -> list[str]:
         with self._log_lock:
-            return list(self._log_lines)
+            return [_display_log_line(message) for message in self._log_lines]
 
     def toggle_selection(self, name: str) -> None:
         with self._selection_lock:

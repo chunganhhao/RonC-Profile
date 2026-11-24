@@ -106,7 +106,7 @@ def test_store_busy_failure_uses_current_language_after_spawn(monkeypatch):
 
     monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["en"])
     script = (
-        "import errno, asyncio;"
+        "import asyncio;"
         "from chrome_engine import runner;"
         "from src.services.browser import lease;"
         "lease.store_lease = lambda *a, **kw: (_ for _ in ()).throw(lease.StoreLeaseTimeout());"
@@ -124,6 +124,8 @@ def test_store_busy_failure_uses_current_language_after_spawn(monkeypatch):
         process.terminate(proc, "qa")
     assert result.error == "Kho profile đang bận. Hãy thử lại sau giây lát."
     assert messages[-1] == f"[qa] LAUNCH_FAILED: {result.error}"
+    state = AppState()
+    assert state.add_log(messages[-1])
     launcher._launch_results["qa"] = result
     strings.set_language("en")
     assert launcher.wait_for_launch("qa", 0) == (
@@ -132,6 +134,10 @@ def test_store_busy_failure_uses_current_language_after_spawn(monkeypatch):
     )
     assert strings.localize_launch_error(messages[-1]) == (
         "[qa] LAUNCH_FAILED: The profile store is busy. Try again in a moment."
+    )
+    assert (
+        state.flush_log()
+        == "> [qa] LAUNCH_FAILED: The profile store is busy. Try again in a moment."
     )
 
 
