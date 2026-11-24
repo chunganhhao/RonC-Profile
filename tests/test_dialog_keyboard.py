@@ -1,5 +1,6 @@
 import asyncio
 import errno
+import shutil
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from weakref import ref
@@ -250,6 +251,23 @@ def test_core_staging_error_chain_can_contain_a_cycle():
     exc = RuntimeError()
     exc.__cause__ = exc
     assert cores._stage_error_key(exc) == "core_stage_failed"
+
+
+@pytest.mark.parametrize(
+    "code, key", [(errno.ENOSPC, "core_stage_no_space"), (errno.EIO, "core_stage_failed")]
+)
+def test_core_staging_classifies_copytree_errors(tmp_path, code, key):
+    source = tmp_path / "Chromium.app"
+    source.mkdir()
+    (source / "Chromium").touch()
+
+    def fail(*_args):
+        raise OSError(code, "copy failed")
+
+    with pytest.raises(shutil.Error) as caught:
+        shutil.copytree(source, tmp_path / "staging", copy_function=fail, symlinks=True)
+
+    assert cores._stage_error_key(caught.value) == key
 
 
 def test_dropdown_escape_seen_only_by_page_preserves_the_unsaved_profile(monkeypatch):
