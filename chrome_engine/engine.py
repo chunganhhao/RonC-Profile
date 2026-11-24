@@ -64,7 +64,7 @@ IGNORED_DEFAULT_ARGS = (
 HEADLESS_SCREEN = (1920, 1080)
 
 # Native realm capability only, not release/anonymity approval. Pin the complete
-# Run #12, Run #14, Run #15, Run #17, Run #19, and Run #21 payloads so existing profiles keep manifest parity.
+# Run #12, Run #14, Run #15, Run #17, Run #19, Run #21, and Run 45260495371 (029) payloads so existing profiles keep manifest parity.
 NATIVE_REALM_BUNDLES = frozenset(
     {
         "800c76d9926cf68e1f6ad5c4e9f226a3f5cdba1a096c66fba38f5ec0761069b7",
@@ -73,16 +73,23 @@ NATIVE_REALM_BUNDLES = frozenset(
         "539e83e54a45d6607ca048f4d1b64591ead7af60a8be991542dc9eff4d276f6d",
         "2d74250932a67ea51341005ef78db8434e16376c2bd4e267eb2d29e11ddae8a7",
         "f3b0f3218788c444c0ce9665cbc438cce904a763211542b6eac3f534bac34862",
+        "c3944e94fff0473c494c866b2295390c7521f114435b5a30cfd4a506f7fa469a",
     }
 )
 # Verified Chromium bundles containing 026 Apple Silicon coherence + WebGL extension gating.
 APPLE_SILICON_COHERENCE_BUNDLES: frozenset[str] = frozenset(
     {
         "f3b0f3218788c444c0ce9665cbc438cce904a763211542b6eac3f534bac34862",
+        "c3944e94fff0473c494c866b2295390c7521f114435b5a30cfd4a506f7fa469a",
     }
 )
 # Verified Chromium bundles containing 027 native locale, speech voices, and font-access filtering.
-LOCALE_SPEECH_FONT_027_BUNDLES: frozenset[str] = frozenset()
+# shortcut: Run 45260495371 (c3944e94...) pinned under IPv4-only proxy egress + local dual-stack STUN scope; verify routable WAN IPv6 proxy egress before dual-stack WAN promotion.
+LOCALE_SPEECH_FONT_027_BUNDLES: frozenset[str] = frozenset(
+    {
+        "c3944e94fff0473c494c866b2295390c7521f114435b5a30cfd4a506f7fa469a",
+    }
+)
 
 _FEATURES_BLOCK = re.compile(r"disabledFeatures = \[(.*?)\]\.filter\(Boolean\)", re.S)
 

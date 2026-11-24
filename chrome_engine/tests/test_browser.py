@@ -227,6 +227,48 @@ def test_wrong_proxy_credentials_never_fall_back_to_direct(chrome_exe, tmp_path)
     run(go())
 
 
+@pytest.mark.parametrize("proxy_cls", [HttpProxy, Socks5Proxy])
+def test_proxy_upstream_down_never_falls_back_to_direct(chrome_exe, tmp_path, proxy_cls):
+    async def go():
+        origin = await Origin("localhost").start()
+        upstream = await proxy_cls().start()
+        try:
+            eng = ChromeEngine(
+                tmp_path,
+                executable=chrome_exe,
+                persona=persona(),
+                proxy=upstream.url,
+                headless=True,
+                extra_args=THROUGH_PROXY,
+            )
+            context = await eng.start()
+            try:
+                page = context.pages[0]
+                resp_up = await page.goto(origin.url + "/?phase=up")
+                assert resp_up is not None and resp_up.status == 200
+                assert "origin-ok" in await page.content()
+                hits_up = len(origin.hits)
+                assert hits_up >= 1
+                await upstream.stop()
+                if upstream._server is not None:
+                    await upstream._server.wait_closed()
+                try:
+                    resp_down = await page.goto(origin.url + "/?phase=down", timeout=15_000)
+                except Exception:  # noqa: BLE001 - tunnel/navigation failure is fail-closed
+                    resp_down = None
+                if resp_down is not None:
+                    assert resp_down.status == 502
+                    assert "origin-ok" not in await page.content()
+                assert len(origin.hits) == hits_up
+            finally:
+                await eng.stop()
+        finally:
+            await upstream.stop()
+            await origin.stop()
+
+    run(go())
+
+
 def test_geoip_fills_timezone_locale_and_position(chrome_exe, tmp_path, monkeypatch):
     seen = []
 

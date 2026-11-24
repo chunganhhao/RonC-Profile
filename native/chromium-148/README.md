@@ -341,6 +341,15 @@ subtag whose `.lproj/locale.pak` directory is unbundled (for example `de-DE`,
   releases (`chrome_engine/release.py` / `chrome_engine/fetch.py`).
 - Only two `.cc` files are modified (no header or `BUILD.gn` edits), allowing fast
   incremental resume from post-`028` checkpoints such as Run `45217857712`.
+- **Pinned `029` build (`codex/native-core-ci@2835e96`, Run `45260495371`):**
+  `bundle_sha256` `c3944e94fff0473c494c866b2295390c7521f114435b5a30cfd4a506f7fa469a`
+  (`binary_sha256` `ccfcd3a2504e792900e15781f09416fd18532fa047dada4b10674e3ef0c21847`)
+  is pinned in `NATIVE_REALM_BUNDLES`, `APPLE_SILICON_COHERENCE_BUNDLES`, and
+  `LOCALE_SPEECH_FONT_027_BUNDLES`. **Scope boundary (IPv4-only):** verified for
+  IPv4 HTTP/SOCKS5 proxy egress (upstream up/down, remote DNS, GeoIP via
+  `ProxyBridge`, `0` direct fallback) and local dual-stack UDP STUN (`0/0`);
+  external WAN routable IPv6 proxy egress is deferred and must be verified before
+  relying on this bundle on dual-stack IPv6 networks.
 
 ## Attribution & Licenses
 
