@@ -134,7 +134,7 @@ def discard_lease(path) -> None:
 @contextmanager
 def waiting_lease(path, timeout: float):
     """profile_lease, retried until `timeout` seconds pass while another process holds it."""
-    with _retry_lease(lambda: profile_lease(path), timeout):
+    with _retry_lease(lambda _: profile_lease(path), timeout):
         yield
 
 
@@ -144,7 +144,7 @@ def _retry_lease(acquire, timeout: float, timeout_error: type[TimeoutError] | No
     with ExitStack() as stack:
         while True:
             try:
-                stack.enter_context(acquire())
+                stack.enter_context(acquire(deadline))
                 break
             # flock reports a held lock as BlockingIOError, msvcrt.locking as PermissionError.
             except (BlockingIOError, PermissionError) as exc:
@@ -154,18 +154,23 @@ def _retry_lease(acquire, timeout: float, timeout_error: type[TimeoutError] | No
                     and os.name != "nt"
                 ):
                     raise
-                if time.monotonic() >= deadline:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     if timeout_error is not None:
                         raise timeout_error() from exc
                     raise
-                time.sleep(0.01)
+                time.sleep(min(0.01, remaining))
         yield
 
 
 @contextmanager
-def _store_lease_once(path):
+def _store_lease_once(path, deadline: float | None = None):
     key = str(Path(path).resolve())
-    with _STORE_MUTEX:
+    if deadline is None:
+        _STORE_MUTEX.acquire()
+    elif not _STORE_MUTEX.acquire(timeout=max(0, deadline - time.monotonic())):
+        raise StoreLeaseTimeout()
+    try:
         if getattr(_STORE_OWNER, "key", None) == key:
             yield
         else:
@@ -176,12 +181,14 @@ def _store_lease_once(path):
                     yield
                 finally:
                     _STORE_OWNER.key = previous
+    finally:
+        _STORE_MUTEX.release()
 
 
 @contextmanager
 def store_lease(path, *, timeout: float = 0):
     with (
-        _retry_lease(lambda: _store_lease_once(path), timeout, StoreLeaseTimeout)
+        _retry_lease(lambda deadline: _store_lease_once(path, deadline), timeout, StoreLeaseTimeout)
         if timeout
         else _store_lease_once(path)
     ):

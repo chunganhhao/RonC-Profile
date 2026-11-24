@@ -523,7 +523,7 @@ def test_chrome_runner_reports_busy_profile_store_after_timeout(tmp_path, monkey
     path = tmp_path / "profiles.json"
     real_lease = lease.profile_lease
     attempts = []
-    times = iter((0.0, 1.0, 5.0))
+    times = iter((0.0, 0.0, 1.0, 1.0, 5.0))
 
     @contextmanager
     def busy_store(target):
@@ -557,6 +557,21 @@ def test_chrome_runner_reports_busy_profile_store_after_timeout(tmp_path, monkey
     assert strings.localize_launch_error("PROFILE_STORE_BUSY: Revised English wording.") == (
         "Kho profile đang bận. Hãy thử mở lại profile."
     )
+
+
+def test_timed_store_lease_expires_while_another_thread_owns_mutex(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from src.services.browser import lease
+
+    path = tmp_path / "profiles.json"
+
+    def try_timed_lease():
+        with pytest.raises(lease.StoreLeaseTimeout), lease.store_lease(path, timeout=0.02):
+            pytest.fail("a second thread acquired the store lease")
+
+    with ThreadPoolExecutor(max_workers=1) as pool, lease.store_lease(path):
+        pool.submit(try_timed_lease).result(timeout=2)
 
 
 def test_stale_rename_rejected_before_moving_data(apply_fixture):
