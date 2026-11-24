@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- App desktop đồng bộ số lịch ngâm tài khoản, không đoán DPR khi Chromium dùng cấu hình tự động và tách số proxy được thêm/cập nhật khi nhập; web xóa token bị từ chối mà không ảnh hưởng lần đăng nhập mới.
+
 - API giữ đủ các thay đổi khi nhiều yêu cầu PATCH sửa các trường khác nhau của cùng một profile; phím `/` không chuyển tiêu điểm ra sau hộp thoại web; số tiện ích trên thanh bên desktop cập nhật ngay sau khi cài hoặc xóa.
 
 - App desktop: bỏ màn hình chưa xác định khỏi dòng fingerprint và giữ nguyên vị trí các profile khi chọn hoặc bỏ chọn.

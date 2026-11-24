@@ -194,13 +194,19 @@ class ProxyPoolService:
             return entry
 
     def bulk_import(self, text: str, default_label: str = "") -> tuple[int, int]:
+        """Return the total accepted and invalid line counts."""
+        added, updated, invalid = self.bulk_import_counts(text, default_label)
+        return added + updated, invalid
+
+    def bulk_import_counts(self, text: str, default_label: str = "") -> tuple[int, int, int]:
         """Parse multi-line proxy list. Supports `proxy|label` or `proxy #label`.
 
-        Returns (added_or_updated_count, invalid_count).
+        Returns (added_count, updated_count, invalid_count).
         """
-        added = 0
+        accepted = 0
         invalid = 0
         with self._write_transaction():
+            initial_count = len(self._entries)
             for raw_line in (text or "").splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -214,12 +220,13 @@ class ProxyPoolService:
                             label = label_part.strip()
                         break
                 if self._upsert_locked(line, label) is not None:
-                    added += 1
+                    accepted += 1
                 else:
                     invalid += 1
-            if added > 0:
+            added = len(self._entries) - initial_count
+            if accepted:
                 self._save()
-        return added, invalid
+        return added, accepted - added, invalid
 
     def remove_proxy(self, proxy_id: str) -> bool:
         with self._write_transaction():

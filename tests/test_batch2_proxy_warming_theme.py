@@ -713,10 +713,46 @@ def test_proxy_pool_ui_import_handles_save_error(tmp_path, monkeypatch):
     import_btn.on_click(None)
 
     assert feedback.color == COLORS["success"]
-    assert feedback.value == get_string("proxy_pool_imported_msg", added=1, invalid=0)
+    assert feedback.value == get_string("proxy_pool_imported_msg", added=1, updated=0, invalid=0)
     assert bulk_input.value == ""
     assert [e.proxy for e in pool.list_entries()] == ["198.51.100.20:3128"]
     assert refreshed == [True]
+
+
+@pytest.mark.parametrize(
+    "lang,expected",
+    [
+        ("en", "[Proxy Pool] 4 added, 1 updated, 2 invalid lines skipped"),
+        ("vi", "[Kho Proxy] Thêm 4 proxy, cập nhật 1 proxy, bỏ qua 2 dòng lỗi"),
+    ],
+)
+def test_proxy_pool_ui_reports_added_and_updated(tmp_path, lang, expected):
+    from src.core.strings import current_language, set_language
+
+    pool = ProxyPoolService(file_path=str(tmp_path / "proxies.json"))
+    page = _DummyPage()
+    original = current_language()
+    set_language(lang)
+    try:
+        open_proxy_pool_dialog(page, pool, None, SimpleNamespace(list_profiles=list))
+        controls = list(_walk_controls(page.dialog))
+        bulk_input = next(c for c in controls if isinstance(c, ft.TextField) and c.multiline)
+        bulk_input.value = (
+            "192.0.2.10:8001|First\n192.0.2.11:8002|Second\n"
+            "198.51.100.12:8003|Third\n203.0.113.13:8004|Fourth\n"
+            "192.0.2.10:8001|Updated first\nnot a proxy\n192.0.2.15:99999"
+        )
+        import_button = next(
+            c
+            for c in controls
+            if getattr(c, "content", None) == get_string("proxy_pool_import_btn")
+        )
+        import_button.on_click(None)
+        assert len(pool.list_entries()) == 4
+        assert pool.list_entries()[0].label == "Updated first"
+        assert any(c.visible and c.value == expected for c in controls if isinstance(c, ft.Text))
+    finally:
+        set_language(original)
 
 
 def test_proxy_pool_long_text_has_bounded_space_and_masked_tooltips(tmp_path):
@@ -817,6 +853,59 @@ def test_proxy_pool_sidebar_tracks_import_and_delete(tmp_path, monkeypatch):
     delete_button.on_click(None)
     assert app._footer_proxy_text.value == get_string("footer_proxy_pool", count=2)
     assert badge.value == "2"
+
+
+@pytest.mark.parametrize("operation,initial,expected", [("save", 0, 1), ("delete", 1, 0)])
+def test_warming_sidebar_tracks_schedule_changes(
+    tmp_path, monkeypatch, operation, initial, expected
+):
+    from src.core import config
+    from src.ui.app import App
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    app = App()
+    app.pm.add_profile("Scout Chromium", "", "macos", engine="chrome")
+    if initial:
+        app.warming.add_task("Existing schedule", ["Scout Chromium"], schedule_time="23:53")
+    page = _DummyPage()
+    page.controls = []
+    page.add = page.controls.append
+    app.page = page
+    app._file_picker = None
+    app._build_ui()
+    sidebar = page.controls[0].controls[0]
+    nav = next(
+        c for c in _walk_controls(sidebar) if getattr(c, "on_click", None) == app._open_warming
+    )
+    badge = nav.content.controls[-1].content
+    assert badge.value == str(initial)
+
+    nav.on_click(None)
+    controls = list(_walk_controls(page.dialog))
+    if operation == "save":
+        schedule = next(
+            c
+            for c in controls
+            if isinstance(c, ft.TextField) and c.hint_text == get_string("warming_schedule_hint")
+        )
+        schedule.value = "23:53"
+        button = next(
+            c
+            for c in controls
+            if getattr(c, "content", None) == get_string("warming_save_schedule_btn")
+        )
+    else:
+        button = next(
+            c
+            for c in controls
+            if isinstance(c, ft.IconButton) and c.icon == ft.Icons.DELETE_OUTLINE
+        )
+    button.on_click(None)
+    assert app._footer_warming_text.value == get_string("footer_warming_tasks", count=expected)
+    assert badge.value == str(expected)
 
 
 @pytest.mark.parametrize("sheet_width", [514, 700, 1400])

@@ -259,7 +259,7 @@ def open_proxy_pool_dialog(
         if not raw:
             return
         try:
-            added, invalid = pool_service.bulk_import(
+            added, updated, invalid = pool_service.bulk_import_counts(
                 raw,
                 default_label=(tag_input.value or "").strip(),
             )
@@ -273,9 +273,9 @@ def open_proxy_pool_dialog(
                 page.update()
             return
         bulk_input.value = ""
-        msg = get_string("proxy_pool_imported_msg", added=added, invalid=invalid)
+        msg = get_string("proxy_pool_imported_msg", added=added, updated=updated, invalid=invalid)
         feedback_text.value = msg
-        feedback_text.color = COLORS["success"] if added > 0 else COLORS["warning"]
+        feedback_text.color = COLORS["success"] if added or updated else COLORS["warning"]
         feedback_text.visible = True
         log(msg)
         _rebuild_rows(notify=True)

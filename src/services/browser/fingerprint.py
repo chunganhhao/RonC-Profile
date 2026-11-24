@@ -836,9 +836,10 @@ def extract_chrome_details(
         gpu_desc = f"{device_model} · Seed #{seed}"
     w = persona_data.get("screen_width")
     h = persona_data.get("screen_height")
-    dpr_val = persona_data.get("device_scale_factor")
-    dpr = dpr_val if dpr_val is not None else (2 if target_os == "macos" else 1)
-    screen_label = f"{w}x{h} @ {dpr:g}x" if (w and h) else "C++ Seed / Viewport"
+    dpr = persona_data.get("device_scale_factor")
+    screen_label = f"{w}x{h}" if (w and h) else "C++ Seed / Viewport"
+    if w and h and dpr is not None:
+        screen_label += f" @ {dpr:g}x"
     color_depth = int(persona_data.get("color_depth") or 24)
     ua_os_token = {
         "macos": "Macintosh; Intel Mac OS X 10_15_7",

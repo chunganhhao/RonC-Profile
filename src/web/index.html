@@ -931,7 +931,14 @@ async function api(method, path, body, { raw = false, authToken = token } = {}) 
   if (authToken) headers.Authorization = "Bearer " + authToken;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const res = await fetch("/api/v1" + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-  if (res.status === 401) { if (reqEpoch === authEpoch) showLogin(); throw new ApiError(401, t("bad_token")); }
+  if (res.status === 401) {
+    if (reqEpoch === authEpoch && authToken === token) {
+      token = "";
+      if (store.get("foxprofile.token") === authToken) store.set("foxprofile.token", null);
+      showLogin();
+    }
+    throw new ApiError(401, t("bad_token"));
+  }
   if (!res.ok) {
     let msg = res.statusText;
     try { const j = await res.json();
@@ -1901,11 +1908,11 @@ function showLogin() {
   $("token").focus();
 }
 async function showApp(authRequired) {
-  authEpoch += 1;
+  const epoch = ++authEpoch;
   $("login").classList.add("hidden"); $("app").classList.remove("hidden");
   $("logout-btn").classList.toggle("hidden", !authRequired);
   await refresh();
-  if (!listTimer) listTimer = setInterval(() => { if (!viewing && !document.hidden) refresh(); }, 4000);
+  if (epoch === authEpoch && !listTimer) listTimer = setInterval(() => { if (!viewing && !document.hidden) refresh(); }, 4000);
 }
 let loginSeq = 0;
 $("login-form").onsubmit = async (e) => {
