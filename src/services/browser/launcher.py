@@ -17,7 +17,7 @@ from ...core.strings import (
 )
 from ...models.profile import Profile
 from .control import TOKEN_HEADER
-from .process import spawn_browser, terminate, wait_for_exit
+from .process import STOP_TIMEOUT_SECONDS, spawn_browser, terminate, wait_for_exit
 
 logger = get_logger("browser.launcher")
 
@@ -201,7 +201,7 @@ class BrowserLauncher:
                     self._busy.discard(profile.name)
         return True
 
-    def stop_profile(self, profile_name: str, timeout: int = 2) -> bool:
+    def stop_profile(self, profile_name: str, timeout: int = STOP_TIMEOUT_SECONDS) -> bool:
         with self._lock:
             if profile_name not in self._active_sessions:
                 return False

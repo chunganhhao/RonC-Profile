@@ -16,6 +16,9 @@ logger = get_logger("browser.process")
 
 _PROJECT_ROOT = str(pathlib.Path(__file__).parents[3])
 _LAUNCHER_PIPE = "RONC_RUNNER_LAUNCHER_PIPE"
+DOWNLOAD_DRAIN_SECONDS = 5.0
+# Allow full download drain plus cleanup/browser teardown before force-kill.
+STOP_TIMEOUT_SECONDS = int(DOWNLOAD_DRAIN_SECONDS) + 3
 
 
 def runner_command(profile: Profile) -> list[str]:
@@ -78,7 +81,7 @@ def watch_launcher(shutdown: asyncio.Event) -> bool:
     return True
 
 
-def terminate(proc: subprocess.Popen, name: str, timeout: int = 5) -> None:
+def terminate(proc: subprocess.Popen, name: str, timeout: int = STOP_TIMEOUT_SECONDS) -> None:
     """Gracefully terminate a browser process, force-kill on timeout."""
     if proc.poll() is not None:
         return

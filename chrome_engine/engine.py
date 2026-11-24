@@ -11,6 +11,7 @@ What the engine adds on top of a bare `launch_persistent_context`:
 - timezone / locale from the proxy's exit IP unless the persona pins them,
   with the locale kept per profile while the exit IP stays in one country;
 - Playwright's automation switches removed where a page can observe them;
+- native browser downloads restored to the profile/OS Downloads folder instead of Playwright's temporary artifacts directory;
 - a refusal to present an OS the host cannot fake consistently.
 """
 
@@ -271,6 +272,19 @@ def set_extension_pins(
     if current_raw == updated:
         return
     ext_cfg["pinned_extensions"] = updated
+    _write_preferences(path, prefs)
+
+
+def set_default_download_preferences(profile_dir: Path, *, recover_corrupt: bool = False) -> None:
+    """Seed download.prompt_for_download=False only when unset so native downloads save automatically."""
+    path = profile_dir / "Default" / "Preferences"
+    prefs = _load_preferences(path, recover_corrupt=recover_corrupt)
+    download = prefs.get("download")
+    if isinstance(download, dict) and isinstance(download.get("prompt_for_download"), bool):
+        return
+    if not isinstance(download, dict):
+        download = prefs["download"] = {}
+    download["prompt_for_download"] = False
     _write_preferences(path, prefs)
 
 
@@ -685,6 +699,7 @@ class ChromeEngine:
                 pinned_ids=self._pinned_extension_ids,
                 unpinned_ids=self._unpinned_extension_ids,
             )
+            set_default_download_preferences(self.profile_dir)
             self.profile_dir.mkdir(parents=True, exist_ok=True)
             if initialize_profile_search:
                 # Browser startup creates Web Data even if the native editor later fails.
@@ -701,6 +716,7 @@ class ChromeEngine:
                 chromium_sandbox=self.sandbox,
                 accept_downloads=True,
             )
+            await self._restore_default_downloads()
         # Neither a version/asset flag nor a sibling manifest can grant native capability.
         if self.stealth_js and not native_realms and hasattr(self.context, "add_init_script"):
             await self.context.add_init_script(build_anti_cdp_init_script(persona))
@@ -844,6 +860,28 @@ class ChromeEngine:
                 "storage partitioning and HTTPS upgrades stay off"
             )
         return ignored
+
+    async def _restore_default_downloads(self) -> None:
+        """Reset Playwright's temp-UUID download override back to native Chrome downloads."""
+        browser = getattr(self.context, "browser", None)
+        new_cdp = getattr(browser, "new_browser_cdp_session", None)
+        if not callable(new_cdp):
+            return
+        cdp = None
+        try:
+            cdp = await new_cdp()
+            await cdp.send(
+                "Browser.setDownloadBehavior",
+                {"behavior": "default", "eventsEnabled": False},
+            )
+        except Exception as exc:
+            self.warnings.append(
+                f"Could not restore browser default download behavior ({type(exc).__name__}: {exc})"
+            )
+        finally:
+            if cdp is not None:
+                with contextlib.suppress(Exception):
+                    await cdp.detach()
 
     def _spawn_locale_task(self, coro: Any) -> None:
         try:

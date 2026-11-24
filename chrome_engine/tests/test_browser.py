@@ -927,3 +927,144 @@ def test_webrtc_probe_ignores_end_of_generation_empty_candidate_sentinel(chrome_
         assert "webrtc_incomplete" not in codes
 
     run(go())
+
+
+def test_downloads_save_natively_with_real_filename_and_persist_after_close(chrome_exe, tmp_path):
+    """Downloads land in profile/OS Downloads with real names, stay after stop(), and keep cdpDetected=False."""
+    import http.server
+    import json
+    import sqlite3
+    import threading
+    import time
+    from pathlib import Path
+
+    payloads = {
+        "sample-video.mp4": b"mock-mp4-video-content-0123456789",
+        "popup-doc.pdf": b"%PDF-1.4\nmock-pdf-content",
+    }
+
+    class DownloadHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith("/dl/"):
+                fname = self.path.split("/dl/", 1)[1]
+                data = payloads.get(fname)
+                if data is None:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(
+                b'<a id="d1" href="/dl/sample-video.mp4">d1</a>'
+                b'<a id="d2" href="/dl/popup-doc.pdf" target="_blank">d2</a>'
+            )
+
+        def log_message(self, *_args):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), DownloadHandler)
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+
+    dl_dir = tmp_path / "downloads"
+    dl_dir.mkdir()
+    prof = tmp_path / "profile"
+    (prof / "Default").mkdir(parents=True)
+    # Deliberately omit prompt_for_download so ChromeEngine must seed it while keeping default_directory.
+    (prof / "Default" / "Preferences").write_text(
+        json.dumps({"download": {"default_directory": str(dl_dir)}}),
+        encoding="utf-8",
+    )
+
+    async def go():
+        eng = ChromeEngine(prof, executable=chrome_exe, persona=persona(), headless=True)
+        context = await eng.start()
+        try:
+            page1 = context.pages[0] if context.pages else await context.new_page()
+            await page1.goto(f"http://127.0.0.1:{port}/")
+            await page1.click("#d1")
+
+            page2 = await context.new_page()
+            await page2.goto(f"http://127.0.0.1:{port}/")
+            await page2.click("#d2")
+
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if all(
+                    (dl_dir / name).is_file() and (dl_dir / name).read_bytes() == body
+                    for name, body in payloads.items()
+                ):
+                    break
+                await asyncio.sleep(0.1)
+
+            for name, body in payloads.items():
+                target = dl_dir / name
+                assert target.is_file(), (
+                    f"Missing downloaded file {target}: {list(dl_dir.iterdir())}"
+                )
+                assert target.read_bytes() == body
+
+            fp = await probe.collect(context)
+            assert fp["cdpDetected"] is False
+        finally:
+            await eng.stop()
+
+        for name, body in payloads.items():
+            target = dl_dir / name
+            assert target.is_file(), f"Download deleted after stop(): {target}"
+            assert target.read_bytes() == body
+
+        conn = sqlite3.connect(str(prof / "Default" / "History"))
+        try:
+            rows = conn.execute(
+                "SELECT target_path, current_path, state, interrupt_reason FROM downloads"
+            ).fetchall()
+        finally:
+            conn.close()
+        assert len(rows) == 2
+        resolved_dl = str(dl_dir.resolve())
+        recorded_names = set()
+        for target_path, current_path, state, interrupt_reason in rows:
+            assert state == 1
+            assert interrupt_reason == 0
+            assert "playwright-artifacts-" not in target_path
+            assert target_path.startswith(resolved_dl)
+            assert current_path == target_path
+            recorded_names.add(Path(target_path).name)
+        assert recorded_names == set(payloads)
+
+    try:
+        run(go())
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_download_prompt_override_is_preserved(chrome_exe, tmp_path):
+    """Explicit download.prompt_for_download=True set by the user must survive startup."""
+    import json
+
+    prof = tmp_path / "profile"
+    (prof / "Default").mkdir(parents=True)
+    prefs_path = prof / "Default" / "Preferences"
+    prefs_path.write_text(
+        json.dumps({"download": {"prompt_for_download": True}}),
+        encoding="utf-8",
+    )
+
+    async def go():
+        eng = ChromeEngine(prof, executable=chrome_exe, persona=persona(), headless=True)
+        await eng.start()
+        await eng.stop()
+
+    run(go())
+    prefs = json.loads(prefs_path.read_text("utf-8"))
+    assert prefs["download"]["prompt_for_download"] is True

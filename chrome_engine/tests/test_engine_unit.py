@@ -1062,3 +1062,218 @@ def test_027_bundle_gate_requires_semantic_non_waived_evidence(tmp_path, monkeyp
         mutated = copy.deepcopy(base_cases)
         mutate(mutated)
         assert check_cases(mutated) is False
+
+
+def test_set_default_download_preferences(tmp_path, monkeypatch):
+    # 1. Fresh profile seeds prompt_for_download=False without setting default_directory.
+    fresh = tmp_path / "fresh"
+    engine_mod.set_default_download_preferences(fresh)
+    fresh_prefs = json.loads((fresh / "Default" / "Preferences").read_text("utf-8"))
+    assert fresh_prefs["download"] == {"prompt_for_download": False}
+    assert "default_directory" not in fresh_prefs["download"]
+
+    # 2. Existing custom default_directory is preserved while seeding prompt_for_download=False.
+    custom = tmp_path / "custom"
+    (custom / "Default").mkdir(parents=True)
+    (custom / "Default" / "Preferences").write_text(
+        json.dumps({"download": {"default_directory": "/tmp/custom-dl"}}),
+        encoding="utf-8",
+    )
+    engine_mod.set_default_download_preferences(custom)
+    custom_prefs = json.loads((custom / "Default" / "Preferences").read_text("utf-8"))
+    assert custom_prefs["download"] == {
+        "default_directory": "/tmp/custom-dl",
+        "prompt_for_download": False,
+    }
+
+    # 3. Explicit boolean prompt_for_download (True or False) is never overwritten or rewritten.
+    writes: list[Path] = []
+    orig_write = engine_mod._write_preferences
+
+    def spy_write(path: Path, prefs: dict) -> None:
+        writes.append(path)
+        orig_write(path, prefs)
+
+    monkeypatch.setattr(engine_mod, "_write_preferences", spy_write)
+    prompt_true = tmp_path / "prompt_true"
+    (prompt_true / "Default").mkdir(parents=True)
+    (prompt_true / "Default" / "Preferences").write_text(
+        json.dumps({"download": {"prompt_for_download": True}}),
+        encoding="utf-8",
+    )
+    engine_mod.set_default_download_preferences(prompt_true)
+    assert (
+        json.loads((prompt_true / "Default" / "Preferences").read_text("utf-8"))["download"][
+            "prompt_for_download"
+        ]
+        is True
+    )
+    engine_mod.set_default_download_preferences(fresh)
+    assert writes == []
+    monkeypatch.undo()
+
+    # 4. Non-dict download or non-bool prompt_for_download is normalized to False.
+    bad_type = tmp_path / "bad_type"
+    (bad_type / "Default").mkdir(parents=True)
+    (bad_type / "Default" / "Preferences").write_text(
+        json.dumps({"download": "not-a-dict"}), encoding="utf-8"
+    )
+    engine_mod.set_default_download_preferences(bad_type)
+    assert json.loads((bad_type / "Default" / "Preferences").read_text("utf-8"))["download"] == {
+        "prompt_for_download": False
+    }
+
+    bad_flag = tmp_path / "bad_flag"
+    (bad_flag / "Default").mkdir(parents=True)
+    (bad_flag / "Default" / "Preferences").write_text(
+        json.dumps({"download": {"prompt_for_download": 1}}), encoding="utf-8"
+    )
+    engine_mod.set_default_download_preferences(bad_flag)
+    assert json.loads((bad_flag / "Default" / "Preferences").read_text("utf-8"))["download"] == {
+        "prompt_for_download": False
+    }
+
+    # 5. Corrupt Preferences fails closed unless recover_corrupt=True.
+    corrupt = tmp_path / "corrupt"
+    corrupt_path = corrupt / "Default" / "Preferences"
+    corrupt_path.parent.mkdir(parents=True)
+    corrupt_path.write_text("{broken", encoding="utf-8")
+    with pytest.raises(EngineError, match="refusing to overwrite without explicit recovery"):
+        engine_mod.set_default_download_preferences(corrupt)
+    assert corrupt_path.read_text("utf-8") == "{broken"
+    assert not list(corrupt_path.parent.glob("*.bak"))
+
+    engine_mod.set_default_download_preferences(corrupt, recover_corrupt=True)
+    backups = list(corrupt_path.parent.glob("Preferences.corrupt.*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text("utf-8") == "{broken"
+    if os.name == "posix":
+        assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
+    assert json.loads(corrupt_path.read_text("utf-8"))["download"] == {"prompt_for_download": False}
+
+
+def test_restore_default_downloads_sends_cdp_and_detaches(tmp_path, monkeypatch):
+    import playwright.async_api as pw
+
+    from chrome_engine import persona as personas
+    from chrome_engine import search
+
+    monkeypatch.setattr(engine_mod, "host_os", lambda: "windows")
+    exe = tmp_path / "chrome.exe"
+    exe.write_bytes(b"")
+
+    async def no_search(_ctx):
+        pass
+
+    monkeypatch.setattr(search, "initialize_search", no_search)
+
+    def make_env(browser_factory):
+        class FakeContext:
+            pages = []
+            browser = browser_factory()
+
+            def on(self, *_args):
+                pass
+
+            async def close(self):
+                pass
+
+        class FakePW:
+            class chromium:
+                @staticmethod
+                async def launch_persistent_context(*_args, **_kwargs):
+                    return FakeContext()
+
+            async def stop(self):
+                pass
+
+        class FakeStarter:
+            async def start(self):
+                return FakePW()
+
+        monkeypatch.setattr(pw, "async_playwright", lambda: FakeStarter())
+
+    def setup_prof(name: str) -> Path:
+        prof = tmp_path / name
+        personas.save(prof, personas.generate("windows", seed=11))
+        return prof
+
+    # 1. Normal CDP reset sends behavior=default, eventsEnabled=False, and detaches.
+    events: list[tuple] = []
+
+    class NormalCDP:
+        async def send(self, method, params):
+            events.append(("send", method, params))
+
+        async def detach(self):
+            events.append(("detach",))
+
+    class NormalBrowser:
+        async def new_browser_cdp_session(self):
+            return NormalCDP()
+
+    make_env(NormalBrowser)
+    eng1 = ChromeEngine(
+        setup_prof("p1"), platform="windows", executable=exe, geoip=False, stealth_js=False
+    )
+    asyncio.run(eng1.start())
+    assert events == [
+        ("send", "Browser.setDownloadBehavior", {"behavior": "default", "eventsEnabled": False}),
+        ("detach",),
+    ]
+    assert eng1.warnings == []
+    asyncio.run(eng1.stop())
+
+    # 2. RuntimeError during CDP send warns cleanly and still detaches.
+    events.clear()
+
+    class FailingCDP:
+        async def send(self, _method, _params):
+            raise RuntimeError("cdp failed")
+
+        async def detach(self):
+            events.append(("detach",))
+
+    class FailingBrowser:
+        async def new_browser_cdp_session(self):
+            return FailingCDP()
+
+    make_env(FailingBrowser)
+    eng2 = ChromeEngine(
+        setup_prof("p2"), platform="windows", executable=exe, geoip=False, stealth_js=False
+    )
+    asyncio.run(eng2.start())
+    assert events == [("detach",)]
+    assert any("Could not restore browser default download behavior" in w for w in eng2.warnings)
+    asyncio.run(eng2.stop())
+
+    # 3. CancelledError propagates instead of being swallowed, while still detaching.
+    events.clear()
+
+    class CancelledCDP:
+        async def send(self, _method, _params):
+            raise asyncio.CancelledError()
+
+        async def detach(self):
+            events.append(("detach",))
+
+    class CancelledBrowser:
+        async def new_browser_cdp_session(self):
+            return CancelledCDP()
+
+    make_env(CancelledBrowser)
+    eng3 = ChromeEngine(
+        setup_prof("p3"), platform="windows", executable=exe, geoip=False, stealth_js=False
+    )
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(eng3.start())
+    assert events == [("detach",)]
+
+    # 4. context.browser is None -> skips cleanly with no warnings.
+    make_env(lambda: None)
+    eng4 = ChromeEngine(
+        setup_prof("p4"), platform="windows", executable=exe, geoip=False, stealth_js=False
+    )
+    asyncio.run(eng4.start())
+    assert eng4.warnings == []
+    asyncio.run(eng4.stop())

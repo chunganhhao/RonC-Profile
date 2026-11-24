@@ -1,10 +1,18 @@
 import asyncio
 import contextlib
+import ctypes
+import errno
+import functools
+import itertools
 import json
 import os
 import pathlib
+import re
 import signal
 import sys
+import tempfile
+import uuid
+from collections.abc import Callable
 from time import perf_counter
 
 sys.path.insert(
@@ -20,7 +28,7 @@ from src.core.strings import LAUNCH_STORE_BUSY_CODE
 from src.services.browser import control, session
 from src.services.browser import display as xvfb
 from src.services.browser.fingerprint import available_gpus, load_or_create
-from src.services.browser.process import watch_launcher
+from src.services.browser.process import DOWNLOAD_DRAIN_SECONDS, watch_launcher
 from src.services.browser.search import ensure_google_search
 from src.services.browser.timing import launch_stage, report_timing
 from src.services.proxy.geo_check import requests_proxy_url
@@ -32,6 +40,216 @@ _shutdown = asyncio.Event()
 # How often the open tabs are snapshotted. The browser is stopped by killing
 # this process, so whatever was saved last is what the next launch reopens.
 TAB_SNAPSHOT_SECONDS = 2.0
+
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+)
+
+
+def _default_downloads_dir() -> pathlib.Path:
+    return pathlib.Path.home() / "Downloads"
+
+
+def _truncate_download_name(name: str, max_len: int = 200) -> str:
+    if len(name) <= max_len:
+        return name
+    p = pathlib.Path(name)
+    suffix = p.suffix if 0 < len(p.suffix) <= 32 else ""
+    stem = name[: len(name) - len(suffix)] if suffix else name
+    max_stem = max(1, max_len - len(suffix))
+    truncated_stem = stem[:max_stem].rstrip(". ") or "download"
+    return f"{truncated_stem}{suffix}"
+
+
+def _safe_download_name(suggested: str | None) -> str:
+    """Sanitize a browser-suggested filename into a safe single-segment basename."""
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", "", suggested or "")
+    parts = [part for part in re.split(r"[/\\]+", cleaned) if part]
+    if not parts:
+        return "download"
+    candidate = re.sub(r"^[A-Za-z]:", "", parts[-1]).replace(":", "_")
+    name = candidate.strip().rstrip(". ")
+    if not name or name in {".", ".."} or not name.strip("."):
+        return "download"
+    name = _truncate_download_name(name)
+    base = name.split(".", 1)[0].rstrip(" ").upper()
+    if base in _WINDOWS_RESERVED_NAMES:
+        name = _truncate_download_name(f"_{name}")
+    return name
+
+
+_PUBLISH_UNSUPPORTED_ERRNOS = frozenset(
+    {
+        errno.EPERM,
+        errno.EOPNOTSUPP,
+        errno.ENOTSUP,
+        errno.EXDEV,
+        errno.EMLINK,
+        errno.EACCES,
+        errno.ENOSYS,
+        errno.EINVAL,
+    }
+)
+_DARWIN_RENAME_EXCL = 0x00000004
+_LINUX_AT_FDCWD = -100
+_LINUX_RENAME_NOREPLACE = 1
+
+
+@functools.lru_cache(maxsize=1)
+def _darwin_renamex_np() -> Callable[[bytes, bytes, int], int] | None:
+    try:
+        libc = ctypes.CDLL("libSystem.B.dylib", use_errno=True)
+    except OSError:
+        return None
+    fn = getattr(libc, "renamex_np", None)
+    if fn is None:
+        return None
+    fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+    fn.restype = ctypes.c_int
+    return fn
+
+
+@functools.lru_cache(maxsize=1)
+def _linux_renameat2() -> Callable[[int, bytes, int, bytes, int], int] | None:
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+    except OSError:
+        return None
+    fn = getattr(libc, "renameat2", None)
+    if fn is None:
+        return None
+    fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    fn.restype = ctypes.c_int
+    return fn
+
+
+def _rename_noreplace(src: pathlib.Path, dest: pathlib.Path) -> None:
+    """Atomically move `src` to `dest` without replacing an existing target."""
+    if os.name == "nt":
+        os.rename(src, dest)
+        return
+    if sys.platform == "darwin":
+        fn = _darwin_renamex_np()
+        if fn is None:
+            raise NotImplementedError("renamex_np is unavailable on this macOS runtime")
+        ctypes.set_errno(0)
+        rc = fn(os.fsencode(src), os.fsencode(dest), _DARWIN_RENAME_EXCL)
+    elif sys.platform.startswith("linux"):
+        fn = _linux_renameat2()
+        if fn is None:
+            raise NotImplementedError("renameat2 is unavailable on this Linux runtime")
+        ctypes.set_errno(0)
+        rc = fn(
+            _LINUX_AT_FDCWD,
+            os.fsencode(src),
+            _LINUX_AT_FDCWD,
+            os.fsencode(dest),
+            _LINUX_RENAME_NOREPLACE,
+        )
+    else:
+        raise NotImplementedError("atomic no-replace rename is not available on this platform")
+    if rc != 0:
+        err = ctypes.get_errno() or errno.EIO
+        raise OSError(err, os.strerror(err), str(src), None, str(dest))
+
+
+def _publish_download(
+    staged_path: pathlib.Path, downloads_dir: pathlib.Path, filename: str
+) -> tuple[pathlib.Path, bool]:
+    """Atomically publish `staged_path` into `downloads_dir` without overwriting.
+
+    Returns `(published_path, preserved_recovery_path)`.
+    """
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    root = downloads_dir.resolve()
+    p = pathlib.Path(filename)
+    stem, suffix = (
+        (filename, "") if filename.startswith(".") and not p.suffix else (p.stem, p.suffix)
+    )
+    candidates = itertools.chain(
+        (filename,),
+        (f"{stem} ({idx}){suffix}" for idx in range(1, 10_000)),
+        (f"{stem} ({uuid.uuid4().hex[:8]}){suffix}" for _ in range(1000)),
+    )
+    allow_hardlink = True
+    for candidate_name in candidates:
+        dest = downloads_dir / candidate_name
+        if dest.parent.resolve() != root or dest.name != candidate_name:
+            continue
+        if allow_hardlink:
+            try:
+                os.link(staged_path, dest)
+                return dest, False
+            except FileExistsError:
+                continue
+            except NotImplementedError:
+                allow_hardlink = False
+            except OSError as exc:
+                if exc.errno not in _PUBLISH_UNSUPPORTED_ERRNOS:
+                    raise
+                allow_hardlink = False
+        try:
+            _rename_noreplace(staged_path, dest)
+            return dest, False
+        except FileExistsError:
+            continue
+        except NotImplementedError:
+            return staged_path, True
+        except OSError as exc:
+            if exc.errno in _PUBLISH_UNSUPPORTED_ERRNOS:
+                return staged_path, True
+            raise
+    raise OSError(f"Could not publish download destination for {filename!r} in {downloads_dir}")
+
+
+async def _persist_download(
+    download: object,
+    downloads_dir: pathlib.Path | None = None,
+) -> pathlib.Path | None:
+    """Persist a Playwright Firefox/Camoufox download to `downloads_dir` before context exit."""
+    # shortcut: Playwright Python does not expose Firefox's internal-browser-default Juggler option, so persist Camoufox downloads via page.on("download") -> save_as.
+    name = _safe_download_name(getattr(download, "suggested_filename", None))
+    staged_path: pathlib.Path | None = None
+    staged_complete = False
+    published_dest: pathlib.Path | None = None
+    try:
+        failure_fn = getattr(download, "failure", None)
+        if callable(failure_fn) and await failure_fn():
+            return None
+        target_dir = downloads_dir if downloads_dir is not None else _default_downloads_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=target_dir, prefix=".ronc-download-", suffix=".part", delete=False
+        ) as tmp:
+            staged_path = pathlib.Path(tmp.name)
+        await download.save_as(str(staged_path))
+        staged_complete = True
+        published, preserved = _publish_download(staged_path, target_dir, name)
+        if preserved:
+            _safe_print(f"Download saved at recovery path ({name}): {published}")
+            return published
+        published_dest = published
+        return published
+    except Exception as exc:
+        if staged_complete and staged_path is not None and staged_path.exists():
+            _safe_print(
+                f"Download publish failed ({name}: {_compact_error(exc, 160)}); "
+                f"kept recovery file: {staged_path}"
+            )
+            return staged_path
+        _safe_print(f"Download save failed ({name}): {_compact_error(exc, 160)}")
+        return None
+    finally:
+        if staged_path is not None and (not staged_complete or published_dest is not None):
+            with contextlib.suppress(OSError):
+                staged_path.unlink(missing_ok=True)
 
 
 def _configure_stdio() -> None:
@@ -71,7 +289,12 @@ def _open_urls(context: object) -> list[str]:
     return [p.url for p in context.pages if not p.is_closed()]
 
 
-async def restore_tabs(context: object, urls: list[str]) -> int:
+async def restore_tabs(
+    context: object,
+    urls: list[str],
+    *,
+    on_page: Callable[[object], None] | None = None,
+) -> int:
     """Reopen saved tabs: the first in the existing blank tab, the rest in new ones.
 
     Waits only for navigation to commit, so a slow site does not hold up the
@@ -81,6 +304,9 @@ async def restore_tabs(context: object, urls: list[str]) -> int:
         return 0
     first = context.pages[0] if context.pages else await context.new_page()
     pages = [first] + [await context.new_page() for _ in urls[1:]]
+    if on_page is not None:
+        for page in pages:
+            on_page(page)
 
     async def go(page: object, url: str) -> bool:
         try:
@@ -335,76 +561,119 @@ async def run_browser(
             # Time entry only: the browser context stays open for the session.
             with launch_stage("browser_start"):
                 context = await stack.enter_async_context(AsyncCamoufox(**launch_config))
-            with launch_stage("restore_tabs"):
-                if not context.pages:
-                    await context.new_page()
-                restored = 0
-                saved_urls = []
-                if RESTORE_TABS:
-                    saved_urls = session.load(profile_dir)
-                    restored = await restore_tabs(context, saved_urls)
-                    if restored:
-                        _safe_print(f"Restored {restored} tab(s)")
-                start_url = normalize_start_url(extra.get("start_url"))
-                if not restored and start_url:
-                    if saved_urls:
-                        failed_pages = list(context.pages)
-                        await context.new_page()
-                        for page in failed_pages:
-                            await page.close()
-                    await restore_tabs(context, session.restorable([start_url]))
 
             close_event = asyncio.Event()
+            download_tasks: set[asyncio.Task[object]] = set()
+            download_watched: list[object] = []
+            control_runner = None
+            snapshot_task = None
+            pending: set[asyncio.Task[object]] = set()
+            try:
 
-            def on_page_close(_page: object) -> None:
-                # The session ends when the last tab closes, not the first one.
-                if not [p for p in context.pages if not p.is_closed()]:
-                    close_event.set()
+                def on_download(download: object) -> None:
+                    task = asyncio.create_task(_persist_download(download))
+                    download_tasks.add(task)
+                    task.add_done_callback(download_tasks.discard)
 
-            def watch(page: object) -> None:
-                page.on("close", on_page_close)
+                def _forget_watched(page: object) -> None:
+                    for idx, existing in enumerate(download_watched):
+                        if existing is page:
+                            del download_watched[idx]
+                            break
 
-            for page in context.pages:
-                watch(page)
-            context.on("page", watch)
-            context.on("close", lambda: close_event.set())
+                def watch_downloads(page: object) -> None:
+                    if (callable(getattr(page, "is_closed", None)) and page.is_closed()) or any(
+                        existing is page for existing in download_watched
+                    ):
+                        return
+                    download_watched.append(page)
+                    page.on("download", on_download)
+                    page.on("close", lambda *_a, _p=page: _forget_watched(_p))
 
-            with launch_stage("control_ready"):
-                control_runner, port, token = await control.serve(context)
-            # CONTROL must precede BROWSER_STARTED: the launcher reports the
-            # profile ready on BROWSER_STARTED and callers may control it at once.
-            _safe_print(f"CONTROL:{port}:{token}")
-            report_timing("launch_ready_total", launch_started)
-            _safe_print("BROWSER_STARTED")
+                for page in context.pages:
+                    watch_downloads(page)
+                context.on("page", watch_downloads)
 
-            snapshot_task = (
-                asyncio.create_task(snapshot_tabs(context, profile_dir, close_event))
-                if RESTORE_TABS
-                else None
-            )
-            close_task = asyncio.create_task(close_event.wait())
-            shutdown_task = asyncio.create_task(_shutdown.wait())
+                with launch_stage("restore_tabs"):
+                    if not context.pages:
+                        watch_downloads(await context.new_page())
+                    restored = 0
+                    saved_urls = []
+                    if RESTORE_TABS:
+                        saved_urls = session.load(profile_dir)
+                        restored = await restore_tabs(context, saved_urls, on_page=watch_downloads)
+                        if restored:
+                            _safe_print(f"Restored {restored} tab(s)")
+                    start_url = normalize_start_url(extra.get("start_url"))
+                    if not restored and start_url:
+                        if saved_urls:
+                            failed_pages = list(context.pages)
+                            watch_downloads(await context.new_page())
+                            for page in failed_pages:
+                                await page.close()
+                        await restore_tabs(
+                            context, session.restorable([start_url]), on_page=watch_downloads
+                        )
 
-            done, pending = await asyncio.wait(
-                [close_task, shutdown_task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+                def on_page_close(_page: object) -> None:
+                    # The session ends when the last tab closes, not the first one.
+                    if not [p for p in context.pages if not p.is_closed()]:
+                        close_event.set()
 
-            if close_task in done:
-                _safe_print("BROWSER_CLOSED")
-            elif RESTORE_TABS:
-                # Graceful shutdown (signal): the tabs are still open, save them.
-                session.save(profile_dir, _open_urls(context))
-            if snapshot_task:
-                snapshot_task.cancel()
-            await control_runner.cleanup()
+                for page in context.pages:
+                    page.on("close", on_page_close)
+                context.on("page", lambda page: page.on("close", on_page_close))
+                context.on("close", lambda: close_event.set())
 
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+                with launch_stage("control_ready"):
+                    control_runner, port, token = await control.serve(context)
+                # CONTROL must precede BROWSER_STARTED: the launcher reports the
+                # profile ready on BROWSER_STARTED and callers may control it at once.
+                _safe_print(f"CONTROL:{port}:{token}")
+                report_timing("launch_ready_total", launch_started)
+                _safe_print("BROWSER_STARTED")
 
-            return 0
+                snapshot_task = (
+                    asyncio.create_task(snapshot_tabs(context, profile_dir, close_event))
+                    if RESTORE_TABS
+                    else None
+                )
+                close_task = asyncio.create_task(close_event.wait())
+                shutdown_task = asyncio.create_task(_shutdown.wait())
+
+                done, pending = await asyncio.wait(
+                    [close_task, shutdown_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if close_task not in done and RESTORE_TABS:
+                    # Graceful shutdown (signal): the tabs are still open, save them.
+                    session.save(profile_dir, _open_urls(context))
+                if download_tasks:
+                    _, still_pending = await asyncio.wait(
+                        list(download_tasks), timeout=DOWNLOAD_DRAIN_SECONDS
+                    )
+                    for task in still_pending:
+                        task.cancel()
+                    if still_pending:
+                        await asyncio.gather(*still_pending, return_exceptions=True)
+                if close_task in done:
+                    _safe_print("BROWSER_CLOSED")
+
+                return 0
+            finally:
+                for task in list(download_tasks):
+                    task.cancel()
+                if download_tasks:
+                    await asyncio.gather(*list(download_tasks), return_exceptions=True)
+                if snapshot_task:
+                    snapshot_task.cancel()
+                if control_runner is not None:
+                    await control_runner.cleanup()
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
 
     except asyncio.CancelledError:
         _safe_print("LAUNCH_CANCELLED")
