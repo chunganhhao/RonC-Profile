@@ -201,6 +201,7 @@ Everything is optional. To override defaults, copy `.env.example` to `.env`.
 | --- | --- | --- |
 | `FOXPROFILE_LANG` | `en` | UI language: `en` or `vi` |
 | `FOXPROFILE_PROFILES_FILE` | `profiles.json` | Profile list file |
+| `FOXPROFILE_PREFERENCES_FILE` | `preferences.json` | Desktop app choices kept across restarts: language, theme, accent, rows per page, window size and position |
 | `FOXPROFILE_DATA_DIR` | `camoufox_data` | Data directory, one subdirectory per profile |
 | `FOXPROFILE_LOG_DIR` | `logs` | Log directory |
 | `FOXPROFILE_LOG_LEVEL` | `INFO` | Log level |

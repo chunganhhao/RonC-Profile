@@ -1236,7 +1236,7 @@ def test_full_app_e2e_lifecycle_theme_and_dialogs(tmp_path, monkeypatch):
     class FullDummyPage:
         def __init__(self):
             self.title = ""
-            self.window = SimpleNamespace(width=0, height=0, min_width=0, min_height=0, icon="")
+            self.window = ft.Window()
             self.padding = 0
             self.spacing = 0
             self.fonts = {}

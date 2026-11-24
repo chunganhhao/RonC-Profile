@@ -39,8 +39,8 @@ def test_macos_startup_without_appkit_or_work_area_probe(monkeypatch, probe_outp
 @pytest.mark.parametrize(
     ("work_area", "expected"),
     [
-        ((0, 30, 1600, 1088), (80, 134, 1440, 880, 900, 600)),
-        ((72, 30, 800, 530), (72, 30, 800, 530, 800, 530)),
+        ([[0, 30, 1600, 1088]], (80, 134, 1440, 880, 900, 600)),
+        ([[72, 30, 800, 530]], (72, 30, 800, 530, 800, 530)),
     ],
     ids=["center", "clamp"],
 )

@@ -110,41 +110,76 @@ def apply_page_theme(page: ft.Page) -> None:
     page.theme = build_page_theme()
 
 
-_MACOS_WORK_AREA_SCRIPT = """
+_MACOS_WORK_AREAS_SCRIPT = """
 ObjC.import("AppKit");
 function run() {
     const screens = $.NSScreen.screens;
     if (!screens.count) return "[]";
-    const screen = screens.objectAtIndex(0);
-    const area = screen.visibleFrame;
-    // AppKit's origin is bottom-left; Flet positions windows from the top-left.
-    const top = screen.frame.size.height - (area.origin.y + area.size.height);
-    return JSON.stringify([area.origin.x, top, area.size.width, area.size.height]);
+    // AppKit's origin is the main screen's bottom-left; Flet positions windows from its top-left.
+    const mainHeight = screens.objectAtIndex(0).frame.size.height;
+    const areas = [];
+    for (let i = 0; i < screens.count; i++) {
+        const area = screens.objectAtIndex(i).visibleFrame;
+        const top = mainHeight - (area.origin.y + area.size.height);
+        areas.push([area.origin.x, top, area.size.width, area.size.height]);
+    }
+    return JSON.stringify(areas);
 }
 """
 
+# How much of a restored window's title bar must land on a screen for it to be grabbable.
+_TITLE_BAR_HEIGHT = 28
+_MIN_VISIBLE_TITLE_BAR = 100
 
-def _macos_work_area() -> tuple[float, float, float, float] | None:
+Bounds = tuple[float, float, float, float]
+
+
+def _macos_work_areas() -> list[Bounds]:
+    """Visible frame (left, top, width, height) of every screen, the main screen first."""
     try:
         output = subprocess.check_output(
-            ["/usr/bin/osascript", "-l", "JavaScript", "-e", _MACOS_WORK_AREA_SCRIPT],
+            ["/usr/bin/osascript", "-l", "JavaScript", "-e", _MACOS_WORK_AREAS_SCRIPT],
             timeout=2,
             stderr=subprocess.DEVNULL,
         )
-        left, top, width, height = map(float, json.loads(output))
+        areas = [tuple(map(float, area)) for area in json.loads(output)]
     except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return []
+    return [area for area in areas if len(area) == 4 and area[2] > 0 and area[3] > 0]
+
+
+def _visible_bounds(bounds: Bounds, areas: list[Bounds]) -> Bounds | None:
+    """Saved bounds, shrunk to fit the screen holding most of their title bar, if any does."""
+    left, top, width, height = bounds
+
+    def title_bar_on(area: Bounds) -> float:
+        area_left, area_top, area_width, area_height = area
+        if not area_top <= top <= area_top + area_height - _TITLE_BAR_HEIGHT:
+            return 0
+        return min(left + width, area_left + area_width) - max(left, area_left)
+
+    area = max(areas, key=title_bar_on, default=None)
+    if area is None or title_bar_on(area) < _MIN_VISIBLE_TITLE_BAR:
         return None
-    return (left, top, width, height) if width > 0 and height > 0 else None
+    area_left, area_top, area_width, area_height = area
+    if width > area_width:
+        left, width = area_left, area_width
+    if height > area_height:
+        top, height = area_top, area_height
+    return left, top, width, height
 
 
-def configure_page(page: ft.Page) -> None:
+def configure_page(page: ft.Page, saved_bounds: Bounds | None = None) -> None:
     page.title = get_string("window_title")
     width, height = 1440, 880
-    if sys.platform == "darwin" and (area := _macos_work_area()) is not None:
-        left, top, available_width, available_height = area
+    areas = _macos_work_areas() if sys.platform == "darwin" else []
+    if areas:
+        left, top, available_width, available_height = areas[0]
         width, height = min(width, available_width), min(height, available_height)
         page.window.left = left + (available_width - width) / 2
         page.window.top = top + (available_height - height) / 2
+    if saved_bounds is not None and (restored := _visible_bounds(saved_bounds, areas)):
+        page.window.left, page.window.top, width, height = restored
     page.window.width, page.window.height = width, height
     page.window.min_width, page.window.min_height = min(900, width), min(600, height)
 
