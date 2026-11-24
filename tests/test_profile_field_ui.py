@@ -159,17 +159,22 @@ def test_order_rejects_invalid_values(value):
 
 @pytest.mark.parametrize(
     ("row_index", "display_order", "draft", "expected"),
-    [(1, None, "1", [1]), (5, 5, "05", []), (3, 5, "05", [5]), (1, None, "2", [2])],
+    [
+        (1, None, "1", []),
+        (5, 5, "5", []),
+        (3, 5, "5", []),
+        (3, 5, "05", []),
+        (1, None, "2", [2]),
+    ],
     ids=[
-        "assign-fallback-id",
+        "fallback-id-unchanged",
         "explicit-id-in-position",
         "explicit-id-out-of-position",
+        "normalized-id-unchanged",
         "id-changed",
     ],
 )
-def test_order_submission_only_skips_an_explicit_id_at_its_current_position(
-    row_index, display_order, draft, expected
-):
+def test_order_submission_only_saves_a_changed_id(row_index, display_order, draft, expected):
     page, saved = Page(), []
     profile = Profile("Bravo", engine="chrome", display_order=display_order)
     open_profile_field_dialog(page, profile, "display_order", saved.append, row_index=row_index)

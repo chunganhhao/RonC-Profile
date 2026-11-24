@@ -273,11 +273,14 @@ def test_app_refresh_caches_rows_and_debounces_search(tmp_path, monkeypatch):
     edit_id = get_string("edit_field", field=get_string("col_id"))
     pencil = next(c for c in _walk(first_rows[2]) if getattr(c, "tooltip", None) == edit_id)
     pencil.on_click(None)
+    field = next(c for c in _walk(app.page.dialog.content) if isinstance(c, ft.TextField))
+    assert field.value == "3"
     app.page.dialog.actions[-1].on_click(None)
 
+    assert not app.page.dialog.open
     saved_profiles = pm_mod.ProfileManager().list_profiles()
     assert [profile.name for profile in saved_profiles] == ["prof-0", "prof-1", "prof-2"]
-    assert saved_profiles[-1].display_order == 3
+    assert all(profile.display_order is None for profile in saved_profiles)
 
 
 def test_proxy_pool_reload_caches_unchanged_bytes(tmp_path, monkeypatch):
