@@ -149,18 +149,24 @@ def _macos_work_areas() -> list[Bounds]:
 
 
 def _visible_bounds(bounds: Bounds, areas: list[Bounds]) -> Bounds | None:
-    """Saved bounds, shrunk to fit, if their title bar is still on one of the screens."""
+    """Saved bounds, shrunk to fit the screen holding most of their title bar, if any does."""
     left, top, width, height = bounds
-    for area_left, area_top, area_width, area_height in areas:
-        overlap = min(left + width, area_left + area_width) - max(left, area_left)
-        on_screen = area_top <= top <= area_top + area_height - _TITLE_BAR_HEIGHT
-        if overlap >= _MIN_VISIBLE_TITLE_BAR and on_screen:
-            if width > area_width:
-                left, width = area_left, area_width
-            if height > area_height:
-                top, height = area_top, area_height
-            return left, top, width, height
-    return None
+
+    def title_bar_on(area: Bounds) -> float:
+        area_left, area_top, area_width, area_height = area
+        if not area_top <= top <= area_top + area_height - _TITLE_BAR_HEIGHT:
+            return 0
+        return min(left + width, area_left + area_width) - max(left, area_left)
+
+    area = max(areas, key=title_bar_on, default=None)
+    if area is None or title_bar_on(area) < _MIN_VISIBLE_TITLE_BAR:
+        return None
+    area_left, area_top, area_width, area_height = area
+    if width > area_width:
+        left, width = area_left, area_width
+    if height > area_height:
+        top, height = area_top, area_height
+    return left, top, width, height
 
 
 def configure_page(page: ft.Page, saved_bounds: Bounds | None = None) -> None:

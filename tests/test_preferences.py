@@ -118,6 +118,12 @@ def test_saved_window_is_restored_on_a_visible_screen(monkeypatch, bounds, expec
     assert _configure(monkeypatch, bounds) == expected
 
 
+def test_straddling_window_follows_the_screen_holding_most_of_its_title_bar(monkeypatch):
+    areas = [[0, 30, 1600, 1088], [1600, 0, 2560, 1410]]
+    bounds = (1400, 100, 2400, 1200)
+    assert _configure(monkeypatch, bounds, areas=areas) == bounds
+
+
 @pytest.mark.parametrize(
     "bounds",
     [(4000, 80, 1200, 760), (100, 2000, 1200, 760), (-1150, 80, 1200, 760), (100, 10, 1200, 760)],
