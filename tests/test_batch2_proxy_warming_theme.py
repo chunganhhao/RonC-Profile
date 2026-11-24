@@ -720,10 +720,36 @@ def test_proxy_pool_ui_import_handles_save_error(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "initial_label,labels,counts",
+    [
+        (None, ("A", "B"), (1, 0, 1)),
+        ("A", ("A",), (0, 0, 1)),
+        ("A", ("B", "C"), (0, 1, 1)),
+        ("A", ("B", "A"), (0, 0, 1)),
+    ],
+)
+def test_proxy_pool_bulk_counts_distinct_net_changes(tmp_path, initial_label, labels, counts):
+    endpoint = "192.0.2.10:8001"
+    text = "\n".join([*(f"{endpoint}|{label}" for label in labels), "not a proxy"])
+    for name in ("desktop", "api"):
+        path = str(tmp_path / f"{name}.json")
+        pool = ProxyPoolService(file_path=path)
+        if initial_label is not None:
+            pool.add_proxy(endpoint, label=initial_label)
+        if name == "desktop":
+            assert pool.bulk_import_counts(text) == counts
+        else:
+            assert pool.bulk_import(text) == (len(labels), 1)
+        assert [entry.label for entry in ProxyPoolService(file_path=path).list_entries()] == [
+            labels[-1]
+        ]
+
+
+@pytest.mark.parametrize(
     "lang,expected",
     [
-        ("en", "[Proxy Pool] 4 added, 1 updated, 2 invalid lines skipped"),
-        ("vi", "[Kho Proxy] Thêm 4 proxy, cập nhật 1 proxy, bỏ qua 2 dòng lỗi"),
+        ("en", "[Proxy Pool] 4 added, 0 updated, 2 invalid lines skipped"),
+        ("vi", "[Kho Proxy] Thêm 4 proxy, cập nhật 0 proxy, bỏ qua 2 dòng lỗi"),
     ],
 )
 def test_proxy_pool_ui_reports_added_and_updated(tmp_path, lang, expected):
