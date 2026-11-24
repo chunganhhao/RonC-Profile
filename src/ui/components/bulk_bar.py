@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import replace
 
 import flet as ft
 
@@ -9,6 +10,19 @@ from ..theme.colors import COLORS, FONT_SEMIBOLD
 from ..theme.styles import ACCENT_STYLE, OUTLINE_STYLE
 
 BulkCallbacks = dict[str, Callable[[], None]]
+BULK_LABELS_MIN_WIDTH = 600
+
+
+def layout_bulk_bar(bulk_bar: ft.Row, width: float | None) -> None:
+    compact = width is not None and width < BULK_LABELS_MIN_WIDTH
+    button_width = 48 if compact else None
+    for control in bulk_bar.controls:
+        if isinstance(control, (ft.Button, ft.OutlinedButton)) and control.width != button_width:
+            icon, style = control.data
+            control.width = button_width
+            control.icon = None if compact else icon
+            control.content = ft.Icon(icon, size=18) if compact else control.tooltip
+            control.style = replace(style, padding=0) if compact else style
 
 
 def rebuild_bulk_bar(
@@ -28,7 +42,15 @@ def rebuild_bulk_bar(
 
     def btn(label: str, icon: str, key: str, style: ft.ButtonStyle) -> ft.Control:
         cls = ft.Button if style is ACCENT_STYLE else ft.OutlinedButton
-        return cls(label, icon=icon, height=32, style=style, on_click=lambda _: cbs[key]())
+        return cls(
+            label,
+            icon=icon,
+            tooltip=label,
+            height=32,
+            style=style,
+            data=(icon, style),
+            on_click=lambda _: cbs[key](),
+        )
 
     bulk_bar.controls = [
         ft.Column(

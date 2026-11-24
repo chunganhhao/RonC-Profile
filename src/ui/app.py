@@ -21,6 +21,7 @@ from .components import (
     build_ui_refs,
     rebuild_bulk_bar,
 )
+from .components.bulk_bar import layout_bulk_bar
 from .components.profile_card import build_header_row
 from .components.sidebar import build_filter_buttons
 from .dialogs.appearance import open_appearance_dialog
@@ -351,6 +352,8 @@ class App:
 
     def _remember_table_width(self, width: float) -> None:
         self._profile_table_width = width
+        if self.refs is not None:
+            layout_bulk_bar(self.refs.bulk_bar, width)
 
     def _on_search(self, query: str) -> None:
         self.state.search_query = query.strip().lower()
@@ -645,6 +648,7 @@ class App:
                 "clear": self.h.on_clear_selection,
             },
         )
+        layout_bulk_bar(r.bulk_bar, self._profile_table_width)
         names = [p.name for p in page_profiles]
         all_sel = bool(names) and all(self.state.is_selected(n) for n in names)
         any_sel = any(self.state.is_selected(n) for n in names)
