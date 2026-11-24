@@ -38,6 +38,7 @@ CAMOUFOX_RELEASE = Release(
 PAIRED_STACK = {"camoufox": "0.5.9", "playwright": "1.62.0"}
 EXTERNAL_STORAGE_ROOT = Path("/Volumes/KINGSTON/RonC-Profile-Storage")
 _STAGE_LOCK = threading.Lock()
+_LAUNCH_BINDING_WAIT_SECONDS = 5.0
 
 
 class CoreError(ValueError):
@@ -468,7 +469,7 @@ def launch_binding(name: str, engine: str, requested: str = "") -> str:
     from .lease import store_lease
 
     path = Path(PROFILES_FILE)
-    with store_lease(path):
+    with store_lease(path, timeout=_LAUNCH_BINDING_WAIT_SECONDS):
         if not path.exists():
             return requested  # Standalone runner with no managed profile store.
         data = json.loads(path.read_text(encoding="utf-8"))

@@ -15,19 +15,19 @@ def launch_or_stop(
     log: Callable[[str], None],
 ) -> None:
     profile = pm.profiles.get(name)
-    if not profile:
+    if not profile or state.is_stopping(name):
         return
 
     if bl.is_running(name):
+        state.set_stopping(name, True)
         log(get_string("stopping_profile", name=name))
-        state.set_loading(name, True)
         state.schedule_refresh()
 
         def do_stop() -> None:
             try:
                 bl.stop_profile(name)
             finally:
-                state.set_loading(name, False)
+                state.set_stopping(name, False)
                 state.schedule_refresh()
 
         threading.Thread(target=do_stop, daemon=True).start()

@@ -1,12 +1,25 @@
 import asyncio
+import errno
 
 import flet as ft
 
+from ...core.logging import get_logger
 from ...core.strings import get_string
 from ...services.browser import cores
 from ..theme.colors import COLORS, FONT_BOLD
 from .modal import show_modal_dialog
 from .responsive import bind_responsive_dialog
+
+logger = get_logger("ui.cores")
+
+
+def _stage_error_key(exc: BaseException) -> str:
+    cause: BaseException | None = exc
+    while cause is not None:
+        if isinstance(cause, OSError) and cause.errno == errno.ENOSPC:
+            return "core_stage_no_space"
+        cause = cause.__cause__
+    return "core_stage_failed"
 
 
 def _fmt_bytes(num: int | None) -> str:
@@ -149,7 +162,11 @@ def open_core_manager(page: ft.Page, pm=None, bl=None) -> None:
             render()
             result.value = message
         except Exception as exc:
-            result.value = str(exc)
+            if mode == "stage":
+                logger.exception("Core staging failed")
+                result.value = get_string(_stage_error_key(exc))
+            else:
+                result.value = str(exc)
         finally:
             working = False
             for control in (refresh, choices, confirm, profiles, backup, apply_ack, prune_ack):

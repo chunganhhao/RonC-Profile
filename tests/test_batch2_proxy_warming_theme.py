@@ -817,6 +817,57 @@ def test_proxy_pool_sidebar_tracks_import_and_delete(tmp_path, monkeypatch):
     assert badge.value == "2"
 
 
+def test_desktop_bulk_stop_shows_stopping_until_stop_finishes(tmp_path, monkeypatch):
+    from src.core import config, strings
+    from src.ui.actions import browser
+    from src.ui.app import App
+
+    monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["vi"])
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    app = App()
+    name = "Chromium demo"
+    assert app.pm.add_profile(name, "", "macos", engine="chrome")
+
+    pending = []
+    monkeypatch.setattr(
+        browser,
+        "threading",
+        SimpleNamespace(
+            Thread=lambda target, daemon: SimpleNamespace(start=lambda: pending.append(target))
+        ),
+    )
+    running = {name}
+    monkeypatch.setattr(app.bl, "is_running", running.__contains__)
+    monkeypatch.setattr(app.bl, "running_profile_names", lambda: running.copy())
+    monkeypatch.setattr(app.bl, "running_count", lambda: len(running))
+    monkeypatch.setattr(app.bl, "stop_profile", running.remove)
+    page = _DummyPage()
+    page.controls = []
+    page.add = page.controls.append
+    app.page = page
+    app._file_picker = None
+    app._build_ui()
+    app.state.select_all([name])
+
+    def labels():
+        app._refresh_profiles()
+        return {
+            c.value for c in _walk_controls(app.refs.profile_list_area) if isinstance(c, ft.Text)
+        }
+
+    assert "Đang chạy" in labels()
+    app.h.on_bulk_stop()
+    stopping_labels = labels()
+    assert "Đang dừng" in stopping_labels
+    assert "Đang mở" not in stopping_labels
+    (stop,) = pending
+    stop()
+    assert "Đã dừng" in labels()
+
+
 def test_pionlogin_ui_components_and_dialogs(tmp_path, monkeypatch):
     from src.core import config as app_config
 

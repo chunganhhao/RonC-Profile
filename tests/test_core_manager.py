@@ -1,6 +1,8 @@
+import errno
 import hashlib
 import json
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -447,6 +449,29 @@ def test_stale_normal_save_cannot_erase_applied_core(apply_fixture):
     assert manager.ProfileManager().profiles["qa"].core_version == release.version
     assert old_reference.core_version is None
     assert cores.launch_binding("qa", "chrome") == release.version
+
+
+def test_launch_binding_retries_busy_profile_store(tmp_path, monkeypatch):
+    from src.core import config
+    from src.services.browser import lease
+
+    path = tmp_path / "profiles.json"
+    path.write_text('{"qa": {"engine": "chrome", "core_version": "approved"}}', encoding="utf-8")
+    monkeypatch.setattr(config, "PROFILES_FILE", str(path))
+    real_lease = lease.profile_lease
+    attempts = []
+
+    @contextmanager
+    def initially_busy(target):
+        attempts.append(target)
+        if len(attempts) == 1:
+            raise BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable")
+        with real_lease(target):
+            yield
+
+    monkeypatch.setattr(lease, "profile_lease", initially_busy)
+    assert cores.launch_binding("qa", "chrome") == "approved"
+    assert attempts == [path, path]
 
 
 def test_stale_rename_rejected_before_moving_data(apply_fixture):

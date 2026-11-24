@@ -145,13 +145,13 @@ def waiting_lease(path, timeout: float):
 
 
 @contextmanager
-def store_lease(path):
+def store_lease(path, *, timeout: float = 0):
     key = str(Path(path).resolve())
     with _STORE_MUTEX:
         if getattr(_STORE_OWNER, "key", None) == key:
             yield
         else:
-            with profile_lease(path):
+            with waiting_lease(path, timeout) if timeout else profile_lease(path):
                 previous = getattr(_STORE_OWNER, "key", None)
                 _STORE_OWNER.key = key
                 try:

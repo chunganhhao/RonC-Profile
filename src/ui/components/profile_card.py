@@ -198,9 +198,11 @@ def build_profile_card(
     on_backup_codes: Callable[[str, int], None] | None = None,
     active_feedback: set[str] | None = None,
     layout_width: float | None = None,
+    is_stopping: bool = False,
 ) -> ft.Container:
     """One profile as a table row."""
     fb = active_feedback or set()
+    is_busy = is_loading or is_stopping
     if is_running:
         bg = COLORS["card_hover"]
     elif is_selected:
@@ -238,7 +240,7 @@ def build_profile_card(
                             }[field]
                         ),
                     ),
-                    disabled=field == "name" and (is_running or is_loading),
+                    disabled=field == "name" and (is_running or is_busy),
                     on_click=lambda _, f=field: on_edit_field(profile.name, f, row_index),
                 ),
             ],
@@ -302,7 +304,14 @@ def build_profile_card(
                     ),
                 ),
                 _cell("notes", editable("notes", _notes_and_device(profile, device))),
-                _cell("status", ft.Row(controls=[_stamp(is_loading, is_running, since, failed)])),
+                _cell(
+                    "status",
+                    ft.Row(
+                        controls=[
+                            _stamp(is_loading, is_running, since, failed, is_stopping=is_stopping)
+                        ]
+                    ),
+                ),
                 _cell(
                     "actions",
                     ft.Row(
@@ -310,7 +319,7 @@ def build_profile_card(
                         alignment=ft.MainAxisAlignment.END,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            build_launch_button(profile.name, is_loading, is_running, on_launch),
+                            build_launch_button(profile.name, is_busy, is_running, on_launch),
                             ft.Container(width=4),
                             *_action_buttons(
                                 profile,
@@ -631,8 +640,10 @@ def _stack(*lines: ft.Control) -> ft.Column:
     return ft.Column(spacing=1, alignment=ft.MainAxisAlignment.CENTER, controls=list(lines))
 
 
-def _stamp(is_loading: bool, is_running: bool, since: str, failed: str = "") -> ft.Control:
-    if failed and not is_loading and not is_running:
+def _stamp(
+    is_loading: bool, is_running: bool, since: str, failed: str = "", *, is_stopping: bool = False
+) -> ft.Control:
+    if failed and not (is_loading or is_stopping or is_running):
         return ft.Container(
             padding=ft.Padding.symmetric(horizontal=8, vertical=3),
             border_radius=5,
@@ -645,13 +656,13 @@ def _stamp(is_loading: bool, is_running: bool, since: str, failed: str = "") -> 
                 color=COLORS["error"],
             ),
         )
-    if is_loading:
+    if is_loading or is_stopping:
         return ft.Container(
             padding=ft.Padding.symmetric(horizontal=8, vertical=3),
             border_radius=5,
             border=ft.Border.all(1, COLORS["text_sub"]),
             content=ft.Text(
-                get_string("stamp_starting"),
+                get_string("stamp_stopping" if is_stopping else "stamp_starting"),
                 size=11,
                 font_family=FONT_DATA,
                 color=COLORS["text_sub"],

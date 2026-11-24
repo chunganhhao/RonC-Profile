@@ -1,4 +1,5 @@
 import asyncio
+import errno
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from weakref import ref
@@ -6,6 +7,8 @@ from weakref import ref
 import flet as ft
 import pytest
 
+from chrome_engine.fetch import FetchError
+from src.core import strings
 from src.models.profile import Profile
 from src.ui.actions.profile import edit_profile
 from src.ui.app import App
@@ -193,6 +196,50 @@ def _walk(control):
         yield from _walk(child)
     if isinstance(getattr(control, "content", None), ft.Control):
         yield from _walk(control.content)
+
+
+def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog):
+    monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["vi"])
+    monkeypatch.setattr(
+        cores.cores,
+        "inventory",
+        lambda: dict(
+            activation_allowed=True,
+            cores=[],
+            candidates=[
+                dict(
+                    engine="chrome", version="test", staged=False, can_stage=True, blocked_reason=""
+                )
+            ],
+        ),
+    )
+
+    def fail(*_args, **_kwargs):
+        try:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        except OSError as exc:
+            raise FetchError("Download failed: https://example.test/core.dmg") from exc
+
+    monkeypatch.setattr(cores.cores, "stage", fail)
+    page = DialogPage()
+    cores.open_core_manager(page)
+    (dialog,) = page.dialogs
+    controls = list(_walk(dialog.content))
+    choices = next(c for c in controls if isinstance(c, ft.Dropdown))
+    confirm = next(c for c in controls if isinstance(c, ft.Checkbox))
+    download = next(c for c in controls if type(c) is ft.Button)
+    choices.value = "chrome:test"
+    confirm.value = True
+    confirm.on_change(None)
+    assert not download.disabled
+
+    asyncio.run(download.on_click(None))
+
+    messages = [c.value for c in controls if isinstance(c, ft.Text)]
+    assert "Không đủ dung lượng ở nơi lưu core. Hãy giải phóng dung lượng rồi thử lại." in messages
+    assert not any("Download failed" in message or "Errno" in message for message in messages)
+    assert "No space left on device" in caplog.text
+    assert download.disabled and not confirm.value
 
 
 def test_dropdown_escape_seen_only_by_page_preserves_the_unsaved_profile(monkeypatch):

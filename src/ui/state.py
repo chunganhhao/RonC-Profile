@@ -16,6 +16,7 @@ class AppState:
 
         self._log_lines: list[str] = []
         self._loading_profiles: set[str] = set()
+        self._stopping_profiles: set[str] = set()
         # Profiles whose last launch exited before it was ready.
         self.failed: dict[str, str] = {}
         self._loading_lock = threading.Lock()
@@ -38,6 +39,17 @@ class AppState:
                 self._loading_profiles.add(name)
             else:
                 self._loading_profiles.discard(name)
+
+    def is_stopping(self, name: str) -> bool:
+        with self._loading_lock:
+            return name in self._stopping_profiles
+
+    def set_stopping(self, name: str, value: bool) -> None:
+        with self._loading_lock:
+            if value:
+                self._stopping_profiles.add(name)
+            else:
+                self._stopping_profiles.discard(name)
 
     def schedule_refresh(self) -> None:
         self._refresh_requested.set()

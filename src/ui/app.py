@@ -628,6 +628,7 @@ class App:
                     row_index=start_offset + idx + 1,
                     active_feedback=self._active_feedback_for(p.name, now),
                     layout_width=self._profile_table_width,
+                    is_stopping=self.state.is_stopping(p.name),
                 )
                 for idx, p in enumerate(page_profiles)
             ]
