@@ -145,7 +145,7 @@ def open_profile_field_dialog(
                 report(get_string("order_invalid"))
                 return
             draft = int(str(draft))
-            if draft == value:
+            if draft == profile.display_order == row_index:
                 cancel()
                 return
         elif field in ("name", "proxy"):

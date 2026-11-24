@@ -158,16 +158,23 @@ def test_order_rejects_invalid_values(value):
 
 
 @pytest.mark.parametrize(
-    ("display_order", "draft", "expected"),
-    [(None, "1", []), (5, "05", []), (None, "2", [2])],
-    ids=["filtered-fallback-unchanged", "explicit-id-unchanged", "id-changed"],
+    ("row_index", "display_order", "draft", "expected"),
+    [(1, None, "1", [1]), (5, 5, "05", []), (3, 5, "05", [5]), (1, None, "2", [2])],
+    ids=[
+        "assign-fallback-id",
+        "explicit-id-in-position",
+        "explicit-id-out-of-position",
+        "id-changed",
+    ],
 )
-def test_order_submission_only_saves_a_changed_id(display_order, draft, expected):
+def test_order_submission_only_skips_an_explicit_id_at_its_current_position(
+    row_index, display_order, draft, expected
+):
     page, saved = Page(), []
     profile = Profile("Bravo", engine="chrome", display_order=display_order)
-    open_profile_field_dialog(page, profile, "display_order", saved.append, row_index=1)
+    open_profile_field_dialog(page, profile, "display_order", saved.append, row_index=row_index)
     field = next(c for c in walk(page.dialog.content) if c.__class__.__name__ == "TextField")
-    assert field.value == str(display_order or 1)
+    assert field.value == str(display_order or row_index)
     field.value = draft
     page.dialog.actions[-1].on_click(None)
     assert page.closed and saved == expected

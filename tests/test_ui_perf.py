@@ -12,6 +12,7 @@ from flet.messaging.protocol import configure_encode_object_for_msgpack
 
 from src.core import config as app_config
 from src.core.container import Container
+from src.core.strings import get_string
 from src.models.profile import Profile
 from src.services.profile import manager as pm_mod
 from src.services.proxy import pool as pool_mod
@@ -183,6 +184,13 @@ def test_app_refresh_caches_rows_and_debounces_search(tmp_path, monkeypatch):
         def update(self):
             pass
 
+        def show_dialog(self, dialog):
+            self.dialog = dialog
+            dialog.open = True
+
+        def pop_dialog(self):
+            self.dialog.open = False
+
     app.page = DummyPage()
     app._file_picker = None
     app._build_ui()
@@ -261,6 +269,15 @@ def test_app_refresh_caches_rows_and_debounces_search(tmp_path, monkeypatch):
     app.state.search_query = "prof-2"
     App._refresh_profiles(app)
     assert app.refs.profile_list_area.controls == [first_rows[2]]
+
+    edit_id = get_string("edit_field", field=get_string("col_id"))
+    pencil = next(c for c in _walk(first_rows[2]) if getattr(c, "tooltip", None) == edit_id)
+    pencil.on_click(None)
+    app.page.dialog.actions[-1].on_click(None)
+
+    saved_profiles = pm_mod.ProfileManager().list_profiles()
+    assert [profile.name for profile in saved_profiles] == ["prof-0", "prof-1", "prof-2"]
+    assert saved_profiles[-1].display_order == 3
 
 
 def test_proxy_pool_reload_caches_unchanged_bytes(tmp_path, monkeypatch):
