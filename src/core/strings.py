@@ -2,6 +2,8 @@ import re
 
 from .config import LANGUAGE
 
+LAUNCH_STORE_BUSY_CODE = "PROFILE_STORE_BUSY"
+
 STRINGS: dict[str, dict[str, str]] = {
     "en": {
         "import_profile_exists": "Profile '{name}' already exists",
@@ -810,7 +812,7 @@ def current_language() -> str:
 
 def localize_launch_error(message: str) -> str:
     prefix, separator, reason = message.rpartition("LAUNCH_FAILED: ")
-    if reason == STRINGS["en"]["launch_store_busy"]:
+    if reason.startswith(f"{LAUNCH_STORE_BUSY_CODE}: "):
         return prefix + separator + get_string("launch_store_busy")
     match = re.search(
         r"A (windows|macos|linux) persona cannot be presented consistently on a (windows|macos|linux) host",

@@ -466,7 +466,7 @@ def backup_and_apply(
 def launch_binding(name: str, engine: str, requested: str = "") -> str:
     """Resolve persisted binding under store lease; refuse corrupt/stale launch data."""
     from ...core.config import PROFILES_FILE
-    from ...core.strings import STRINGS
+    from ...core.strings import LAUNCH_STORE_BUSY_CODE, STRINGS
     from .lease import StoreLeaseTimeout, store_lease
 
     path = Path(PROFILES_FILE)
@@ -474,7 +474,9 @@ def launch_binding(name: str, engine: str, requested: str = "") -> str:
         try:
             stack.enter_context(store_lease(path, timeout=_LAUNCH_BINDING_WAIT_SECONDS))
         except StoreLeaseTimeout as exc:
-            raise CoreError(STRINGS["en"]["launch_store_busy"]) from exc
+            raise CoreError(
+                f"{LAUNCH_STORE_BUSY_CODE}: {STRINGS['en']['launch_store_busy']}"
+            ) from exc
         if not path.exists():
             return requested  # Standalone runner with no managed profile store.
         data = json.loads(path.read_text(encoding="utf-8"))

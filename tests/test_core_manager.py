@@ -548,9 +548,14 @@ def test_chrome_runner_reports_busy_profile_store_after_timeout(tmp_path, monkey
     (message,) = [
         line for line in capsys.readouterr().out.splitlines() if line.startswith("LAUNCH_FAILED:")
     ]
-    assert message == "LAUNCH_FAILED: The profile store is busy. Try opening the profile again."
+    assert message == (
+        "LAUNCH_FAILED: PROFILE_STORE_BUSY: The profile store is busy. Try opening the profile again."
+    )
     assert strings.localize_launch_error(f"[qa] {message}") == (
         "[qa] LAUNCH_FAILED: Kho profile đang bận. Hãy thử mở lại profile."
+    )
+    assert strings.localize_launch_error("PROFILE_STORE_BUSY: Revised English wording.") == (
+        "Kho profile đang bận. Hãy thử mở lại profile."
     )
 
 
