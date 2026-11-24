@@ -868,6 +868,39 @@ def test_desktop_bulk_stop_shows_stopping_until_stop_finishes(tmp_path, monkeypa
     assert "Đã dừng" in labels()
 
 
+@pytest.mark.parametrize("from_worker", [False, True])
+def test_stop_clears_stopping_after_exception(monkeypatch, from_worker):
+    from src.ui.actions import browser
+    from src.ui.state import AppState
+
+    name = "Chromium demo"
+    state = AppState()
+    pm = SimpleNamespace(profiles={name: object()})
+
+    def fail(*_):
+        raise RuntimeError("stop failed")
+
+    bl = SimpleNamespace(is_running=lambda _: True, stop_profile=fail)
+    pending = []
+
+    def start(target):
+        if not from_worker:
+            fail()
+        pending.append(target)
+
+    monkeypatch.setattr(
+        browser,
+        "threading",
+        SimpleNamespace(Thread=lambda target, daemon: SimpleNamespace(start=lambda: start(target))),
+    )
+    with pytest.raises(RuntimeError, match="stop failed"):
+        browser.launch_or_stop(name, pm, bl, state, lambda _: None)
+        (stop,) = pending
+        stop()
+    assert not state.is_stopping(name)
+    assert state.consume_refresh()
+
+
 def test_pionlogin_ui_components_and_dialogs(tmp_path, monkeypatch):
     from src.core import config as app_config
 

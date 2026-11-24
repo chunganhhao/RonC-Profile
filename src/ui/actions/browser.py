@@ -20,8 +20,6 @@ def launch_or_stop(
 
     if bl.is_running(name):
         state.set_stopping(name, True)
-        log(get_string("stopping_profile", name=name))
-        state.schedule_refresh()
 
         def do_stop() -> None:
             try:
@@ -30,7 +28,14 @@ def launch_or_stop(
                 state.set_stopping(name, False)
                 state.schedule_refresh()
 
-        threading.Thread(target=do_stop, daemon=True).start()
+        try:
+            log(get_string("stopping_profile", name=name))
+            state.schedule_refresh()
+            threading.Thread(target=do_stop, daemon=True).start()
+        except Exception:
+            state.set_stopping(name, False)
+            state.schedule_refresh()
+            raise
         return
 
     state.set_loading(name, True)
