@@ -264,10 +264,6 @@ def update_profile(
     _require_backup_codes(body.backup_codes)
 
     new_name = supplied.get("name", name)
-    new_proxy = supplied.get("proxy", profile.proxy)
-    new_os = supplied.get("os_type", profile.os_type)
-    new_timezone = supplied.get("timezone", profile.timezone)
-    new_locale = supplied.get("locale", profile.locale)
 
     if "name" in supplied:
         valid, msg = validate_profile_name(new_name)
@@ -285,10 +281,10 @@ def update_profile(
             detail="A profile's engine cannot be changed; create a new profile instead",
         )
     if "os_type" in supplied:
-        _require_os(new_os)
+        _require_os(supplied["os_type"])
     _require_geo(supplied.get("timezone"), supplied.get("locale"))
 
-    if "proxy" in supplied and new_proxy:
+    if new_proxy := supplied.get("proxy"):
         valid, msg = validate_proxy_format(new_proxy)
         if not valid:
             raise HTTPException(status_code=400, detail=msg)
@@ -311,9 +307,14 @@ def update_profile(
             status_code=400, detail=f"canvas_mode must be one of: {', '.join(CANVAS_MODES)}"
         )
 
-    extra_update = {
+    changes = {
         k: supplied[k]
         for k in (
+            "name",
+            "proxy",
+            "os_type",
+            "timezone",
+            "locale",
             "group",
             "tags",
             "extension_ids",
@@ -332,18 +333,10 @@ def update_profile(
         if k in supplied
     }
     for field, empty in {"notes": "", "account_uid": "", "start_url": "", "tags": []}.items():
-        if field in extra_update and extra_update[field] is None:
-            extra_update[field] = empty
+        if field in changes and changes[field] is None:
+            changes[field] = empty
     try:
-        updated = pm.update_profile(
-            name,
-            new_name,
-            new_proxy or "",
-            new_os,
-            new_timezone or None,
-            new_locale or None,
-            **extra_update,
-        )
+        updated = pm.patch_profile(name, **changes)
     except WarmingTargetSaveError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ValueError as exc:

@@ -1648,6 +1648,7 @@ def test_open_warming_dialog_follows_background_status(tmp_path, monkeypatch):
     app._feedback_until = {}
     app._toast_banner = ft.Container(visible=False)
     app._refresh_profiles = lambda: None
+    app._refresh_profiles_and_extensions = lambda: None
     app._log = lambda _: None
     page = _DummyPage()
     app.page = page

@@ -140,6 +140,7 @@ class App:
         )
         proxy_count = len(self.proxy_pool.list_entries())
         self._sidebar_proxy_badge = ft.Text(str(proxy_count))
+        self._sidebar_extension_badge = ft.Text(str(len(self.extensions.list_entries())))
         self._footer_proxy_text = ft.Text(
             get_string("footer_proxy_pool", count=proxy_count),
             size=11.5,
@@ -287,8 +288,12 @@ class App:
             self.pm,
             file_picker=getattr(self, "_file_picker", None),
             log_fn=self._log,
-            refresh_fn=self._refresh_profiles,
+            refresh_fn=self._refresh_profiles_and_extensions,
         )
+
+    def _refresh_profiles_and_extensions(self) -> None:
+        self._sidebar_extension_badge.value = str(len(self.extensions.list_entries()))
+        self._refresh_profiles()
 
     def _build_root_layout(self, r: UIRefs) -> ft.Row:
         sidebar = build_sidebar(
@@ -312,7 +317,7 @@ class App:
             on_open_warming=self._open_warming,
             on_toggle_theme=self._set_theme,
             proxy_pool_count=self._sidebar_proxy_badge,
-            extension_count=len(self.extensions.list_entries()),
+            extension_count=self._sidebar_extension_badge,
             warming_task_count=len(self.warming.list_tasks()),
         )
         content = build_content_area(
@@ -327,7 +332,7 @@ class App:
             on_open_proxy_pool=self._open_proxy_pool,
             on_import=self.h.on_import,
             on_export=lambda _: self.h.on_export_open(),
-            on_refresh=lambda _: self._refresh_profiles(),
+            on_refresh=lambda _: self._refresh_profiles_and_extensions(),
             on_toggle_theme=self._set_theme,
             on_open_appearance=self._open_appearance,
             toast_banner=self._toast_banner,
@@ -854,9 +859,11 @@ class App:
                 if changed:
                     self.state._last_running_snapshot = running_now
                 refresh_requested = self.state.consume_refresh()
-                if refresh_requested and self._refresh_warming_dialog is not None:
-                    self._refresh_warming_dialog()
-                if changed or expired_keys or toast_expired or refresh_requested:
+                if refresh_requested:
+                    if self._refresh_warming_dialog is not None:
+                        self._refresh_warming_dialog()
+                    self._refresh_profiles_and_extensions()
+                elif changed or expired_keys or toast_expired:
                     self._refresh_profiles()
             except Exception as e:
                 logger.error("Error in UI reconcile loop: %s", e)

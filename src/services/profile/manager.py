@@ -340,6 +340,23 @@ class ProfileManager:
             logger.info("Created profile: %s", name)
             return True
 
+    def patch_profile(self, original_name: str, **changes: Any) -> bool:
+        """Resolve omitted base fields and commit under the same locks."""
+        with self._lock, store_lease(PROFILES_FILE):
+            self._check_store_current()
+            current = self.profiles.get(original_name)
+            if current is None:
+                return False
+            return self.update_profile(
+                original_name,
+                changes.pop("name", original_name),
+                changes.pop("proxy", current.proxy) or "",
+                changes.pop("os_type", current.os_type),
+                changes.pop("timezone", current.timezone),
+                changes.pop("locale", current.locale),
+                **changes,
+            )
+
     def update_profile(
         self,
         original_name: str,

@@ -201,7 +201,7 @@ def build_sidebar(
     on_open_warming: Callable | None = None,
     on_toggle_theme: Callable[[str], None] | None = None,
     proxy_pool_count: int | ft.Text = 0,
-    extension_count: int = 0,
+    extension_count: int | ft.Text = 0,
     warming_task_count: int = 0,
     on_open_cores: Callable | None = None,
 ) -> ft.Container:
@@ -255,7 +255,9 @@ def build_sidebar(
                     _nav_action_row(
                         ft.Icons.EXTENSION_OUTLINED,
                         get_string("nav_extensions"),
-                        str(extension_count),
+                        str(extension_count)
+                        if isinstance(extension_count, int)
+                        else extension_count,
                         on_open_extensions,
                     )
                 ]

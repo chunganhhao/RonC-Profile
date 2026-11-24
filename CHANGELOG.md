@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- API giữ đủ các thay đổi khi nhiều yêu cầu PATCH sửa các trường khác nhau của cùng một profile; phím `/` không chuyển tiêu điểm ra sau hộp thoại web; số tiện ích trên thanh bên desktop cập nhật ngay sau khi cài hoặc xóa.
+
 - App desktop: bỏ màn hình chưa xác định khỏi dòng fingerprint và giữ nguyên vị trí các profile khi chọn hoặc bỏ chọn.
 
 - App desktop: giảm tải CPU khi đổi kích thước cửa sổ ở trang có nhiều profile.

@@ -2172,7 +2172,11 @@ document.addEventListener("keydown", (e) => {
     const topBg = $("modal-root").lastElementChild;
     if (topBg) topBg.dismiss();
   }
-  if (e.key === "/" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA" && !$("app").classList.contains("hidden")) { e.preventDefault(); $("search").focus(); }
+  if (e.key === "/" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA" && !$("app").classList.contains("hidden")) {
+    e.preventDefault();
+    if ($("modal-root").lastElementChild || !$("viewer").classList.contains("hidden")) return;
+    $("search").focus();
+  }
 });
 
 (async () => {

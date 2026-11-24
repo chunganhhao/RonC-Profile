@@ -1,5 +1,8 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.dependencies import get_browser_launcher, get_event_bus, get_profile_manager
+from src.api.routes import profiles
 from src.api.routes.profiles import router
 from src.services.profile import manager
 
@@ -92,3 +96,50 @@ def test_patch_null_matches_new_profile_defaults_and_clears_legacy_group(profile
     assert response.json()["tags"] == []
     assert response.json()["group"] is None
     assert manager.ProfileManager().profiles["legacy"].effective_tags == []
+
+
+def test_concurrent_partial_patches_keep_both_fields(profile_api, monkeypatch):
+    pm, client = profile_api
+    assert pm.add_profile("chromium", "", "macos", engine="chrome")
+    path = "/api/v1/profiles/chromium"
+    same_read = Barrier(2, timeout=5)
+    require_profile = profiles.require_profile
+
+    def read_before_either_write(name, pm):
+        snapshot = replace(require_profile(name, pm))
+        same_read.wait()
+        return snapshot
+
+    with monkeypatch.context() as patch, ThreadPoolExecutor(max_workers=2) as pool:
+        patch.setattr(profiles, "require_profile", read_before_either_write)
+        timezone_patch = pool.submit(client.patch, path, json={"timezone": "Asia/Ho_Chi_Minh"})
+        locale_patch = pool.submit(client.patch, path, json={"locale": "vi-VN"})
+        for pending in (timezone_patch, locale_patch):
+            response = pending.result()
+            assert response.status_code == 200, response.text
+
+    response = client.get(path).json()
+    persisted = manager.ProfileManager().get_profile("chromium")
+    assert persisted is not None
+    assert response["timezone"] == persisted.timezone == "Asia/Ho_Chi_Minh"
+    assert response["locale"] == persisted.locale == "vi-VN"
+
+
+def test_patch_null_clears_proxy_and_geo_without_replacing_other_fields(profile_api):
+    pm, client = profile_api
+    name = "chromium"
+    assert pm.add_profile(
+        name, "192.0.2.10:8080", "macos", "Asia/Ho_Chi_Minh", "vi-VN", engine="chrome"
+    )
+    path = f"/api/v1/profiles/{name}"
+    for field, retained in (
+        ("proxy", {"timezone": "Asia/Ho_Chi_Minh", "locale": "vi-VN"}),
+        ("timezone", {"proxy": None, "locale": "vi-VN"}),
+        ("locale", {"proxy": None, "timezone": None}),
+    ):
+        response = client.patch(path, json={field: None})
+        assert response.status_code == 200, response.text
+        profile = response.json()
+        assert profile[field] is None
+        assert profile["engine"] == "chrome" and profile["os_type"] == "macos"
+        assert {key: profile[key] for key in retained} == retained
