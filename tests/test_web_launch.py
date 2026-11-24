@@ -21,7 +21,8 @@ def run_js(script):
 
 
 @pytest.mark.parametrize("overlay", ["modal", "viewer", None])
-def test_search_shortcut_only_focuses_search_when_no_modal_is_open(overlay):
+@pytest.mark.parametrize("tag", ["BUTTON", "INPUT", "TEXTAREA"])
+def test_search_shortcut_only_focuses_search_when_no_modal_is_open(overlay, tag):
     start = PANEL.index('document.addEventListener("keydown", (e) => {')
     handler = PANEL[start:].split("\n});", 1)[0] + "\n});"
     result = run_js(
@@ -29,7 +30,7 @@ def test_search_shortcut_only_focuses_search_when_no_modal_is_open(overlay):
         const overlay = {json.dumps(overlay)};
         let keydown, focused = false, prevented = false;
         const document = {{
-          activeElement: {{tagName: 'BUTTON'}},
+          activeElement: {{tagName: {json.dumps(tag)}}},
           addEventListener: (_, fn) => keydown = fn,
         }};
         const nodes = {{
@@ -44,7 +45,7 @@ def test_search_shortcut_only_focuses_search_when_no_modal_is_open(overlay):
         console.log(JSON.stringify([focused, prevented]));
         """
     )
-    assert result == [overlay is None, overlay is None]
+    assert result == [tag == "BUTTON" and overlay is None, tag == "BUTTON"]
 
 
 def test_extension_settings_can_retry_after_a_profile_rename():

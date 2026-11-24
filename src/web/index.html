@@ -2173,8 +2173,8 @@ document.addEventListener("keydown", (e) => {
     if (topBg) topBg.dismiss();
   }
   if (e.key === "/" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA" && !$("app").classList.contains("hidden")) {
-    if ($("modal-root").lastElementChild || !$("viewer").classList.contains("hidden")) return;
     e.preventDefault();
+    if ($("modal-root").lastElementChild || !$("viewer").classList.contains("hidden")) return;
     $("search").focus();
   }
 });
