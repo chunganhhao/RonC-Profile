@@ -38,6 +38,8 @@ from .modal import show_profile_editor
 from .responsive import bind_responsive_dialog
 
 _DATA = ft.TextStyle(font_family=FONT_DATA, size=12.5)
+_active_totp_lock = threading.Lock()
+_active_totp_stop: Callable[[], None] | None = None
 
 
 class _LiveTotpText(ft.Text):
@@ -271,6 +273,7 @@ def open_profile_dialog(
 
     totp_timer_state: dict[str, Any] = {"active": True, "timer": None}
     totp_timer_lock = threading.Lock()
+    timer_cls = threading.Timer
 
     def _render_totp_state(notify: bool = True) -> None:
         raw = (two_fa_field.value or "").strip()
@@ -304,7 +307,7 @@ def open_profile_dialog(
     def _schedule_totp_tick() -> None:
         if not totp_timer_state["active"]:
             return
-        timer = threading.Timer(1.0, _on_totp_tick)
+        timer = timer_cls(1.0, _on_totp_tick)
         timer.daemon = True
         with totp_timer_lock:
             if totp_timer_state["active"]:
@@ -318,6 +321,7 @@ def open_profile_dialog(
         _schedule_totp_tick()
 
     def _stop_totp_timer(_: object = None) -> None:
+        global _active_totp_stop
         with totp_timer_lock:
             totp_timer_state["active"] = False
             timer = totp_timer_state.get("timer")
@@ -325,6 +329,9 @@ def open_profile_dialog(
                 with contextlib.suppress(Exception):
                     timer.cancel()
                 totp_timer_state["timer"] = None
+        with _active_totp_lock:
+            if _active_totp_stop is _stop_totp_timer:
+                _active_totp_stop = None
         object.__setattr__(totp_preview_text, "_refresh_hook", None)
 
     two_fa_field.on_change = _update_totp_preview
@@ -1211,6 +1218,12 @@ def open_profile_dialog(
 
     close = show_profile_editor(page, dlg, prepare_dialog, local_keyboard=True)
     if close is not None:
+        global _active_totp_stop
+        with _active_totp_lock:
+            prev_stop = _active_totp_stop
+            _active_totp_stop = _stop_totp_timer
+        if prev_stop is not None:
+            prev_stop()
         _schedule_totp_tick()
 
 
