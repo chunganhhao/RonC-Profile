@@ -45,6 +45,51 @@ def archive(description="old"):
     return buf.getvalue()
 
 
+def test_desktop_extension_sidebar_badge_tracks_upload_and_removal(tmp_path, monkeypatch):
+    from src.core import config
+    from src.ui.app import App
+
+    monkeypatch.setattr(manager, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(manager, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    monkeypatch.setattr(config, "EXTENSIONS_FILE", str(tmp_path / "extensions.json"))
+    monkeypatch.setattr(config, "EXTENSIONS_DIR", str(tmp_path / "extensions"))
+    app = App()
+    app.page = page = Mock(controls=[], width=1280, height=900)
+    page.add.side_effect = page.controls.append
+    upload_zip = tmp_path / "demo.zip"
+    upload_zip.write_bytes(archive())
+    app._file_picker = SimpleNamespace(
+        pick_files=AsyncMock(return_value=[SimpleNamespace(path=str(upload_zip))])
+    )
+    app._build_ui()
+
+    sidebar = page.controls[0].controls[0]
+    nav = next(c for c in controls(sidebar) if getattr(c, "on_click", None) == app._open_extensions)
+    badge = nav.content.controls[-1].content
+    assert badge.value == "0"
+    nav.on_click(None)
+    dialog = page.show_dialog.call_args.args[0]
+    upload_button = next(
+        c
+        for c in controls(dialog)
+        if getattr(c, "content", None) == f"+ {get_string('ext_upload_btn')}"
+    )
+    asyncio.run(upload_button.on_click(None))
+    assert len(app.extensions.list_entries()) == 1
+    assert badge.value == "1"
+
+    remove_button = next(
+        c
+        for c in controls(dialog)
+        if isinstance(c, ft.IconButton) and c.icon == ft.Icons.DELETE_OUTLINE
+    )
+    remove_button.on_click(None)
+    assert not app.extensions.list_entries()
+    assert badge.value == "0"
+
+
 @pytest.fixture
 def state(tmp_path, monkeypatch):
     monkeypatch.setattr(manager, "PROFILES_FILE", str(tmp_path / "profiles.json"))

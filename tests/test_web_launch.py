@@ -20,6 +20,33 @@ def run_js(script):
     return json.loads(result.stdout)
 
 
+@pytest.mark.parametrize("overlay", ["modal", "viewer", None])
+def test_search_shortcut_only_focuses_search_when_no_modal_is_open(overlay):
+    start = PANEL.index('document.addEventListener("keydown", (e) => {')
+    handler = PANEL[start:].split("\n});", 1)[0] + "\n});"
+    result = run_js(
+        f"""
+        const overlay = {json.dumps(overlay)};
+        let keydown, focused = false, prevented = false;
+        const document = {{
+          activeElement: {{tagName: 'BUTTON'}},
+          addEventListener: (_, fn) => keydown = fn,
+        }};
+        const nodes = {{
+          app: {{classList: {{contains: () => false}}}},
+          'modal-root': {{lastElementChild: overlay === 'modal' ? {{}} : null}},
+          viewer: {{classList: {{contains: () => overlay !== 'viewer'}}}},
+          search: {{focus: () => focused = true}},
+        }};
+        const $ = id => nodes[id];
+        {handler}
+        keydown({{key: '/', preventDefault: () => prevented = true}});
+        console.log(JSON.stringify([focused, prevented]));
+        """
+    )
+    assert result == [overlay is None, overlay is None]
+
+
 def test_extension_settings_can_retry_after_a_profile_rename():
     settings = PANEL.split("function openExtensionSettingsModal(", 1)[1].split(
         "\nasync function openExtensionsModal", 1
