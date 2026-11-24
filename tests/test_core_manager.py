@@ -512,6 +512,48 @@ def test_busy_store_retry_does_not_block_an_unrelated_store(tmp_path, monkeypatc
             assert retrying
 
 
+def test_chrome_runner_reports_busy_profile_store_after_timeout(tmp_path, monkeypatch, capsys):
+    import asyncio
+    from types import SimpleNamespace
+
+    from chrome_engine import runner
+    from src.core import config, strings
+    from src.services.browser import lease
+
+    path = tmp_path / "profiles.json"
+    real_lease = lease.profile_lease
+    attempts = []
+    times = iter((0.0, 1.0, 5.0))
+
+    @contextmanager
+    def busy_store(target):
+        if target == path:
+            attempts.append(target)
+            raise BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable")
+        with real_lease(target):
+            yield
+
+    monkeypatch.setattr(config, "PROFILES_FILE", str(path))
+    monkeypatch.setattr(runner, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(runner, "watch_launcher", lambda *_: None)
+    monkeypatch.setattr(runner, "run_browser", lambda *_: pytest.fail("browser must not start"))
+    monkeypatch.setattr(lease, "profile_lease", busy_store)
+    monkeypatch.setattr(
+        lease, "time", SimpleNamespace(monotonic=lambda: next(times), sleep=lambda _: None)
+    )
+    monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["vi"])
+
+    assert asyncio.run(runner._async_main(["qa", "None", "macos"])) == 1
+    assert attempts == [path, path]
+    (message,) = [
+        line for line in capsys.readouterr().out.splitlines() if line.startswith("LAUNCH_FAILED:")
+    ]
+    assert message == "LAUNCH_FAILED: The profile store is busy. Try opening the profile again."
+    assert strings.localize_launch_error(f"[qa] {message}") == (
+        "[qa] LAUNCH_FAILED: Kho profile đang bận. Hãy thử mở lại profile."
+    )
+
+
 def test_stale_rename_rejected_before_moving_data(apply_fixture):
     from src.services.profile import manager
 

@@ -108,6 +108,10 @@ _STORE_MUTEX = threading.RLock()
 _STORE_OWNER = threading.local()
 
 
+class StoreLeaseTimeout(TimeoutError):
+    pass
+
+
 def discard_lease(path) -> None:
     """Delete a lease's lock file once what it guards is gone; keep it while anyone holds it.
 
@@ -135,7 +139,7 @@ def waiting_lease(path, timeout: float):
 
 
 @contextmanager
-def _retry_lease(acquire, timeout: float):
+def _retry_lease(acquire, timeout: float, timeout_error: type[TimeoutError] | None = None):
     deadline = time.monotonic() + timeout
     with ExitStack() as stack:
         while True:
@@ -143,8 +147,16 @@ def _retry_lease(acquire, timeout: float):
                 stack.enter_context(acquire())
                 break
             # flock reports a held lock as BlockingIOError, msvcrt.locking as PermissionError.
-            except (BlockingIOError, PermissionError):
+            except (BlockingIOError, PermissionError) as exc:
+                if (
+                    timeout_error is not None
+                    and isinstance(exc, PermissionError)
+                    and os.name != "nt"
+                ):
+                    raise
                 if time.monotonic() >= deadline:
+                    if timeout_error is not None:
+                        raise timeout_error() from exc
                     raise
                 time.sleep(0.01)
         yield
@@ -169,7 +181,7 @@ def _store_lease_once(path):
 @contextmanager
 def store_lease(path, *, timeout: float = 0):
     with (
-        _retry_lease(lambda: _store_lease_once(path), timeout)
+        _retry_lease(lambda: _store_lease_once(path), timeout, StoreLeaseTimeout)
         if timeout
         else _store_lease_once(path)
     ):
