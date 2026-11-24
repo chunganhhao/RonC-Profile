@@ -1,7 +1,7 @@
 import threading
 from collections.abc import Callable
 
-from ...core.strings import get_string
+from ...core.strings import ProfileStoreBusyMessage, get_string
 from ...interfaces.protocols import IBrowserLauncher, IProfileManager
 from ...services.browser.launcher import ProfileBusyError
 from ..state import AppState
@@ -20,17 +20,24 @@ def launch_or_stop(
 
     if bl.is_running(name):
         state.set_stopping(name, True)
-        log(get_string("stopping_profile", name=name))
-        state.schedule_refresh()
 
         def do_stop() -> None:
             try:
                 bl.stop_profile(name)
             finally:
+                state.failed.pop(name, None)
+                state.set_loading(name, False)
                 state.set_stopping(name, False)
                 state.schedule_refresh()
 
-        threading.Thread(target=do_stop, daemon=True).start()
+        try:
+            log(get_string("stopping_profile", name=name))
+            state.schedule_refresh()
+            threading.Thread(target=do_stop, daemon=True).start()
+        except Exception:
+            state.set_stopping(name, False)
+            state.schedule_refresh()
+            raise
         return
 
     state.set_loading(name, True)
@@ -46,14 +53,18 @@ def launch_or_stop(
         state.schedule_refresh()
 
     def _on_stop() -> None:
-        if not ready.is_set():
+        if not ready.is_set() and not state.is_stopping(name):
             state.failed.setdefault(name, get_string("stamp_failed"))
         state.set_loading(name, False)
         state.schedule_refresh()
 
     def _launch_log(message: str) -> None:
-        if "LAUNCH_FAILED:" in message:
-            reason = message.split("LAUNCH_FAILED:", 1)[1].strip()
+        if "LAUNCH_FAILED:" in message and not state.is_stopping(name):
+            reason = (
+                ProfileStoreBusyMessage()
+                if isinstance(message, ProfileStoreBusyMessage)
+                else message.split("LAUNCH_FAILED:", 1)[1].strip()
+            )
             state.failed[name] = reason or get_string("stamp_failed")
         log(message)
 

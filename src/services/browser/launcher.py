@@ -9,7 +9,12 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from ...core.logging import get_logger
-from ...core.strings import get_string
+from ...core.strings import (
+    LAUNCH_STORE_BUSY_CODE,
+    ProfileStoreBusyMessage,
+    get_string,
+    localize_launch_error,
+)
 from ...models.profile import Profile
 from .control import TOKEN_HEADER
 from .process import spawn_browser, terminate, wait_for_exit
@@ -93,7 +98,10 @@ class BrowserLauncher:
             return False, "No launch in progress"
         if not result.settled.wait(timeout):
             return False, "timeout"
-        return result.ok, result.error
+        error = result.error
+        return result.ok, localize_launch_error(error) if isinstance(
+            error, ProfileStoreBusyMessage
+        ) else error
 
     def shutdown_all(self) -> None:
         with self._lock:
@@ -299,8 +307,13 @@ class BrowserLauncher:
                     terminate(proc, name, timeout=1)
                     continue
                 if msg.startswith("LAUNCH_FAILED:") or msg == "LAUNCH_CANCELLED":
-                    result.settle(False, msg.removeprefix("LAUNCH_FAILED:").strip())
-                    log_callback(f"[{name}] {msg}")
+                    reason = msg.removeprefix("LAUNCH_FAILED:").strip()
+                    if reason == LAUNCH_STORE_BUSY_CODE:
+                        result.settle(False, ProfileStoreBusyMessage())
+                        log_callback(ProfileStoreBusyMessage(f"[{name}] LAUNCH_FAILED: "))
+                    else:
+                        result.settle(False, reason)
+                        log_callback(f"[{name}] {msg}")
                     logger.warning("Launch failed for profile %s: %s", name, msg)
                     notify_stopped()
                     terminate(proc, name, timeout=1)

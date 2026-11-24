@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- App desktop: vô hiệu hóa nút khi đang dừng profile, hiển thị lỗi do kho profile bận theo ngôn ngữ đang dùng và hướng dẫn giải phóng dung lượng khi giải nén core bị đầy ổ.
+
 - App desktop: dừng hàng loạt hiển thị đúng “Đang dừng”, mở nhiều profile không còn lỗi do tranh chấp khóa ngắn khi đọc dữ liệu, và Quản lý core hướng dẫn giải phóng dung lượng khi ổ đĩa đầy.
 
 - App desktop: nhấn Esc để đóng hộp thoại quản lý và sửa profile, nhấp đúp bút chì chỉ mở một hộp thoại, và nhấn Enter trong ô tên để tạo hoặc lưu profile.

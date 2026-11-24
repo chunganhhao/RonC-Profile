@@ -859,13 +859,66 @@ def test_desktop_bulk_stop_shows_stopping_until_stop_finishes(tmp_path, monkeypa
         }
 
     assert "Đang chạy" in labels()
+    app.state.failed[name] = "stale failure from an earlier launch"
+    app.state.set_loading(name, True)
     app.h.on_bulk_stop()
     stopping_labels = labels()
     assert "Đang dừng" in stopping_labels
     assert "Đang mở" not in stopping_labels
+    (stop_button,) = [
+        c
+        for c in _walk_controls(app.refs.profile_list_area)
+        if isinstance(c, ft.Button) and c.icon == ft.Icons.CLOSE_ROUNDED
+    ]
+    assert stop_button.disabled and stop_button.on_click is None
+    assert not any(
+        isinstance(c, ft.ProgressRing) for c in _walk_controls(app.refs.profile_list_area)
+    )
     (stop,) = pending
     stop()
     assert "Đã dừng" in labels()
+    assert name not in app.state.failed
+    assert not app.state.is_loading(name)
+
+
+@pytest.mark.parametrize("from_worker", [False, True])
+def test_stop_clears_stopping_after_exception(monkeypatch, from_worker):
+    from src.ui.actions import browser
+    from src.ui.state import AppState
+
+    name = "Chromium demo"
+    state = AppState()
+    pm = SimpleNamespace(profiles={name: object()})
+
+    def fail(*_):
+        raise RuntimeError("stop failed")
+
+    bl = SimpleNamespace(is_running=lambda _: True, stop_profile=fail)
+    pending = []
+
+    def start(target):
+        if not from_worker:
+            fail()
+        pending.append(target)
+
+    monkeypatch.setattr(
+        browser,
+        "threading",
+        SimpleNamespace(Thread=lambda target, daemon: SimpleNamespace(start=lambda: start(target))),
+    )
+    if from_worker:
+        browser.launch_or_stop(name, pm, bl, state, lambda _: None)
+        assert state.is_stopping(name)
+        assert state.consume_refresh()
+        (stop,) = pending
+        with pytest.raises(RuntimeError, match="stop failed"):
+            stop()
+    else:
+        with pytest.raises(RuntimeError, match="stop failed"):
+            browser.launch_or_stop(name, pm, bl, state, lambda _: None)
+        assert not pending
+    assert not state.is_stopping(name)
+    assert state.consume_refresh()
 
 
 def test_pionlogin_ui_components_and_dialogs(tmp_path, monkeypatch):

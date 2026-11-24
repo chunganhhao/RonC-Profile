@@ -64,6 +64,7 @@ class App:
         self._live_since: dict[str, str] = {}
         self._feedback_until: dict[tuple[str, str], float] = {}
         self._toast_until: float = 0.0
+        self._toast_message = ""
         self._toast_text = ft.Text("", size=12, font_family=FONT_SEMIBOLD)
         self._toast_banner = ft.Container(visible=False)
         self._filter_column = ft.Column(spacing=2)
@@ -147,15 +148,16 @@ class App:
             font_family=FONT_DATA,
             color=COLORS["text_sub"],
         )
+        toast = self._display_toast()
         self._toast_text = ft.Text(
-            self._toast_text.value or "",
+            toast,
             expand=True,
             size=12,
             font_family=FONT_SEMIBOLD,
             color=COLORS["live_ink"],
             max_lines=2,
             overflow=ft.TextOverflow.ELLIPSIS,
-            tooltip=self._toast_text.value or None,
+            tooltip=toast or None,
         )
         self._toast_banner = ft.Container(
             key="action_toast_banner",
@@ -773,10 +775,15 @@ class App:
         if self.refs is not None:
             self.refs.content_subtitle.visible = not visible
 
+    def _display_toast(self) -> str:
+        message = self._toast_message
+        return localize_launch_error(message) if "LAUNCH_FAILED:" in message else message
+
     def _log(self, message: str) -> None:
         logger.info(message)
-        visible_message = localize_launch_error(message) if "LAUNCH_FAILED:" in message else message
         if self.refs is not None:
+            self._toast_message = message
+            visible_message = self._display_toast()
             self._toast_until = time.monotonic() + 2.4
             self._toast_text.value = visible_message
             self._toast_text.tooltip = visible_message

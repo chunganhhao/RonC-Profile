@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 from ...core.logging import get_logger
+from ...core.strings import current_language
 
 logger = get_logger("browser.cookies")
 
@@ -51,6 +52,7 @@ def _call_tool(
     action: str, profile_name: str, os_type: str, stdin: str = "", engine: str = "camoufox"
 ) -> dict:
     env = os.environ.copy()
+    env["FOXPROFILE_LANG"] = current_language()
     env["PYTHONPATH"] = _PROJECT_ROOT + (
         os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
     )

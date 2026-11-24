@@ -1,5 +1,6 @@
 import asyncio
 import errno
+import shutil
 
 import flet as ft
 
@@ -20,7 +21,16 @@ def _stage_error_key(exc: BaseException) -> str:
         seen.add(id(cause))
         if isinstance(cause, OSError) and cause.errno == errno.ENOSPC:
             return "core_stage_no_space"
-        cause = cause.__cause__ or cause.__context__
+        if (
+            isinstance(cause, shutil.Error)
+            and cause.args
+            and isinstance(cause.args[0], list)
+            and any(
+                message.startswith(f"[Errno {errno.ENOSPC}] ") for _, _, message in cause.args[0]
+            )
+        ):
+            return "core_stage_no_space"
+        cause = cause.__cause__ or (None if cause.__suppress_context__ else cause.__context__)
     return "core_stage_failed"
 
 

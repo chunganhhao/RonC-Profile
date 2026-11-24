@@ -108,6 +108,10 @@ _STORE_MUTEX = threading.RLock()
 _STORE_OWNER = threading.local()
 
 
+class StoreLeaseTimeout(TimeoutError):
+    pass
+
+
 def discard_lease(path) -> None:
     """Delete a lease's lock file once what it guards is gone; keep it while anyone holds it.
 
@@ -130,31 +134,62 @@ def discard_lease(path) -> None:
 @contextmanager
 def waiting_lease(path, timeout: float):
     """profile_lease, retried until `timeout` seconds pass while another process holds it."""
-    deadline = time.monotonic() + timeout
-    with ExitStack() as stack:
-        while True:
-            try:
-                stack.enter_context(profile_lease(path))
-                break
-            # flock reports a held lock as BlockingIOError, msvcrt.locking as PermissionError.
-            except (BlockingIOError, PermissionError):
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.01)
+    with _retry_lease(lambda _: profile_lease(path), timeout):
         yield
 
 
 @contextmanager
-def store_lease(path, *, timeout: float = 0):
+def _retry_lease(acquire, timeout: float, timeout_error: type[TimeoutError] | None = None):
+    deadline = time.monotonic() + timeout
+    with ExitStack() as stack:
+        while True:
+            try:
+                stack.enter_context(acquire(deadline))
+                break
+            # flock reports a held lock as BlockingIOError, msvcrt.locking as PermissionError.
+            except (BlockingIOError, PermissionError) as exc:
+                if (
+                    timeout_error is not None
+                    and isinstance(exc, PermissionError)
+                    and os.name != "nt"
+                ):
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if timeout_error is not None:
+                        raise timeout_error() from exc
+                    raise
+                time.sleep(min(0.01, remaining))
+        yield
+
+
+@contextmanager
+def _store_lease_once(path, deadline: float | None = None):
     key = str(Path(path).resolve())
-    with _STORE_MUTEX:
+    if deadline is None:
+        _STORE_MUTEX.acquire()
+    elif not _STORE_MUTEX.acquire(timeout=max(0, deadline - time.monotonic())):
+        raise StoreLeaseTimeout()
+    try:
         if getattr(_STORE_OWNER, "key", None) == key:
             yield
         else:
-            with waiting_lease(path, timeout) if timeout else profile_lease(path):
+            with profile_lease(path):
                 previous = getattr(_STORE_OWNER, "key", None)
                 _STORE_OWNER.key = key
                 try:
                     yield
                 finally:
                     _STORE_OWNER.key = previous
+    finally:
+        _STORE_MUTEX.release()
+
+
+@contextmanager
+def store_lease(path, *, timeout: float = 0):
+    with (
+        _retry_lease(lambda deadline: _store_lease_once(path, deadline), timeout, StoreLeaseTimeout)
+        if timeout
+        else _store_lease_once(path)
+    ):
+        yield

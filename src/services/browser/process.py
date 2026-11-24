@@ -60,10 +60,10 @@ def spawn_browser(profile: Profile) -> subprocess.Popen:
     )
 
 
-def watch_launcher(shutdown: asyncio.Event) -> None:
+def watch_launcher(shutdown: asyncio.Event) -> bool:
     """Use the launcher-owned pipe's EOF to detect even an uncatchable exit."""
     if os.environ.pop(_LAUNCHER_PIPE, None) != "1":
-        return
+        return False
     loop = asyncio.get_running_loop()
     fd = sys.stdin.fileno()
 
@@ -75,6 +75,7 @@ def watch_launcher(shutdown: asyncio.Event) -> None:
             loop.call_soon_threadsafe(shutdown.set)
 
     threading.Thread(target=wait_for_eof, daemon=True).start()
+    return True
 
 
 def terminate(proc: subprocess.Popen, name: str, timeout: int = 5) -> None:

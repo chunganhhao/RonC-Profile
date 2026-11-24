@@ -2,6 +2,16 @@ import re
 
 from .config import LANGUAGE
 
+LAUNCH_STORE_BUSY_CODE = "PROFILE_STORE_BUSY"
+
+
+class ProfileStoreBusyMessage(str):
+    def __new__(cls, prefix: str = ""):
+        message = super().__new__(cls, prefix + get_string("launch_store_busy"))
+        message.prefix = prefix
+        return message
+
+
 STRINGS: dict[str, dict[str, str]] = {
     "en": {
         "import_profile_exists": "Profile '{name}' already exists",
@@ -36,6 +46,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "core_stage_done": "Download verified and staged. Active core and profiles are unchanged.",
         "core_stage_no_space": "There isn’t enough space where the core is stored. Free up space and try again.",
         "core_stage_failed": "Couldn’t download the core. See the logs for details, then try again.",
+        "launch_store_busy": "The profile store is busy. Try again in a moment.",
         "core_apply": "Back up and apply",
         "core_apply_blocked": "Only stopped profiles, staged approved core, same engine and no downgrade. Recovery requires the old snapshot AND old runtime.",
         "core_safety": "Status/download never changes profiles. Applying is a separate, confirmed operation; it never starts a browser.",
@@ -433,6 +444,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "core_stage_done": "Đã kiểm checksum và staging. Core đang dùng và profile giữ nguyên.",
         "core_stage_no_space": "Không đủ dung lượng ở nơi lưu core. Hãy giải phóng dung lượng rồi thử lại.",
         "core_stage_failed": "Không tải được core. Hãy xem nhật ký để biết chi tiết rồi thử lại.",
+        "launch_store_busy": "Kho profile đang bận. Hãy thử lại sau giây lát.",
         "core_apply": "Backup và áp dụng",
         "core_apply_blocked": "Chỉ profile đã dừng, core đã staging/được duyệt, cùng engine và không hạ phiên bản. Khôi phục cần snapshot cũ VÀ runtime cũ.",
         "core_safety": "Xem/tải không thay đổi profile. Áp dụng là thao tác xác nhận riêng, không tự mở browser.",
@@ -807,6 +819,8 @@ def current_language() -> str:
 
 
 def localize_launch_error(message: str) -> str:
+    if isinstance(message, ProfileStoreBusyMessage):
+        return message.prefix + get_string("launch_store_busy")
     match = re.search(
         r"A (windows|macos|linux) persona cannot be presented consistently on a (windows|macos|linux) host",
         message,

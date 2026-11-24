@@ -26,6 +26,7 @@ from camoufox.async_api import AsyncCamoufox
 
 from src.core.config import DATA_DIR
 from src.models.profile import ENGINES
+from src.services.browser.cores import ProfileStoreBusyError
 from src.services.browser.fingerprint import load_or_create
 from src.services.browser.lease import profile_lease
 from src.utils.validation import validate_profile_name
@@ -81,6 +82,9 @@ def main() -> int:
     payload = json.loads(sys.stdin.read() or "[]") if action == "import" else []
     try:
         result = asyncio.run(_run(action, profile_name, os_type, payload, engine))
+    except ProfileStoreBusyError as exc:
+        print("RESULT:" + json.dumps({"error": str(exc)}))
+        return 1
     except Exception as e:
         print("RESULT:" + json.dumps({"error": f"{type(e).__name__}: {e}"}))
         return 1

@@ -474,6 +474,98 @@ def test_launch_binding_retries_busy_profile_store(tmp_path, monkeypatch):
     assert attempts == [path, path]
 
 
+def test_busy_store_retry_does_not_block_an_unrelated_store(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+
+    from src.services.browser import lease
+
+    busy = tmp_path / "profiles.json"
+    other = tmp_path / "proxies.json"
+    real_lease = lease.profile_lease
+    real_monotonic = lease.time.monotonic
+    retrying = False
+
+    @contextmanager
+    def initially_busy(path):
+        if path == busy and not retrying:
+            raise BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable")
+        with real_lease(path):
+            yield
+
+    def use_other_store():
+        with lease.store_lease(other):
+            return True
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+
+        def during_retry(_delay):
+            nonlocal retrying
+            assert pool.submit(use_other_store).result(timeout=2)
+            retrying = True
+
+        monkeypatch.setattr(lease, "profile_lease", initially_busy)
+        monkeypatch.setattr(
+            lease, "time", SimpleNamespace(monotonic=real_monotonic, sleep=during_retry)
+        )
+        with lease.store_lease(busy, timeout=5):
+            assert retrying
+
+
+def test_chrome_runner_reports_busy_profile_store_after_timeout(tmp_path, monkeypatch, capsys):
+    import asyncio
+    from types import SimpleNamespace
+
+    from chrome_engine import runner
+    from src.core import config, strings
+    from src.services.browser import lease
+
+    path = tmp_path / "profiles.json"
+    real_lease = lease.profile_lease
+    attempts = []
+    times = iter((0.0, 0.0, 1.0, 1.0, 5.0))
+
+    @contextmanager
+    def busy_store(target):
+        if target == path:
+            attempts.append(target)
+            raise BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable")
+        with real_lease(target):
+            yield
+
+    monkeypatch.setattr(config, "PROFILES_FILE", str(path))
+    monkeypatch.setattr(runner, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(runner, "watch_launcher", lambda *_: None)
+    monkeypatch.setattr(runner, "run_browser", lambda *_: pytest.fail("browser must not start"))
+    monkeypatch.setattr(lease, "profile_lease", busy_store)
+    monkeypatch.setattr(
+        lease, "time", SimpleNamespace(monotonic=lambda: next(times), sleep=lambda _: None)
+    )
+    monkeypatch.setattr(strings, "_ACTIVE", strings.STRINGS["vi"])
+
+    assert asyncio.run(runner._async_main(["qa", "None", "macos"])) == 1
+    assert attempts == [path, path]
+    (message,) = [
+        line for line in capsys.readouterr().out.splitlines() if line.startswith("LAUNCH_FAILED:")
+    ]
+    assert message == ("LAUNCH_FAILED: Kho profile đang bận. Hãy thử lại sau giây lát.")
+
+
+def test_timed_store_lease_expires_while_another_thread_owns_mutex(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from src.services.browser import lease
+
+    path = tmp_path / "profiles.json"
+
+    def try_timed_lease():
+        with pytest.raises(lease.StoreLeaseTimeout), lease.store_lease(path, timeout=0.02):
+            pytest.fail("a second thread acquired the store lease")
+
+    with ThreadPoolExecutor(max_workers=1) as pool, lease.store_lease(path):
+        pool.submit(try_timed_lease).result(timeout=2)
+
+
 def test_stale_rename_rejected_before_moving_data(apply_fixture):
     from src.services.profile import manager
 

@@ -1,5 +1,6 @@
 import asyncio
 import errno
+import shutil
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from weakref import ref
@@ -219,9 +220,10 @@ def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog, ex
         try:
             raise OSError(errno.ENOSPC, "No space left on device")
         except OSError as exc:
+            error = FetchError("Download failed: https://example.test/core.dmg")
             if explicit_from:
-                raise FetchError("Download failed: https://example.test/core.dmg") from exc
-            raise FetchError("Download failed: https://example.test/core.dmg")  # noqa: B904
+                raise error from exc
+            raise error  # noqa: B904 - exercise implicit exception chaining
 
     monkeypatch.setattr(cores.cores, "stage", fail)
     page = DialogPage()
@@ -243,6 +245,38 @@ def test_core_staging_disk_full_shows_localized_guidance(monkeypatch, caplog, ex
     assert not any("Download failed" in message or "Errno" in message for message in messages)
     assert "No space left on device" in caplog.text
     assert download.disabled and not confirm.value
+
+
+def test_core_staging_error_chain_can_contain_a_cycle():
+    exc = RuntimeError()
+    exc.__cause__ = exc
+    assert cores._stage_error_key(exc) == "core_stage_failed"
+
+
+def test_core_staging_does_not_classify_suppressed_context_as_disk_full():
+    try:
+        raise OSError(errno.ENOSPC, "earlier unrelated error")
+    except OSError:
+        with pytest.raises(RuntimeError) as caught:
+            raise RuntimeError("staging failure") from None
+    assert cores._stage_error_key(caught.value) == "core_stage_failed"
+
+
+@pytest.mark.parametrize(
+    "code, key", [(errno.ENOSPC, "core_stage_no_space"), (errno.EIO, "core_stage_failed")]
+)
+def test_core_staging_classifies_copytree_errors(tmp_path, code, key):
+    source = tmp_path / "Chromium.app"
+    source.mkdir()
+    (source / "Chromium").touch()
+
+    def fail(*_args):
+        raise OSError(code, "copy failed")
+
+    with pytest.raises(shutil.Error) as caught:
+        shutil.copytree(source, tmp_path / "staging", copy_function=fail, symlinks=True)
+
+    assert cores._stage_error_key(caught.value) == key
 
 
 def test_dropdown_escape_seen_only_by_page_preserves_the_unsaved_profile(monkeypatch):
