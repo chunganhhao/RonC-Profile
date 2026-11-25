@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- App desktop: cuộn được toàn bộ biểu mẫu và danh sách tác vụ đã lưu trong hộp thoại Ngâm tài khoản ở cửa sổ 900 × 600, kể cả khi mở trình nhập kịch bản.
+
 - App desktop: hộp thoại ngâm tài khoản điền sẵn tên chiến dịch theo ngôn ngữ đang dùng (“Ngâm 2 hồ sơ” trong tiếng Việt), hiển thị trọn gợi ý giờ chạy và gợi ý nhãn mặc định trong Kho Proxy không còn bị cắt.
 
 - App desktop đóng sáu hộp thoại bằng phím Esc, hiển thị trọn nhãn trường khi sửa nhanh profile và dùng “Giao diện” thay cho “Theme” trong phần cài đặt tiếng Việt.

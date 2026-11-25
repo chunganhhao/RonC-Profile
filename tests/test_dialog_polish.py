@@ -238,6 +238,29 @@ def _open_warming(tmp_path, names):
     return list(walk(_dialog_from(page).content))
 
 
+def test_warming_form_and_saved_tasks_share_one_scroll_viewport(tmp_path):
+    from src.services.warming.scheduler import WarmingSchedulerService
+    from src.ui.dialogs.warming import open_warming_dialog
+
+    page = page_fake(width=900, height=600)
+    pm = SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name="Demo")])
+    service = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    task_names = [f"Saved task {i}" for i in range(5)]
+    for name in task_names:
+        service.add_task(name, ["Demo"])
+
+    open_warming_dialog(page, service, pm, SimpleNamespace())
+
+    content = _dialog_from(page).content
+    scrollers = [c for c in walk(content) if getattr(c, "scroll", None)]
+    (viewport,) = scrollers
+    controls = list(walk(viewport))
+    assert any(isinstance(c, ft.TextField) for c in controls)
+    assert [c.value for c in controls if isinstance(c, ft.Text) and c.value in task_names] == (
+        task_names[::-1]
+    )
+
+
 @pytest.mark.parametrize("language,name", [("vi", "Ngâm 2 hồ sơ"), ("en", "Warm 2 profile(s)")])
 def test_warming_default_task_name_is_localized(tmp_path, language, name):
     original = current_language()
