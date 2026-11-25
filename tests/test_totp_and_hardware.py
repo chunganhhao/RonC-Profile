@@ -742,7 +742,7 @@ def test_chrome_extensions_zip_recovery_email_split_and_chrome_persona(tmp_path,
     open_extension_settings_dialog(spage, entry, ext_svc, pm)
     assert spage.dialog is not None
     # Confirm button saves pin_mode & assigned_profiles
-    spage.dialog.actions[-1].on_click(None)
+    spage.dialog.actions[-1].content.on_click(None)
 
 
 def test_reviewer_findings_legacy_recovery_upload_dedupe_pin_validation(tmp_path, monkeypatch):

@@ -14,7 +14,7 @@ from src.models.profile import Profile
 from src.services.browser.extensions import ExtensionEntry
 from src.ui.actions.profile import edit_profile
 from src.ui.app import App
-from src.ui.dialogs import cookies, cores, export, extensions, log, mcp_guide, modal
+from src.ui.dialogs import cookies, cores, export, extensions, log, mcp_guide
 from src.ui.dialogs.modal import show_modal_dialog, show_profile_editor
 from src.ui.dialogs.profile import open_profile_dialog
 from src.ui.dialogs.profile_field import open_profile_field_dialog
@@ -47,7 +47,7 @@ class DialogPage:
 def _send_key(page, key):
     (dialog,) = page.dialogs
     handler = (
-        dialog.content.on_key_down
+        dialog.content.on_key_up or dialog.content.on_key_down
         if isinstance(dialog.content, ft.KeyboardListener)
         else page.on_keyboard_event
     )
@@ -101,9 +101,7 @@ def test_escape_dismisses_utility_dialog_and_restores_handlers(kind, monkeypatch
     action.assert_not_called()
 
 
-def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handler(monkeypatch):
-    clock = iter([100.0, 101.0])
-    monkeypatch.setattr(modal, "monotonic", lambda: next(clock))
+def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handler():
     page = DialogPage()
     original_keyboard = page.on_keyboard_event
     first, second = ft.AlertDialog(), ft.AlertDialog()
@@ -125,39 +123,33 @@ def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handle
 
 
 @pytest.mark.parametrize("flet_unmounts", [True, False])
-def test_repeated_escape_closes_only_one_dialog_until_flet_finishes_dismissal(
-    monkeypatch, flet_unmounts
-):
-    clock = 100.0
-    monkeypatch.setattr(modal, "monotonic", lambda: clock, raising=False)
+def test_escape_release_only_closes_the_dialog_that_received_it(flet_unmounts):
     page = ft.Page(Mock())
     page.update = Mock()
     page._dialogs.update = Mock()
     original_keyboard = page.on_keyboard_event
-    extensions_dialog, settings_dialog = ft.AlertDialog(), ft.AlertDialog()
+    extensions_dialog, settings_dialog = (
+        ft.AlertDialog(content=ft.Text(title)) for title in ("Extensions", "Settings")
+    )
     extensions_dialog.update = settings_dialog.update = Mock()
-    show_modal_dialog(page, extensions_dialog)
-    show_modal_dialog(page, settings_dialog)
+    show_modal_dialog(page, extensions_dialog, escape_on_release=True)
+    show_modal_dialog(page, settings_dialog, escape_on_release=True)
     escape = SimpleNamespace(key="Escape")
 
-    page.on_keyboard_event(escape)
+    settings_dialog.content.on_key_up(escape)
     assert not settings_dialog.open
     assert settings_dialog in page._dialogs.controls
-    clock += 0.2
-    page.on_keyboard_event(escape)
+    settings_dialog.content.on_key_up(escape)
     assert extensions_dialog.open
-    clock += 0.2
-    page.on_keyboard_event(escape)
+    settings_dialog.content.on_key_up(escape)
     assert extensions_dialog.open
 
     if flet_unmounts:
         asyncio.run(settings_dialog.on_dismiss(SimpleNamespace(data=False)))
         assert page._dialogs.controls == [extensions_dialog]
-        clock += 0.2
-        page.on_keyboard_event(escape)
+        settings_dialog.content.on_key_up(escape)
         assert extensions_dialog.open
-    clock += 1
-    page.on_keyboard_event(escape)
+    extensions_dialog.content.on_key_up(escape)
     assert not extensions_dialog.open
     if not flet_unmounts:
         asyncio.run(settings_dialog.on_dismiss(SimpleNamespace(data=False)))
@@ -236,6 +228,31 @@ def test_extension_settings_refreshes_after_persisting(settings_is_topmost):
     service.assign_profiles.assert_called_once()
     saved.assert_called_once_with()
     assert settings.open != settings_is_topmost
+
+
+@pytest.mark.parametrize("parent_action", ["escape", "close"])
+def test_extensions_can_close_after_settings_escape(parent_action):
+    page = DialogPage()
+    original_keyboard = page.on_keyboard_event
+    entry = ExtensionEntry("demo", "Demo", "1", "", "", "")
+    service = SimpleNamespace(list_entries=lambda: [], usage_counts=lambda _: {})
+    pm = SimpleNamespace(list_profiles=lambda: [])
+    extensions.open_extensions_dialog(page, service, pm)
+    (parent,) = page.dialogs
+    extensions.open_extension_settings_dialog(page, entry, service, pm)
+    child = page.dialogs[-1]
+    escape = SimpleNamespace(key="Escape")
+
+    # The parent must not subscribe to Flet's page-wide key-down event stream.
+    assert page.on_keyboard_event is original_keyboard
+    child.content.on_key_up(escape)
+    assert page.dialogs == [parent]
+    if parent_action == "escape":
+        parent.content.on_key_up(escape)
+    else:
+        _click_action(parent, 0)
+    assert not page.dialogs
+    assert page.on_keyboard_event is original_keyboard
 
 
 def test_failed_editor_open_does_not_block_retry(monkeypatch):

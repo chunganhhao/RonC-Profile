@@ -1,10 +1,8 @@
 from collections.abc import Callable
 from threading import Lock
-from time import monotonic
 
 import flet as ft
 
-_ESC_QUIET_SECONDS = 0.3
 _editor_lock = Lock()
 
 
@@ -13,6 +11,7 @@ def show_modal_dialog(
     dialog: ft.AlertDialog,
     *,
     local_keyboard: bool = False,
+    escape_on_release: bool = False,
     can_close: Callable[[], bool] | None = None,
 ) -> Callable[[ft.ControlEvent | None], bool]:
     page_state = vars(page)
@@ -29,13 +28,14 @@ def show_modal_dialog(
             if previous_dismiss is not None:
                 previous_dismiss(event)
         finally:
-            previous_keyboard = keyboard_links.pop(keyboard_handler)
-            for handler, previous in keyboard_links.items():
-                if previous is keyboard_handler:
-                    keyboard_links[handler] = previous_keyboard
-            if page.on_keyboard_event is keyboard_handler:
-                page.on_keyboard_event = previous_keyboard
-                page.update()
+            if keyboard_handler is not None:
+                previous_keyboard = keyboard_links.pop(keyboard_handler)
+                for handler, previous in keyboard_links.items():
+                    if previous is keyboard_handler:
+                        keyboard_links[handler] = previous_keyboard
+                if page.on_keyboard_event is keyboard_handler:
+                    page.on_keyboard_event = previous_keyboard
+                    page.update()
 
     def is_topmost() -> bool:
         parent = dialog.parent
@@ -65,20 +65,22 @@ def show_modal_dialog(
             dismiss(event)
         return True
 
-    def on_key(event: ft.KeyboardEvent | ft.KeyDownEvent) -> None:
-        if event.key != "Escape":
-            return
-        now = monotonic()
-        blocked_handler, last_escape = page_state.get("_ronc_escape_handoff", (None, 0.0))
-        # Flet reports Escape repeats as key downs, including after the dismiss event.
-        if blocked_handler is keyboard_handler and now - last_escape < _ESC_QUIET_SECONDS:
-            page_state["_ronc_escape_handoff"] = (blocked_handler, now)
-            return
-        if close():
-            page_state["_ronc_escape_handoff"] = (page.on_keyboard_event, now)
+    def on_key(event: ft.KeyboardEvent | ft.KeyDownEvent | ft.KeyUpEvent) -> None:
+        if event.key == "Escape" and not dismissed:
+            close()
 
     keyboard_handler = on_key
-    if local_keyboard:
+    if escape_on_release:
+        keyboard_handler = None
+        dialog.content = ft.KeyboardListener(
+            content=dialog.content, autofocus=True, on_key_up=on_key
+        )
+        if dialog.title is not None:
+            dialog.title = ft.KeyboardListener(content=dialog.title, on_key_up=on_key)
+        dialog.actions = [
+            ft.KeyboardListener(content=action, on_key_up=on_key) for action in dialog.actions
+        ]
+    elif local_keyboard:
         body = ft.KeyboardListener(content=dialog.content, autofocus=True, on_key_down=on_key)
         dialog.content = body
         dialog.actions = [
@@ -97,8 +99,9 @@ def show_modal_dialog(
         keyboard_handler = restore_focus
 
     dialog.on_dismiss = dismiss
-    keyboard_links[keyboard_handler] = getattr(page, "on_keyboard_event", None)
-    page.on_keyboard_event = keyboard_handler
+    if keyboard_handler is not None:
+        keyboard_links[keyboard_handler] = getattr(page, "on_keyboard_event", None)
+        page.on_keyboard_event = keyboard_handler
     try:
         page.show_dialog(dialog)
         page.update()

@@ -288,7 +288,7 @@ def test_settings_save_error_keeps_dialog_open(state, monkeypatch):
     dialog = page.show_dialog.call_args.args[0]
     next(c for c in controls(dialog.content) if isinstance(c, ft.Checkbox)).value = True
     monkeypatch.setattr(manager, "_replace", fail_write)
-    dialog.actions[-1].on_click(None)
+    dialog.actions[-1].content.on_click(None)
     assert not saved.called
     assert not page.pop_dialog.called
     assert any(
@@ -305,7 +305,7 @@ def test_settings_renamed_profile_shows_conflict_and_keeps_dialog_open(state):
     open_extension_settings_dialog(page, entry, ext, pm, on_saved=saved)
     dialog = page.show_dialog.call_args.args[0]
     assert pm.update_profile("alice", "alicia", "", "windows")
-    dialog.actions[-1].on_click(None)
+    dialog.actions[-1].content.on_click(None)
     assert not saved.called
     assert not page.pop_dialog.called
     assert any(

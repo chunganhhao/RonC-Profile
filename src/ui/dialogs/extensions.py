@@ -223,7 +223,7 @@ def open_extension_settings_dialog(
         min_height=310,
         max_height=560,
     )
-    close = show_modal_dialog(page, dlg)
+    close = show_modal_dialog(page, dlg, escape_on_release=True)
 
 
 def open_extensions_dialog(
@@ -621,4 +621,4 @@ def open_extensions_dialog(
         min_height=360,
         max_height=780,
     )
-    close = show_modal_dialog(page, dlg)
+    close = show_modal_dialog(page, dlg, escape_on_release=True)
