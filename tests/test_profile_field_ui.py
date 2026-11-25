@@ -1,6 +1,7 @@
 """Field-specific native editors use local drafts and the existing commit callback."""
 
 from types import SimpleNamespace
+from weakref import ref
 
 import flet as ft
 import pytest
@@ -18,6 +19,8 @@ class Page:
     def show_dialog(self, dialog):
         dialog.open = True
         self.dialog = dialog
+        self.dialog_stack = ft.Column(controls=[dialog])
+        dialog._parent = ref(self.dialog_stack)
 
     def pop_dialog(self):
         self.dialog.open = False

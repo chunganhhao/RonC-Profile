@@ -5,6 +5,7 @@ import flet as ft
 from ...core.strings import get_string
 from ..theme.colors import COLORS
 from ..theme.styles import OUTLINE_STYLE
+from .modal import show_modal_dialog
 from .responsive import bind_responsive_dialog
 
 
@@ -41,19 +42,19 @@ def open_cookie_dialog(
         )
 
     async def export_json(_: ft.ControlEvent) -> None:
-        page.pop_dialog()
+        close()
         await on_export("json")
 
     async def export_netscape(_: ft.ControlEvent) -> None:
-        page.pop_dialog()
+        close()
         await on_export("netscape")
 
     async def do_import(_: ft.ControlEvent) -> None:
-        page.pop_dialog()
+        close()
         await on_import()
 
     def reset_fp(_: ft.ControlEvent) -> None:
-        page.pop_dialog()
+        close()
         on_reset_fingerprint()
 
     body_container = ft.Container(
@@ -115,7 +116,7 @@ def open_cookie_dialog(
             ft.TextButton(
                 get_string("close_btn"),
                 style=ft.ButtonStyle(color=COLORS["text_sub"]),
-                on_click=lambda _: page.pop_dialog(),
+                on_click=lambda e: close(e),
             ),
         ],
     )
@@ -128,4 +129,4 @@ def open_cookie_dialog(
         min_width=380,
         max_width=680,
     )
-    page.show_dialog(dlg)
+    close = show_modal_dialog(page, dlg)

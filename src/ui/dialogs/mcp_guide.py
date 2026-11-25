@@ -9,6 +9,7 @@ from ...core.strings import get_string
 from ...services import mcp_setup
 from ..theme.colors import COLORS
 from ..theme.styles import ACCENT_STYLE, OUTLINE_STYLE
+from .modal import show_modal_dialog
 from .responsive import bind_responsive_dialog
 
 _API_URL = f"http://127.0.0.1:{API_PORT}"
@@ -189,7 +190,7 @@ def open_mcp_guide(page: ft.Page, clipboard: ft.Clipboard) -> None:
             ft.TextButton(
                 get_string("close_btn"),
                 style=ft.ButtonStyle(color=COLORS["text_sub"]),
-                on_click=lambda _: page.pop_dialog(),
+                on_click=lambda e: close(e),
             ),
         ],
     )
@@ -202,6 +203,6 @@ def open_mcp_guide(page: ft.Page, clipboard: ft.Clipboard) -> None:
         min_width=420,
         max_width=880,
     )
-    page.show_dialog(dlg)
+    close = show_modal_dialog(page, dlg)
     render()
     threading.Thread(target=check_health, daemon=True).start()

@@ -2,7 +2,9 @@ import asyncio
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from weakref import ref
 
+import flet as ft
 import pytest
 
 from src.models.profile import Profile
@@ -59,13 +61,20 @@ def test_import_handler(outcome):
 def test_export_handler(outcome):
     async def run():
         loop_thread = threading.get_ident()
+        stack = ft.Column()
+
+        def show_dialog(dialog):
+            dialog.open = True
+            dialog._parent = ref(stack)
+            stack.controls.append(dialog)
+
         page = SimpleNamespace(
             width=1000,
             height=800,
             on_resize=None,
             update=Mock(),
             pop_dialog=Mock(),
-            show_dialog=Mock(),
+            show_dialog=Mock(side_effect=show_dialog),
         )
         picker = SimpleNamespace(
             get_directory_path=AsyncMock(return_value=None if outcome == "cancel" else "/out")

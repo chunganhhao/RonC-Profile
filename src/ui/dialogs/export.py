@@ -7,6 +7,7 @@ from ...core.strings import get_string
 from ...models.profile import Profile
 from ..theme.colors import COLORS
 from ..theme.styles import ACCENT_STYLE
+from .modal import show_modal_dialog
 from .responsive import bind_responsive_dialog
 
 
@@ -29,14 +30,9 @@ def open_export_dialog(
         dismissed = True
 
     def _on_cancel(_: ft.ControlEvent | None = None) -> None:
-        nonlocal dismissed
-        if cancel_btn.disabled or dismissed:
-            return
-        dismissed = True
-        page.pop_dialog()
+        close()
 
     async def on_export(e: ft.ControlEvent | None = None) -> None:
-        nonlocal dismissed
         btn = e.control if e is not None else export_btn
         if btn.disabled:
             return
@@ -61,8 +57,7 @@ def open_export_dialog(
             cancel_btn.disabled = False
             page.update()
         if dir_path and not dismissed:
-            dismissed = True
-            page.pop_dialog()
+            close()
 
     def sync_select_all() -> None:
         select_all_cb.value = all(cb.value for cb in checkboxes)
@@ -167,4 +162,4 @@ def open_export_dialog(
         min_width=340,
         max_width=560,
     )
-    page.show_dialog(dlg)
+    close = show_modal_dialog(page, dlg, can_close=lambda: not cancel_btn.disabled)

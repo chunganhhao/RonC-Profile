@@ -6,12 +6,26 @@ from unittest.mock import Mock
 import flet as ft
 import pytest
 
-from src.core.strings import get_string
+from src.core.strings import current_language, get_string, set_language
 from src.models.profile import Profile
 from src.ui.dialogs.appearance import open_appearance_dialog
 from src.ui.dialogs.cookies import open_cookie_dialog
 from src.ui.dialogs.extensions import open_extensions_dialog
 from src.ui.dialogs.profile import _gpu_key, open_profile_dialog
+from src.ui.dialogs.profile_field import FIELD_LABELS, open_profile_field_dialog
+
+
+@pytest.mark.parametrize("language,heading", [("vi", "Giao diện"), ("en", "Theme")])
+def test_appearance_theme_heading_is_localized(language, heading):
+    original = current_language()
+    try:
+        set_language(language)
+        dialog = open_appearance_dialog(
+            page_fake(), on_language=Mock(), on_theme=Mock(), on_accent=Mock()
+        )
+        assert any(isinstance(c, ft.Text) and c.value == heading for c in walk(dialog.content))
+    finally:
+        set_language(original)
 
 
 def page_fake(width=900, height=600):
@@ -32,6 +46,34 @@ def walk(control):
     content = getattr(control, "content", None)
     if isinstance(content, ft.Control):
         yield from walk(content)
+
+
+@pytest.mark.parametrize("language", ["vi", "en"])
+@pytest.mark.parametrize("field", ["backup_codes", "proxy", "tags"])
+def test_floating_field_label_has_room_inside_scroll_viewport(language, field):
+    original = current_language()
+    try:
+        set_language(language)
+        page = page_fake()
+        open_profile_field_dialog(page, Profile("Chromium demo", engine="chrome"), field, Mock())
+        dialog = page.show_dialog.call_args.args[0]
+        viewport = dialog.content.content
+        assert viewport.scroll == ft.ScrollMode.AUTO
+        label = get_string(FIELD_LABELS[field])
+        wrapper = next(
+            (
+                control
+                for control in walk(viewport)
+                if isinstance(control, ft.Container)
+                and isinstance(control.content, ft.TextField)
+                and control.content.label == label
+            ),
+            None,
+        )
+        assert wrapper is not None and wrapper.padding is not None and wrapper.padding.top > 0
+        assert wrapper.content.autofocus
+    finally:
+        set_language(original)
 
 
 @pytest.mark.parametrize("explicit_os", [None, "windows", "macos", "linux"])

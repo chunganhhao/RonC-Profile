@@ -11,9 +11,10 @@ import pytest
 from chrome_engine.fetch import FetchError
 from src.core import strings
 from src.models.profile import Profile
+from src.services.browser.extensions import ExtensionEntry
 from src.ui.actions.profile import edit_profile
 from src.ui.app import App
-from src.ui.dialogs import cores
+from src.ui.dialogs import cookies, cores, export, extensions, log, mcp_guide
 from src.ui.dialogs.modal import show_modal_dialog, show_profile_editor
 from src.ui.dialogs.profile import open_profile_dialog
 from src.ui.dialogs.profile_field import open_profile_field_dialog
@@ -24,12 +25,14 @@ from src.ui.dialogs.warming import open_warming_dialog
 class DialogPage:
     def __init__(self, notify_dismiss=True):
         self.dialogs = []
+        self.dialog_parent = ft.Column(controls=self.dialogs)
         self.notify_dismiss = notify_dismiss
         self.update = Mock()
         self.on_resize = Mock()
         self.on_keyboard_event = Mock()
 
     def show_dialog(self, dialog):
+        dialog._parent = ref(self.dialog_parent)
         dialog.open = True
         self.dialogs.append(dialog)
 
@@ -43,12 +46,17 @@ class DialogPage:
 
 def _send_key(page, key):
     (dialog,) = page.dialogs
-    handler = (
-        dialog.content.on_key_down
-        if isinstance(dialog.content, ft.KeyboardListener)
-        else page.on_keyboard_event
-    )
-    handler(SimpleNamespace(key=key))
+    event = SimpleNamespace(key=key)
+    if isinstance(dialog.content, ft.KeyboardListener):
+        _press_key(dialog.content, event)
+    else:
+        page.on_keyboard_event(event)
+
+
+def _press_key(listener, event):
+    listener.on_key_down(event)
+    if listener.on_key_up:
+        listener.on_key_up(event)
 
 
 def _click_action(dialog, index):
@@ -56,6 +64,62 @@ def _click_action(dialog, index):
     if isinstance(action, ft.KeyboardListener):
         action = action.content
     action.on_click(None)
+
+
+def test_parent_ignores_escape_release_without_its_own_key_down():
+    page = DialogPage()
+    parent, child = (ft.AlertDialog(content=ft.Text(title)) for title in ("Parent", "Child"))
+    show_modal_dialog(page, parent, escape_on_release=True)
+    show_modal_dialog(page, child, escape_on_release=True)
+    escape = SimpleNamespace(key="Escape")
+
+    _press_key(child.content, escape)
+    assert page.dialogs == [parent]
+    parent.content.on_key_up(escape)
+    assert page.dialogs == [parent]
+
+    _press_key(parent.content, escape)
+    assert not page.dialogs
+
+
+@pytest.mark.parametrize(
+    "kind", ["cookies", "extensions", "extension_settings", "export", "log", "mcp"]
+)
+def test_escape_dismisses_utility_dialog_and_restores_handlers(kind, monkeypatch):
+    page = DialogPage(notify_dismiss=False)
+    originals = (page.on_keyboard_event, page.on_resize)
+    profile = Profile("Chromium demo", engine="chrome")
+    service = SimpleNamespace(list_entries=lambda: [], usage_counts=lambda _: {})
+    pm = SimpleNamespace(list_profiles=lambda: [profile])
+    action = Mock()
+    if kind == "cookies":
+        cookies.open_cookie_dialog(page, profile.name, "", action, action, action)
+    elif kind == "extensions":
+        extensions.open_extensions_dialog(page, service, pm)
+    elif kind == "extension_settings":
+        entry = ExtensionEntry("demo", "Demo", "1", "", "", "")
+        extensions.open_extension_settings_dialog(page, entry, service, pm, on_saved=action)
+    elif kind == "export":
+        export.open_export_dialog(page, Mock(), [profile], action)
+    elif kind == "log":
+        log.open_log_dialog(page, [])
+    else:
+        monkeypatch.setattr(mcp_guide, "threading", SimpleNamespace(Thread=Mock()))
+        mcp_guide.open_mcp_guide(page, Mock())
+
+    if kind == "export":
+        cancel, _ = page.dialogs[-1].actions
+        cancel.disabled = True
+        _send_key(page, "Escape")
+        assert len(page.dialogs) == 1
+        cancel.disabled = False
+
+    _send_key(page, "Enter")
+    assert len(page.dialogs) == 1
+    _send_key(page, "Escape")
+    assert page.dialogs == []
+    assert (page.on_keyboard_event, page.on_resize) == originals
+    action.assert_not_called()
 
 
 def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handler():
@@ -72,8 +136,142 @@ def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handle
     assert page.dialogs == [first, second]
     page.on_keyboard_event(SimpleNamespace(key="Escape"))
     assert page.dialogs == [first]
+    parent.controls.remove(second)
     assert page.on_keyboard_event is first_keyboard
     page.on_keyboard_event(SimpleNamespace(key="Escape"))
+    assert not page.dialogs
+    assert page.on_keyboard_event is original_keyboard
+
+
+@pytest.mark.parametrize("flet_unmounts", [True, False])
+def test_escape_release_only_closes_the_dialog_that_received_it(flet_unmounts):
+    page = ft.Page(Mock())
+    page.update = Mock()
+    page._dialogs.update = Mock()
+    original_keyboard = page.on_keyboard_event
+    extensions_dialog, settings_dialog = (
+        ft.AlertDialog(content=ft.Text(title)) for title in ("Extensions", "Settings")
+    )
+    extensions_dialog.update = settings_dialog.update = Mock()
+    show_modal_dialog(page, extensions_dialog, escape_on_release=True)
+    show_modal_dialog(page, settings_dialog, escape_on_release=True)
+    escape = SimpleNamespace(key="Escape")
+
+    _press_key(settings_dialog.content, escape)
+    assert not settings_dialog.open
+    assert settings_dialog in page._dialogs.controls
+    _press_key(settings_dialog.content, escape)
+    assert extensions_dialog.open
+    extensions_dialog.content.on_key_up(escape)
+    assert extensions_dialog.open
+
+    if flet_unmounts:
+        asyncio.run(settings_dialog.on_dismiss(SimpleNamespace(data=False)))
+        assert page._dialogs.controls == [extensions_dialog]
+        _press_key(settings_dialog.content, escape)
+        assert extensions_dialog.open
+    _press_key(extensions_dialog.content, escape)
+    assert not extensions_dialog.open
+    if not flet_unmounts:
+        asyncio.run(settings_dialog.on_dismiss(SimpleNamespace(data=False)))
+    asyncio.run(extensions_dialog.on_dismiss(SimpleNamespace(data=False)))
+    assert page.on_keyboard_event is original_keyboard
+    show_modal_dialog(page, extensions_dialog)
+    assert extensions_dialog.open
+    assert page._dialogs.controls == [extensions_dialog]
+
+
+def test_detached_dialog_does_not_pop_another_dialog():
+    page = DialogPage()
+    original_keyboard = page.on_keyboard_event
+    detached, current = ft.AlertDialog(), ft.AlertDialog()
+    close_detached = show_modal_dialog(page, detached)
+    show_modal_dialog(page, current)
+    detached._parent = None
+
+    close_detached()
+
+    assert page.dialogs == [detached, current]
+    assert not detached.open
+    assert current.open
+    page.dialogs.remove(detached)
+    page.on_keyboard_event(SimpleNamespace(key="Escape"))
+    assert not page.dialogs
+    assert page.on_keyboard_event is original_keyboard
+
+
+def test_escape_restores_keyboard_handler_when_active_dialog_is_detached():
+    page = DialogPage()
+    original_keyboard = page.on_keyboard_event
+    dialog = ft.AlertDialog()
+    show_modal_dialog(page, dialog)
+    page.dialogs.remove(dialog)
+    dialog._parent = None
+
+    page.on_keyboard_event(SimpleNamespace(key="Escape"))
+
+    assert not dialog.open
+    assert page.on_keyboard_event is original_keyboard
+
+
+def test_detached_dialog_honors_close_guard():
+    page = DialogPage()
+    original_keyboard = page.on_keyboard_event
+    dialog = ft.AlertDialog()
+    can_close = Mock(return_value=False)
+    show_modal_dialog(page, dialog, can_close=can_close)
+    page.dialogs.remove(dialog)
+    dialog._parent = None
+
+    page.on_keyboard_event(SimpleNamespace(key="Escape"))
+    assert dialog.open
+    assert page.on_keyboard_event is not original_keyboard
+
+    can_close.return_value = True
+    page.on_keyboard_event(SimpleNamespace(key="Escape"))
+    assert not dialog.open
+    assert page.on_keyboard_event is original_keyboard
+
+
+@pytest.mark.parametrize("settings_is_topmost", [True, False])
+def test_extension_settings_refreshes_after_persisting(settings_is_topmost):
+    page = DialogPage()
+    saved = Mock()
+    service = SimpleNamespace(assign_profiles=Mock())
+    pm = SimpleNamespace(list_profiles=lambda: [])
+    entry = ExtensionEntry("demo", "Demo", "1", "", "", "")
+    extensions.open_extension_settings_dialog(page, entry, service, pm, on_saved=saved)
+    (settings,) = page.dialogs
+    if not settings_is_topmost:
+        show_modal_dialog(page, ft.AlertDialog())
+    _click_action(settings, -1)
+
+    service.assign_profiles.assert_called_once()
+    saved.assert_called_once_with()
+    assert settings.open != settings_is_topmost
+
+
+@pytest.mark.parametrize("parent_action", ["escape", "close"])
+def test_extensions_can_close_after_settings_escape(parent_action):
+    page = DialogPage()
+    original_keyboard = page.on_keyboard_event
+    entry = ExtensionEntry("demo", "Demo", "1", "", "", "")
+    service = SimpleNamespace(list_entries=lambda: [], usage_counts=lambda _: {})
+    pm = SimpleNamespace(list_profiles=lambda: [])
+    extensions.open_extensions_dialog(page, service, pm)
+    (parent,) = page.dialogs
+    extensions.open_extension_settings_dialog(page, entry, service, pm)
+    child = page.dialogs[-1]
+    escape = SimpleNamespace(key="Escape")
+
+    # The parent must not subscribe to Flet's page-wide key-down event stream.
+    assert page.on_keyboard_event is original_keyboard
+    _press_key(child.content, escape)
+    assert page.dialogs == [parent]
+    if parent_action == "escape":
+        _press_key(parent.content, escape)
+    else:
+        _click_action(parent, 0)
     assert not page.dialogs
     assert page.on_keyboard_event is original_keyboard
 

@@ -176,6 +176,7 @@ def open_profile_field_dialog(
 
     entry.on_submit = (lambda _: add(entry.value or "")) if field == "tags" else submit
     controls: list[ft.Control] = []
+    field_box = ft.Container(entry, padding=ft.Padding.only(top=8), expand=field == "tags")
     if field == "tags":
         render_tags()
         controls.extend(
@@ -183,7 +184,7 @@ def open_profile_field_dialog(
                 chips,
                 ft.Row(
                     [
-                        ft.Container(entry, expand=True),
+                        field_box,
                         ft.IconButton(
                             icon=ft.Icons.ADD,
                             tooltip=get_string("add_tag"),
@@ -204,7 +205,7 @@ def open_profile_field_dialog(
             ]
         )
     else:
-        controls.append(entry)
+        controls.append(field_box)
         if field == "backup_codes":
             code_chips = ft.Row(wrap=True, spacing=6, run_spacing=6)
 

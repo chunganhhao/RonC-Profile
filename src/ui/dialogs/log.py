@@ -2,6 +2,7 @@ import flet as ft
 
 from ...core.strings import get_string
 from ..theme.colors import COLORS
+from .modal import show_modal_dialog
 from .responsive import bind_responsive_dialog
 
 
@@ -41,7 +42,7 @@ def open_log_dialog(page: ft.Page, log_lines: list[str]) -> None:
         title=ft.Text(get_string("activity_log"), size=22, weight=ft.FontWeight.BOLD),
         content=body_container,
         actions=[
-            ft.TextButton(get_string("close_btn"), on_click=lambda _: page.pop_dialog()),
+            ft.TextButton(get_string("close_btn"), on_click=lambda e: close(e)),
         ],
     )
     bind_responsive_dialog(
@@ -57,4 +58,4 @@ def open_log_dialog(page: ft.Page, log_lines: list[str]) -> None:
         min_height=260,
         max_height=720,
     )
-    page.show_dialog(dlg)
+    close = show_modal_dialog(page, dlg)

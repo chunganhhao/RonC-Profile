@@ -4,6 +4,7 @@ import asyncio
 import os
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from weakref import ref
 
 import flet as ft
 import msgpack
@@ -187,6 +188,8 @@ def test_app_refresh_caches_rows_and_debounces_search(tmp_path, monkeypatch):
         def show_dialog(self, dialog):
             self.dialog = dialog
             dialog.open = True
+            self.dialog_stack = ft.Column(controls=[dialog])
+            dialog._parent = ref(self.dialog_stack)
 
         def pop_dialog(self):
             self.dialog.open = False
