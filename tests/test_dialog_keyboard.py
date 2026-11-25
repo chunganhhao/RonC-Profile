@@ -201,6 +201,25 @@ def test_escape_restores_keyboard_handler_when_active_dialog_is_detached():
     assert page.on_keyboard_event is original_keyboard
 
 
+def test_detached_dialog_honors_close_guard():
+    page = DialogPage()
+    original_keyboard = page.on_keyboard_event
+    dialog = ft.AlertDialog()
+    can_close = Mock(return_value=False)
+    show_modal_dialog(page, dialog, can_close=can_close)
+    page.dialogs.remove(dialog)
+    dialog._parent = None
+
+    page.on_keyboard_event(SimpleNamespace(key="Escape"))
+    assert dialog.open
+    assert page.on_keyboard_event is not original_keyboard
+
+    can_close.return_value = True
+    page.on_keyboard_event(SimpleNamespace(key="Escape"))
+    assert not dialog.open
+    assert page.on_keyboard_event is original_keyboard
+
+
 @pytest.mark.parametrize("settings_is_topmost", [True, False])
 def test_extension_settings_refreshes_after_persisting(settings_is_topmost):
     page = DialogPage()

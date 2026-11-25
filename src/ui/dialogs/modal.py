@@ -52,12 +52,13 @@ def show_modal_dialog(
         return top is dialog
 
     def close(event: ft.ControlEvent | None = None) -> bool:
-        if dialog.parent is None:
+        detached = dialog.parent is None
+        if (not detached and not is_topmost()) or (can_close is not None and not can_close()):
+            return False
+        if detached:
             dialog.open = False
             dismiss(event)
             return True
-        if not is_topmost() or (can_close is not None and not can_close()):
-            return False
         try:
             page.pop_dialog()
         finally:
