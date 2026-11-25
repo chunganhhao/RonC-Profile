@@ -11,6 +11,7 @@ from ...core.strings import get_string
 from ...services.profile.manager import ProfileStoreChangedError
 from ..theme.colors import COLORS, FONT_BOLD, FONT_DATA, FONT_SEMIBOLD
 from ..theme.styles import ACCENT_STYLE, DANGER_ICON_STYLE, ICON_STYLE, OUTLINE_STYLE
+from .modal import show_modal_dialog
 from .responsive import bind_responsive_dialog
 
 if TYPE_CHECKING:
@@ -116,7 +117,7 @@ def open_extension_settings_dialog(
             return
         msg = get_string("ext_saved_toast", name=entry.name)
         log(msg)
-        page.pop_dialog()
+        close()
         if on_saved:
             on_saved()
 
@@ -189,7 +190,7 @@ def open_extension_settings_dialog(
                     icon_size=18,
                     icon_color=COLORS["text_sub"],
                     style=ICON_STYLE,
-                    on_click=lambda _: page.pop_dialog(),
+                    on_click=lambda e: close(e),
                 ),
             ],
         ),
@@ -199,7 +200,7 @@ def open_extension_settings_dialog(
                 get_string("cancel"),
                 height=36,
                 style=OUTLINE_STYLE,
-                on_click=lambda _: page.pop_dialog(),
+                on_click=lambda e: close(e),
             ),
             ft.Button(
                 get_string("ext_confirm_btn"),
@@ -222,7 +223,7 @@ def open_extension_settings_dialog(
         min_height=310,
         max_height=560,
     )
-    page.show_dialog(dlg)
+    close = show_modal_dialog(page, dlg)
 
 
 def open_extensions_dialog(
@@ -603,7 +604,7 @@ def open_extensions_dialog(
             ft.TextButton(
                 get_string("close_btn"),
                 style=ft.ButtonStyle(color=COLORS["text_sub"]),
-                on_click=lambda _: page.pop_dialog(),
+                on_click=lambda e: close(e),
             ),
         ],
     )
@@ -620,4 +621,4 @@ def open_extensions_dialog(
         min_height=360,
         max_height=780,
     )
-    page.show_dialog(dlg)
+    close = show_modal_dialog(page, dlg)

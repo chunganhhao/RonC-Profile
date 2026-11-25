@@ -65,7 +65,7 @@ def test_export_handler(outcome):
             on_resize=None,
             update=Mock(),
             pop_dialog=Mock(),
-            show_dialog=Mock(),
+            show_dialog=Mock(side_effect=lambda dialog: setattr(dialog, "open", True)),
         )
         picker = SimpleNamespace(
             get_directory_path=AsyncMock(return_value=None if outcome == "cancel" else "/out")

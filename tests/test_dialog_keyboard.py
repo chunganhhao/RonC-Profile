@@ -11,9 +11,10 @@ import pytest
 from chrome_engine.fetch import FetchError
 from src.core import strings
 from src.models.profile import Profile
+from src.services.browser.extensions import ExtensionEntry
 from src.ui.actions.profile import edit_profile
 from src.ui.app import App
-from src.ui.dialogs import cores
+from src.ui.dialogs import cookies, cores, export, extensions, log, mcp_guide
 from src.ui.dialogs.modal import show_modal_dialog, show_profile_editor
 from src.ui.dialogs.profile import open_profile_dialog
 from src.ui.dialogs.profile_field import open_profile_field_dialog
@@ -56,6 +57,46 @@ def _click_action(dialog, index):
     if isinstance(action, ft.KeyboardListener):
         action = action.content
     action.on_click(None)
+
+
+@pytest.mark.parametrize(
+    "kind", ["cookies", "extensions", "extension_settings", "export", "log", "mcp"]
+)
+def test_escape_dismisses_utility_dialog_and_restores_handlers(kind, monkeypatch):
+    page = DialogPage(notify_dismiss=False)
+    originals = (page.on_keyboard_event, page.on_resize)
+    profile = Profile("Chromium demo", engine="chrome")
+    service = SimpleNamespace(list_entries=lambda: [], usage_counts=lambda _: {})
+    pm = SimpleNamespace(list_profiles=lambda: [profile])
+    action = Mock()
+    if kind == "cookies":
+        cookies.open_cookie_dialog(page, profile.name, "", action, action, action)
+    elif kind == "extensions":
+        extensions.open_extensions_dialog(page, service, pm)
+    elif kind == "extension_settings":
+        entry = ExtensionEntry("demo", "Demo", "1", "", "", "")
+        extensions.open_extension_settings_dialog(page, entry, service, pm, on_saved=action)
+    elif kind == "export":
+        export.open_export_dialog(page, Mock(), [profile], action)
+    elif kind == "log":
+        log.open_log_dialog(page, [])
+    else:
+        monkeypatch.setattr(mcp_guide, "threading", SimpleNamespace(Thread=Mock()))
+        mcp_guide.open_mcp_guide(page, Mock())
+
+    if kind == "export":
+        cancel, _ = page.dialogs[-1].actions
+        cancel.disabled = True
+        _send_key(page, "Escape")
+        assert len(page.dialogs) == 1
+        cancel.disabled = False
+
+    _send_key(page, "Enter")
+    assert len(page.dialogs) == 1
+    _send_key(page, "Escape")
+    assert page.dialogs == []
+    assert (page.on_keyboard_event, page.on_resize) == originals
+    action.assert_not_called()
 
 
 def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handler():

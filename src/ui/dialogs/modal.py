@@ -7,7 +7,11 @@ _editor_lock = Lock()
 
 
 def show_modal_dialog(
-    page: ft.Page, dialog: ft.AlertDialog, *, local_keyboard: bool = False
+    page: ft.Page,
+    dialog: ft.AlertDialog,
+    *,
+    local_keyboard: bool = False,
+    can_close: Callable[[], bool] | None = None,
 ) -> Callable[[ft.ControlEvent | None], None]:
     previous_keyboard = getattr(page, "on_keyboard_event", None)
     previous_dismiss = dialog.on_dismiss
@@ -38,7 +42,7 @@ def show_modal_dialog(
         return top is dialog
 
     def close(event: ft.ControlEvent | None = None) -> None:
-        if not is_topmost():
+        if not is_topmost() or (can_close is not None and not can_close()):
             return
         try:
             page.pop_dialog()
