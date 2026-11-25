@@ -1,8 +1,10 @@
 from collections.abc import Callable
 from threading import Lock
+from time import monotonic
 
 import flet as ft
 
+_ESC_QUIET_SECONDS = 0.3
 _editor_lock = Lock()
 
 
@@ -13,7 +15,8 @@ def show_modal_dialog(
     local_keyboard: bool = False,
     can_close: Callable[[], bool] | None = None,
 ) -> Callable[[ft.ControlEvent | None], bool]:
-    previous_keyboard = getattr(page, "on_keyboard_event", None)
+    page_state = vars(page)
+    keyboard_links = page_state.setdefault("_ronc_modal_keyboard_links", {})
     previous_dismiss = dialog.on_dismiss
     dismissed = False
 
@@ -26,6 +29,10 @@ def show_modal_dialog(
             if previous_dismiss is not None:
                 previous_dismiss(event)
         finally:
+            previous_keyboard = keyboard_links.pop(keyboard_handler)
+            for handler, previous in keyboard_links.items():
+                if previous is keyboard_handler:
+                    keyboard_links[handler] = previous_keyboard
             if page.on_keyboard_event is keyboard_handler:
                 page.on_keyboard_event = previous_keyboard
                 page.update()
@@ -34,13 +41,21 @@ def show_modal_dialog(
         parent = dialog.parent
         if not dialog.open or parent is None:
             return False
-        # Flet keeps the closing dialog mounted until Flutter finishes dismissing it.
         top = next(
-            (item for item in reversed(parent.controls) if isinstance(item, ft.DialogControl)), None
+            (
+                item
+                for item in reversed(parent.controls)
+                if isinstance(item, ft.DialogControl) and item.open
+            ),
+            None,
         )
         return top is dialog
 
     def close(event: ft.ControlEvent | None = None) -> bool:
+        if dialog.parent is None:
+            dialog.open = False
+            dismiss(event)
+            return True
         if not is_topmost() or (can_close is not None and not can_close()):
             return False
         try:
@@ -50,8 +65,16 @@ def show_modal_dialog(
         return True
 
     def on_key(event: ft.KeyboardEvent | ft.KeyDownEvent) -> None:
-        if event.key == "Escape":
-            close()
+        if event.key != "Escape":
+            return
+        now = monotonic()
+        blocked_handler, last_escape = page_state.get("_ronc_escape_handoff", (None, 0.0))
+        # Flet reports Escape repeats as key downs, including after the dismiss event.
+        if blocked_handler is keyboard_handler and now - last_escape < _ESC_QUIET_SECONDS:
+            page_state["_ronc_escape_handoff"] = (blocked_handler, now)
+            return
+        if close():
+            page_state["_ronc_escape_handoff"] = (page.on_keyboard_event, now)
 
     keyboard_handler = on_key
     if local_keyboard:
@@ -63,13 +86,17 @@ def show_modal_dialog(
 
         async def restore_focus(event: ft.KeyboardEvent) -> None:
             # Flutter may move focus off the dialog's controls when closing a menu.
-            if event.key == "Escape" and is_topmost():
-                await body.focus()
+            if event.key == "Escape":
+                if dialog.parent is None:
+                    close()
+                elif is_topmost():
+                    await body.focus()
             ft.context.disable_auto_update()
 
         keyboard_handler = restore_focus
 
     dialog.on_dismiss = dismiss
+    keyboard_links[keyboard_handler] = getattr(page, "on_keyboard_event", None)
     page.on_keyboard_event = keyboard_handler
     try:
         page.show_dialog(dialog)

@@ -14,7 +14,7 @@ from src.models.profile import Profile
 from src.services.browser.extensions import ExtensionEntry
 from src.ui.actions.profile import edit_profile
 from src.ui.app import App
-from src.ui.dialogs import cookies, cores, export, extensions, log, mcp_guide
+from src.ui.dialogs import cookies, cores, export, extensions, log, mcp_guide, modal
 from src.ui.dialogs.modal import show_modal_dialog, show_profile_editor
 from src.ui.dialogs.profile import open_profile_dialog
 from src.ui.dialogs.profile_field import open_profile_field_dialog
@@ -101,7 +101,9 @@ def test_escape_dismisses_utility_dialog_and_restores_handlers(kind, monkeypatch
     action.assert_not_called()
 
 
-def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handler():
+def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handler(monkeypatch):
+    clock = iter([100.0, 101.0])
+    monkeypatch.setattr(modal, "monotonic", lambda: next(clock))
     page = DialogPage()
     original_keyboard = page.on_keyboard_event
     first, second = ft.AlertDialog(), ft.AlertDialog()
@@ -122,7 +124,12 @@ def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handle
     assert page.on_keyboard_event is original_keyboard
 
 
-def test_repeated_escape_closes_only_one_dialog_until_flet_finishes_dismissal():
+@pytest.mark.parametrize("flet_unmounts", [True, False])
+def test_repeated_escape_closes_only_one_dialog_until_flet_finishes_dismissal(
+    monkeypatch, flet_unmounts
+):
+    clock = 100.0
+    monkeypatch.setattr(modal, "monotonic", lambda: clock, raising=False)
     page = ft.Page(Mock())
     page.update = Mock()
     page._dialogs.update = Mock()
@@ -136,12 +143,24 @@ def test_repeated_escape_closes_only_one_dialog_until_flet_finishes_dismissal():
     page.on_keyboard_event(escape)
     assert not settings_dialog.open
     assert settings_dialog in page._dialogs.controls
+    clock += 0.2
+    page.on_keyboard_event(escape)
+    assert extensions_dialog.open
+    clock += 0.2
     page.on_keyboard_event(escape)
     assert extensions_dialog.open
 
-    asyncio.run(settings_dialog.on_dismiss(SimpleNamespace(data=False)))
-    assert page._dialogs.controls == [extensions_dialog]
+    if flet_unmounts:
+        asyncio.run(settings_dialog.on_dismiss(SimpleNamespace(data=False)))
+        assert page._dialogs.controls == [extensions_dialog]
+        clock += 0.2
+        page.on_keyboard_event(escape)
+        assert extensions_dialog.open
+    clock += 1
     page.on_keyboard_event(escape)
+    assert not extensions_dialog.open
+    if not flet_unmounts:
+        asyncio.run(settings_dialog.on_dismiss(SimpleNamespace(data=False)))
     asyncio.run(extensions_dialog.on_dismiss(SimpleNamespace(data=False)))
     assert page.on_keyboard_event is original_keyboard
     show_modal_dialog(page, extensions_dialog)
@@ -151,6 +170,7 @@ def test_repeated_escape_closes_only_one_dialog_until_flet_finishes_dismissal():
 
 def test_detached_dialog_does_not_pop_another_dialog():
     page = DialogPage()
+    original_keyboard = page.on_keyboard_event
     detached, current = ft.AlertDialog(), ft.AlertDialog()
     close_detached = show_modal_dialog(page, detached)
     show_modal_dialog(page, current)
@@ -159,11 +179,30 @@ def test_detached_dialog_does_not_pop_another_dialog():
     close_detached()
 
     assert page.dialogs == [detached, current]
+    assert not detached.open
     assert current.open
+    page.dialogs.remove(detached)
+    page.on_keyboard_event(SimpleNamespace(key="Escape"))
+    assert not page.dialogs
+    assert page.on_keyboard_event is original_keyboard
+
+
+def test_escape_restores_keyboard_handler_when_active_dialog_is_detached():
+    page = DialogPage()
+    original_keyboard = page.on_keyboard_event
+    dialog = ft.AlertDialog()
+    show_modal_dialog(page, dialog)
+    page.dialogs.remove(dialog)
+    dialog._parent = None
+
+    page.on_keyboard_event(SimpleNamespace(key="Escape"))
+
+    assert not dialog.open
+    assert page.on_keyboard_event is original_keyboard
 
 
 @pytest.mark.parametrize("settings_is_topmost", [True, False])
-def test_extension_settings_refreshes_only_after_closing(settings_is_topmost):
+def test_extension_settings_refreshes_after_persisting(settings_is_topmost):
     page = DialogPage()
     saved = Mock()
     service = SimpleNamespace(assign_profiles=Mock())
@@ -175,7 +214,8 @@ def test_extension_settings_refreshes_only_after_closing(settings_is_topmost):
         show_modal_dialog(page, ft.AlertDialog())
     _click_action(settings, -1)
 
-    assert saved.call_count == settings_is_topmost
+    service.assign_profiles.assert_called_once()
+    saved.assert_called_once_with()
     assert settings.open != settings_is_topmost
 
 
