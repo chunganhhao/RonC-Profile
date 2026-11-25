@@ -25,12 +25,14 @@ from src.ui.dialogs.warming import open_warming_dialog
 class DialogPage:
     def __init__(self, notify_dismiss=True):
         self.dialogs = []
+        self.dialog_parent = ft.Column(controls=self.dialogs)
         self.notify_dismiss = notify_dismiss
         self.update = Mock()
         self.on_resize = Mock()
         self.on_keyboard_event = Mock()
 
     def show_dialog(self, dialog):
+        dialog._parent = ref(self.dialog_parent)
         dialog.open = True
         self.dialogs.append(dialog)
 
@@ -113,10 +115,68 @@ def test_modal_escape_ignores_non_dialog_siblings_and_restores_underlying_handle
     assert page.dialogs == [first, second]
     page.on_keyboard_event(SimpleNamespace(key="Escape"))
     assert page.dialogs == [first]
+    parent.controls.remove(second)
     assert page.on_keyboard_event is first_keyboard
     page.on_keyboard_event(SimpleNamespace(key="Escape"))
     assert not page.dialogs
     assert page.on_keyboard_event is original_keyboard
+
+
+def test_repeated_escape_closes_only_one_dialog_until_flet_finishes_dismissal():
+    page = ft.Page(Mock())
+    page.update = Mock()
+    page._dialogs.update = Mock()
+    original_keyboard = page.on_keyboard_event
+    extensions_dialog, settings_dialog = ft.AlertDialog(), ft.AlertDialog()
+    extensions_dialog.update = settings_dialog.update = Mock()
+    show_modal_dialog(page, extensions_dialog)
+    show_modal_dialog(page, settings_dialog)
+    escape = SimpleNamespace(key="Escape")
+
+    page.on_keyboard_event(escape)
+    assert not settings_dialog.open
+    assert settings_dialog in page._dialogs.controls
+    page.on_keyboard_event(escape)
+    assert extensions_dialog.open
+
+    asyncio.run(settings_dialog.on_dismiss(SimpleNamespace(data=False)))
+    assert page._dialogs.controls == [extensions_dialog]
+    page.on_keyboard_event(escape)
+    asyncio.run(extensions_dialog.on_dismiss(SimpleNamespace(data=False)))
+    assert page.on_keyboard_event is original_keyboard
+    show_modal_dialog(page, extensions_dialog)
+    assert extensions_dialog.open
+    assert page._dialogs.controls == [extensions_dialog]
+
+
+def test_detached_dialog_does_not_pop_another_dialog():
+    page = DialogPage()
+    detached, current = ft.AlertDialog(), ft.AlertDialog()
+    close_detached = show_modal_dialog(page, detached)
+    show_modal_dialog(page, current)
+    detached._parent = None
+
+    close_detached()
+
+    assert page.dialogs == [detached, current]
+    assert current.open
+
+
+@pytest.mark.parametrize("settings_is_topmost", [True, False])
+def test_extension_settings_refreshes_only_after_closing(settings_is_topmost):
+    page = DialogPage()
+    saved = Mock()
+    service = SimpleNamespace(assign_profiles=Mock())
+    pm = SimpleNamespace(list_profiles=lambda: [])
+    entry = ExtensionEntry("demo", "Demo", "1", "", "", "")
+    extensions.open_extension_settings_dialog(page, entry, service, pm, on_saved=saved)
+    (settings,) = page.dialogs
+    if not settings_is_topmost:
+        show_modal_dialog(page, ft.AlertDialog())
+    _click_action(settings, -1)
+
+    assert saved.call_count == settings_is_topmost
+    assert settings.open != settings_is_topmost
 
 
 def test_failed_editor_open_does_not_block_retry(monkeypatch):

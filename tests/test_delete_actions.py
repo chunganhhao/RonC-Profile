@@ -1,12 +1,25 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
+from weakref import ref
 
+import flet as ft
 import pytest
 
 from src.core.strings import get_string
 from src.services.profile.manager import ProfileStoreChangedError
 from src.ui.actions import bulk, profile
 from src.ui.dialogs.confirm import open_confirm_dialog
+
+
+def _fake_show_dialog():
+    stack = ft.Column()
+
+    def show_dialog(dialog):
+        dialog.open = True
+        dialog._parent = ref(stack)
+        stack.controls.append(dialog)
+
+    return show_dialog
 
 
 @pytest.mark.parametrize("action", [bulk, profile])
@@ -68,7 +81,7 @@ def test_single_delete_confirmation_cancel(cancel_with_escape):
     log, refresh = Mock(), Mock()
     page = Mock()
     previous_keyboard_handler = page.on_keyboard_event
-    page.show_dialog.side_effect = lambda dialog: setattr(dialog, "open", True)
+    page.show_dialog.side_effect = _fake_show_dialog()
     profile.delete_profile(page, "first", pm, log, refresh)
     dialog = page.show_dialog.call_args.args[0]
     assert dialog.modal
@@ -90,7 +103,7 @@ def test_single_delete_confirmation_cancel(cancel_with_escape):
 
 def test_single_delete_confirmation_runs_before_close():
     page = Mock(on_keyboard_event=None)
-    page.show_dialog.side_effect = lambda dialog: setattr(dialog, "open", True)
+    page.show_dialog.side_effect = _fake_show_dialog()
     pm = SimpleNamespace(delete_profile=Mock())
     pm.delete_profile.side_effect = lambda _: page.pop_dialog.assert_not_called()
     profile.delete_profile(page, "first", pm, Mock(), Mock())
@@ -107,7 +120,7 @@ def test_single_delete_confirmation_runs_before_close():
 def test_confirm_dialog_restores_keyboard_handler_if_confirmation_fails():
     page = Mock()
     previous_keyboard_handler = page.on_keyboard_event
-    page.show_dialog.side_effect = lambda dialog: setattr(dialog, "open", True)
+    page.show_dialog.side_effect = _fake_show_dialog()
     confirm = Mock(side_effect=RuntimeError("confirmation failed"))
     open_confirm_dialog(page, "first", confirm)
     dialog = page.show_dialog.call_args.args[0]

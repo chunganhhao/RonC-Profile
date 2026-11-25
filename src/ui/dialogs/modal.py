@@ -12,7 +12,7 @@ def show_modal_dialog(
     *,
     local_keyboard: bool = False,
     can_close: Callable[[], bool] | None = None,
-) -> Callable[[ft.ControlEvent | None], None]:
+) -> Callable[[ft.ControlEvent | None], bool]:
     previous_keyboard = getattr(page, "on_keyboard_event", None)
     previous_dismiss = dialog.on_dismiss
     dismissed = False
@@ -31,23 +31,23 @@ def show_modal_dialog(
                 page.update()
 
     def is_topmost() -> bool:
-        if not dialog.open:
-            return False
         parent = dialog.parent
-        if parent is None:
-            return True
+        if not dialog.open or parent is None:
+            return False
+        # Flet keeps the closing dialog mounted until Flutter finishes dismissing it.
         top = next(
-            (item for item in reversed(parent.controls) if getattr(item, "open", False)), None
+            (item for item in reversed(parent.controls) if isinstance(item, ft.DialogControl)), None
         )
         return top is dialog
 
-    def close(event: ft.ControlEvent | None = None) -> None:
+    def close(event: ft.ControlEvent | None = None) -> bool:
         if not is_topmost() or (can_close is not None and not can_close()):
-            return
+            return False
         try:
             page.pop_dialog()
         finally:
             dismiss(event)
+        return True
 
     def on_key(event: ft.KeyboardEvent | ft.KeyDownEvent) -> None:
         if event.key == "Escape":
@@ -86,7 +86,7 @@ def show_profile_editor(
     prepare: Callable[[], None],
     *,
     local_keyboard: bool = False,
-) -> Callable[[ft.ControlEvent | None], None] | None:
+) -> Callable[[ft.ControlEvent | None], bool] | None:
     with _editor_lock:
         active = getattr(page, "_ronc_profile_editor", None)
         if isinstance(active, ft.AlertDialog) and active.open:

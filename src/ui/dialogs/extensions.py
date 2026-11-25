@@ -117,8 +117,7 @@ def open_extension_settings_dialog(
             return
         msg = get_string("ext_saved_toast", name=entry.name)
         log(msg)
-        close()
-        if on_saved:
+        if close() and on_saved:
             on_saved()
 
     body_container = ft.Container(

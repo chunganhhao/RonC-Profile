@@ -4,6 +4,7 @@ import errno
 import json
 import threading
 from types import SimpleNamespace
+from weakref import ref
 
 import flet as ft
 import pytest
@@ -66,6 +67,8 @@ class _DummyPage:
 
     def show_dialog(self, dlg):
         self.dialog = dlg
+        self.dialog_stack = ft.Column(controls=[dlg])
+        dlg._parent = ref(self.dialog_stack)
 
     def pop_dialog(self):
         self.closed = True
