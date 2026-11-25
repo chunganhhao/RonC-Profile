@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- App desktop: hộp thoại ngâm tài khoản điền sẵn tên chiến dịch theo ngôn ngữ đang dùng (“Ngâm 2 hồ sơ” trong tiếng Việt), hiển thị trọn gợi ý giờ chạy và gợi ý nhãn mặc định trong Kho Proxy không còn bị cắt.
+
 - App desktop đóng sáu hộp thoại bằng phím Esc, hiển thị trọn nhãn trường khi sửa nhanh profile và dùng “Giao diện” thay cho “Theme” trong phần cài đặt tiếng Việt.
 
 - App desktop nhớ ngôn ngữ, giao diện sáng/tối, màu nhấn, số dòng mỗi trang cùng kích thước và vị trí cửa sổ sau khi thoát và mở lại (vị trí chỉ khôi phục khi còn nằm trên một màn hình); bộ lọc profile vẫn trở về Tất cả.

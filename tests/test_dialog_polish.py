@@ -221,3 +221,72 @@ def test_chrome_display_summary_only_shows_pinned_dpr(monkeypatch, dpr):
         )
     finally:
         dialog.on_dismiss(None)
+
+
+def _dialog_from(page):
+    return page.show_dialog.call_args.args[0]
+
+
+def _open_warming(tmp_path, names):
+    from src.services.warming.scheduler import WarmingSchedulerService
+    from src.ui.dialogs.warming import open_warming_dialog
+
+    page = page_fake()
+    pm = SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name=n) for n in names])
+    service = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    open_warming_dialog(page, service, pm, SimpleNamespace())
+    return list(walk(_dialog_from(page).content))
+
+
+@pytest.mark.parametrize("language,name", [("vi", "Ngâm 2 hồ sơ"), ("en", "Warm 2 profile(s)")])
+def test_warming_default_task_name_is_localized(tmp_path, language, name):
+    original = current_language()
+    try:
+        set_language(language)
+        fields = [c for c in _open_warming(tmp_path, ["a", "b"]) if isinstance(c, ft.TextField)]
+        assert fields[0].value == name
+    finally:
+        set_language(original)
+
+
+@pytest.mark.parametrize("language", ["vi", "en"])
+def test_warming_schedule_hint_fits_its_field(tmp_path, language):
+    original = current_language()
+    try:
+        set_language(language)
+        hint = get_string("warming_schedule_hint")
+        field = next(
+            c
+            for c in _open_warming(tmp_path, ["a"])
+            if isinstance(c, ft.TextField) and c.hint_text == hint
+        )
+        # JetBrains Mono advances every glyph by 0.6 em; leave 16 px of padding per side.
+        assert field.width >= len(hint) * 0.6 * field.text_style.size + 32
+    finally:
+        set_language(original)
+
+
+@pytest.mark.parametrize("language", ["vi", "en"])
+def test_proxy_pool_tag_field_fills_its_row(tmp_path, language):
+    from src.services.proxy.pool import ProxyPoolService
+    from src.ui.dialogs.proxy_pool import open_proxy_pool_dialog
+
+    original = current_language()
+    try:
+        set_language(language)
+        page = page_fake()
+        pm = SimpleNamespace(list_profiles=lambda: [])
+        pool = ProxyPoolService(file_path=str(tmp_path / "proxies.json"))
+        open_proxy_pool_dialog(page, pool, SimpleNamespace(), pm)
+        hint = get_string("proxy_pool_tag_hint")
+        row = next(
+            c
+            for c in walk(_dialog_from(page).content)
+            if isinstance(c, ft.Row)
+            and any(isinstance(x, ft.TextField) and x.hint_text == hint for x in c.controls)
+        )
+        field = next(x for x in row.controls if isinstance(x, ft.TextField))
+        assert not row.wrap
+        assert field.width is None and field.expand
+    finally:
+        set_language(original)
