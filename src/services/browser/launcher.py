@@ -62,6 +62,7 @@ class BrowserControlError(Exception):
         *,
         error_code: str | None = None,
         unknown_state: bool | None = None,
+        page_id: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -69,6 +70,7 @@ class BrowserControlError(Exception):
         self.unknown_state = (
             bool(unknown_state) if unknown_state is not None else status in (409, 503, 504)
         )
+        self.page_id = page_id
 
 
 class BrowserLauncher:
@@ -233,6 +235,8 @@ class BrowserLauncher:
         timeout: float = 60,
         *,
         require_current: bool = False,
+        target_page_id: str | None = None,
+        return_page_id: bool = False,
     ) -> Any:
         """Run a page action in a running profile's browser and return its result."""
         with self._lock:
@@ -246,6 +250,8 @@ class BrowserLauncher:
         payload: dict[str, Any] = {"action": action, "params": params or {}}
         if require_current is not False:
             payload["require_current"] = require_current
+        if target_page_id is not None:
+            payload["target_page_id"] = target_page_id
         socket_timeout = timeout
         if timeout is not None and timeout > 0:
             payload["timeout_ms"] = max(1, int(timeout * 1000))
@@ -270,6 +276,7 @@ class BrowserLauncher:
                 status=e.code,
                 error_code=body.get("error_code"),
                 unknown_state=body.get("unknown_state"),
+                page_id=body.get("page_id"),
             ) from e
         except (urllib.error.URLError, TimeoutError) as e:
             raise BrowserControlError(
@@ -278,6 +285,8 @@ class BrowserLauncher:
                 error_code="transport_timeout",
                 unknown_state=True,
             ) from e
+        if return_page_id:
+            return body["result"], body.get("page_id")
         return body["result"]
 
     def running_profile_names(self) -> set[str]:

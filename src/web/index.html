@@ -407,6 +407,39 @@ input.ext-switch:checked::after { transform: translateX(16px); background: var(-
 .viewer-type { display: flex; gap: 8px; padding: 12px 16px; background: var(--paper); border-top: 1px solid var(--rule); }
 .viewer-type .btn { height: 40px; }
 
+/* Warming Studio */
+.warm-scenarios { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.warm-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px; border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--paper-raised); color: var(--ink); text-align: left; cursor: pointer; transition: border-color .15s, background-color .15s; min-width: 0; }
+.warm-card:hover { border-color: var(--ink-3); background: var(--row-hover); color: var(--ink); }
+.warm-card.active { border-color: var(--accent); background: var(--row-selected); color: var(--ink); }
+.warm-card-top { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; color: var(--ink-2); font-size: 11px; font-family: var(--data); }
+.warm-card.active .warm-card-top { color: var(--accent); }
+.warm-card-title { font-weight: 600; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.warm-card-desc { font-size: 11.5px; color: var(--ink-2); line-height: 1.35; }
+.warm-targets { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); max-height: 112px; overflow-y: auto; margin-top: 8px; }
+.warm-prof-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--paper-raised); color: var(--ink); font-size: 12.5px; cursor: pointer; }
+.warm-workspace { margin-top: 12px; padding: 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper-sunk); }
+.warm-ws-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.warm-ws-title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; }
+.warm-badge { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--rule-strong); background: var(--paper-raised); font-family: var(--ui); font-size: 11.5px; font-weight: 600; color: var(--ink-2); }
+.warm-steps { max-height: 172px; overflow-y: auto; border-radius: 8px; background: var(--paper-raised); padding: 4px 12px; margin-bottom: 12px; }
+.warm-step-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--rule); font-size: 12px; }
+.warm-step-row:last-child { border-bottom: 0; }
+.warm-step-idx { width: 24px; font-family: var(--data); font-size: 11px; color: var(--ink-3); flex: none; }
+.warm-step-act { padding: 4px 8px; border-radius: 4px; background: var(--chrome-bg); color: var(--chrome-ink); border: 1px solid var(--chrome-border); font-family: var(--data); font-size: 11px; font-weight: 600; flex: none; }
+.warm-step-det { flex: 1; min-width: 0; font-family: var(--data); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.warm-add-bar { display: grid; grid-template-columns: 128px minmax(0, 1.5fr) minmax(0, 1fr) auto; gap: 8px; margin-top: 8px; align-items: center; }
+.warm-sched-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.warm-sched-inputs { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.warm-tasks { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 220px; overflow-y: auto; }
+.warm-task-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); color: var(--ink); }
+.warm-task-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-family: var(--data); font-size: 11.5px; color: var(--ink-2); margin-top: 4px; }
+.warm-task-acts { display: flex; align-items: center; gap: 8px; flex: none; }
+@media (max-width: 780px) {
+  .warm-scenarios { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .warm-add-bar { grid-template-columns: minmax(0, 1fr); }
+}
+
 @keyframes fade { from { opacity: 0; } }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
@@ -479,6 +512,9 @@ input.ext-switch:checked::after { transform: translateX(16px); background: var(-
   <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
   <symbol id="i-first" viewBox="0 0 24 24"><path d="m11 17-5-5 5-5M18 17l-5-5 5-5"/></symbol>
   <symbol id="i-last" viewBox="0 0 24 24"><path d="m13 17 5-5-5-5M6 17l5-5-5-5"/></symbol>
+  <symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 2.5c.8 3.6-2.5 5.4-2.5 8.5a2.5 2.5 0 0 0 5 0c0-1.3-.5-2.4-1.2-3.3 2.8 1.3 4.7 4 4.7 7.1A6 6 0 0 1 6 14.8c0-3.7 2.8-6.4 6-12.3Z"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
 </svg>
 
 <div id="login" class="login hidden">
@@ -507,6 +543,7 @@ input.ext-switch:checked::after { transform: translateX(16px); background: var(-
     </nav>
     <div class="grow"></div>
     <div class="rail-foot">
+      <button class="rail-link" id="warming-btn"><svg class="i" aria-hidden="true"><use href="#i-flame"/></svg><span data-t="nav_warming"></span></button>
       <button class="rail-link" id="ext-btn"><svg class="i" aria-hidden="true"><use href="#i-ext"/></svg><span data-t="nav_extensions"></span><span class="count data" id="ext-count" style="margin-left:auto;font-size:11.5px;opacity:.8">0</span></button>
       <button class="rail-link" id="cores-btn"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg><span data-t="core_manager"></span></button>
       <button class="rail-link" id="mcp-btn"><svg class="i" aria-hidden="true"><use href="#i-bot"/></svg><span data-t="mcp_button"></span></button>
@@ -806,7 +843,59 @@ Object.assign(I18N.en, {
   footer_total: "Total: {n}", rows_per_page: "Rows per page", page_of: "Page {cur} of {tot}",
   chrome_cross_os: "This profile is set to {target}, but this computer runs {host}. Chrome profiles must use the same OS as this computer.",
   first_page: "First page", prev_page: "Previous page", next_page: "Next page", last_page: "Last page",
-  toolbar_running: "Running ({r})"
+  toolbar_running: "Running ({r})",
+  nav_warming: "Account Warming",
+  warm_title: "Account Warming Studio",
+  warm_sub: "Separate scenarios with human-like web interactions and visual step editing",
+  warm_targets: "Target Profiles",
+  warm_many_warn: "Sequential warming will run across {n} profiles",
+  warm_name: "Campaign Name",
+  warm_steps_title: "Interaction Playbook",
+  warm_steps_url_title: "URL Mode — Active Sites",
+  warm_steps_url_override_title: "URL Mode — Custom Override",
+  warm_steps_script_title: "Script Steps (Active)",
+  warm_steps_count: "{n} steps",
+  warm_sites_count: "{n} sites",
+  warm_url_template_note: "URL browse & scroll only. Click 'Edit steps as script' to load the {n}-step interactive template.",
+  warm_catalog_loading: "Loading interactive script templates...",
+  warm_catalog_unavailable: "Templates unavailable ({e})",
+  warm_catalog_retry: "Retry",
+  warm_still_running: "Task is already running or stopping. Try again in a moment.",
+  warm_replace_confirm: "Replace your unsaved script draft with this template?",
+  warm_replace_btn: "Replace draft",
+  warm_override_invalid: "No valid HTTP/HTTPS URLs found in Custom URLs. Clear the field to use default sites.",
+  warm_urls_ignored: "{n} unsupported or invalid URL(s) ignored (HTTP/HTTPS only)",
+  warm_timeout_err: "Request timed out while loading warming queue. Click Retry.",
+  warm_customize: "Edit steps as script",
+  warm_sample: "Insert Sample",
+  warm_tpl: "Templates:",
+  warm_payload_urls: "Custom URLs (optional override)",
+  warm_payload_script: "Script Steps JSON",
+  warm_add_step: "Add Step",
+  warm_duration: "Duration (mins)",
+  warm_schedule: "Daily Time (HH:MM)",
+  warm_repeat: "Repeat daily",
+  warm_save: "Save Schedule",
+  warm_run: "Run Warming Now",
+  warm_tasks_title: "Scheduled & Recent Tasks",
+  warm_loading: "Loading warming tasks...",
+  warm_empty: "No warming tasks yet. Pick a scenario above and save or run.",
+  warm_manual: "Manual",
+  warm_move_up: "Move step up",
+  warm_move_down: "Move step down",
+  warm_remove_step: "Remove step",
+  warm_json_sync_err: "Fix script JSON syntax before editing steps visually",
+  warm_card_youtube_trust_title: "YouTube & Google Trust",
+  warm_card_youtube_trust_desc: "News, search & feed scroll",
+  warm_card_social_news_title: "Social & News",
+  warm_card_social_news_desc: "Search type, PageDown & back",
+  warm_card_ecommerce_cookie_title: "E-Commerce Cookie",
+  warm_card_ecommerce_cookie_desc: "Catalog browse & reverse scroll",
+  warm_card_custom_title: "Custom URLs",
+  warm_card_custom_desc: "Direct site list with scroll",
+  warm_card_script_title: "Custom Script",
+  warm_card_script_desc: "Step builder & local JSON",
+  warm_invalid: "Enter a campaign name and select at least one target profile"
 });
 Object.assign(I18N.vi, {
   start_url: "URL mở mặc định",
@@ -843,7 +932,59 @@ Object.assign(I18N.vi, {
   footer_total: "Tổng cộng: {n}", rows_per_page: "Dòng mỗi trang", page_of: "Trang {cur} / {tot}",
   chrome_cross_os: "Profile này đặt hệ điều hành {target}, nhưng máy đang chạy {host}. Profile Chrome phải dùng cùng hệ điều hành với máy.",
   first_page: "Trang đầu", prev_page: "Trang trước", next_page: "Trang sau", last_page: "Trang cuối",
-  toolbar_running: "Đang mở ({r})"
+  toolbar_running: "Đang mở ({r})",
+  nav_warming: "Ngâm Tài Khoản",
+  warm_title: "Trạm Ngâm Tài Khoản (Warming Studio)",
+  warm_sub: "Tách riêng từng kịch bản, xem trước chuỗi hành động giống người thật và chỉnh từng bước",
+  warm_targets: "Hồ sơ mục tiêu",
+  warm_many_warn: "Sẽ chạy tuần tự trên {n} hồ sơ đã chọn",
+  warm_name: "Tên chiến dịch",
+  warm_steps_title: "Chuỗi hành động tương tác",
+  warm_steps_url_title: "Chế độ URL — Trang sẽ chạy",
+  warm_steps_url_override_title: "Chế độ URL — URL ghi đè",
+  warm_steps_script_title: "Kịch bản JSON (Sẽ chạy)",
+  warm_steps_count: "{n} bước",
+  warm_sites_count: "{n} trang",
+  warm_url_template_note: "Chỉ chạy mở URL & cuộn trang. Bấm 'Tách & sửa thành Kịch bản' để nạp mẫu tương tác {n} bước.",
+  warm_catalog_loading: "Đang tải mẫu kịch bản tương tác...",
+  warm_catalog_unavailable: "Không tải được mẫu ({e})",
+  warm_catalog_retry: "Thử lại",
+  warm_still_running: "Tác vụ đang chạy hoặc đang dừng. Hãy thử lại sau giây lát.",
+  warm_replace_confirm: "Ghi đè bản nháp kịch bản chưa lưu bằng mẫu này?",
+  warm_replace_btn: "Ghi đè bản nháp",
+  warm_override_invalid: "Không có URL HTTP/HTTPS hợp lệ trong ô URL tùy chỉnh. Xóa trắng để dùng trang mặc định.",
+  warm_urls_ignored: "Đã bỏ qua {n} URL không hợp lệ (chỉ hỗ trợ HTTP/HTTPS)",
+  warm_timeout_err: "Quá thời gian chờ tải hàng đợi ngâm tài khoản. Hãy bấm Thử lại.",
+  warm_customize: "Tách & sửa thành Kịch bản",
+  warm_sample: "Chèn mẫu JSON",
+  warm_tpl: "Mẫu sẵn:",
+  warm_payload_urls: "Danh sách URL tùy chỉnh (tùy chọn)",
+  warm_payload_script: "Kịch bản JSON các bước",
+  warm_add_step: "Thêm bước",
+  warm_duration: "Thời lượng (phút)",
+  warm_schedule: "Giờ chạy (HH:MM)",
+  warm_repeat: "Lặp lại hàng ngày",
+  warm_save: "Lưu lịch hẹn",
+  warm_run: "Chạy ngâm ngay",
+  warm_tasks_title: "Lịch hẹn & Tác vụ Ngâm",
+  warm_loading: "Đang tải danh sách tác vụ...",
+  warm_empty: "Chưa có tác vụ ngâm nào. Chọn kịch bản phía trên để lưu hoặc chạy.",
+  warm_manual: "Chạy tay",
+  warm_move_up: "Đưa bước lên",
+  warm_move_down: "Đưa bước xuống",
+  warm_remove_step: "Xóa bước",
+  warm_json_sync_err: "Hãy sửa lỗi JSON trước khi thao tác trực quan",
+  warm_card_youtube_trust_title: "YouTube & Google Trust",
+  warm_card_youtube_trust_desc: "Đọc tin tức, search & cuộn video",
+  warm_card_social_news_title: "Mạng xã hội & Tin tức",
+  warm_card_social_news_desc: "Gõ tìm kiếm, PageDown & Back",
+  warm_card_ecommerce_cookie_title: "Cookie Thương mại ĐT",
+  warm_card_ecommerce_cookie_desc: "Xem danh mục & cuộn ngược",
+  warm_card_custom_title: "Danh sách URL riêng",
+  warm_card_custom_desc: "Mở trang & cuộn đọc theo lượt",
+  warm_card_script_title: "Kịch bản Tùy biến",
+  warm_card_script_desc: "Thêm/sửa từng bước & JSON",
+  warm_invalid: "Hãy nhập tên chiến dịch và chọn ít nhất 1 hồ sơ mục tiêu"
 });
 const PAGE_SIZES = [5, 10, 20, 50, 100, 200];
 let pageSize = Number(store.get("foxprofile.pageSize")) || 20;
@@ -925,12 +1066,12 @@ function toast(msg, isError = false) {
 
 let authEpoch = 0;
 class ApiError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
-async function api(method, path, body, { raw = false, authToken = token } = {}) {
+async function api(method, path, body, { raw = false, authToken = token, signal = undefined } = {}) {
   const reqEpoch = authEpoch;
   const headers = {};
   if (authToken) headers.Authorization = "Bearer " + authToken;
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  const res = await fetch("/api/v1" + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const res = await fetch("/api/v1" + path, { method, headers, signal, body: body === undefined ? undefined : JSON.stringify(body) });
   if (res.status === 401) {
     if (reqEpoch === authEpoch && authToken === token) {
       token = "";
@@ -2137,6 +2278,677 @@ async function openExtensionsModal() {
       h("div", { class: "modal-foot" }, h("button", { type: "button", class: "btn btn-line", onclick: close }, t("close"))));
   }, { wide: true });
 }
+
+function parseWarmingUrlsWeb(rawText) {
+  const tokens = String(rawText || "").trim().split(/\s+/).filter(Boolean);
+  const valid = [];
+  let invalidCount = 0;
+  for (const tok of tokens) {
+    const colon = tok.indexOf(":");
+    const slash = tok.indexOf("/");
+    if (colon !== -1 && tok.slice(0, colon).includes("%") && (slash === -1 || colon < slash)) {
+      invalidCount += 1;
+      continue;
+    }
+    let candidate = tok;
+    const match = /^([a-zA-Z][a-zA-Z0-9+.-]*):(.*)$/s.exec(candidate);
+    if (!match || /^\d+(\/|$)/.test(match[2])) {
+      candidate = "https://" + candidate;
+    } else {
+      const sch = match[1].toLowerCase();
+      if ((sch !== "http" && sch !== "https") || !/^\/\/[^/\\?#]/.test(match[2])) {
+        invalidCount += 1;
+        continue;
+      }
+    }
+    const schemeSep = candidate.indexOf("://");
+    const authAndRest = schemeSep === -1 ? "" : candidate.slice(schemeSep + 3);
+    const authority = authAndRest.split(/[/?#]/, 1)[0];
+    if (!authority || authority.includes("\\")) {
+      invalidCount += 1;
+      continue;
+    }
+    try {
+      const u = new URL(candidate);
+      if ((u.protocol === "http:" || u.protocol === "https:") && u.hostname) valid.push(candidate);
+      else invalidCount += 1;
+    } catch {
+      invalidCount += 1;
+    }
+  }
+  return { tokens, valid, invalidCount };
+}
+
+function describeWarmStepWeb(step) {
+  const sStr = (v, max = 0) => (typeof v === "string" ? (max > 0 ? v.slice(0, max) : v) : "");
+  const sNum = (v, fallback) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+  const rawAct = sStr(step && step.action).trim();
+  const act = rawAct || "step";
+  if (act === "navigate" || act === "tab_new") {
+    const urlVal = step && step.url;
+    if (urlVal === null || urlVal === undefined) return [act, "Blank tab"];
+    if (typeof urlVal !== "string") return [act, "URL"];
+    const raw = urlVal.trim();
+    if (!raw) return [act, "Blank tab"];
+    try {
+      const u = new URL(raw.includes("://") ? raw : "https://" + raw);
+      if (!u.hostname) return [act, "URL"];
+      const p = u.pathname.length > 22 ? u.pathname.slice(0, 19) + "..." : u.pathname;
+      return [act, `${u.host}${p}`];
+    } catch { return [act, "URL"]; }
+  }
+  if (act === "wait") {
+    const sec = sNum(step && step.seconds, null);
+    if (sec !== null) return ["wait", `${sec}s`];
+    const minS = sNum(step && step.min_s, 1);
+    const maxS = sNum(step && step.max_s, 3);
+    return ["wait", `${minS}-${maxS}s`];
+  }
+  if (act === "scroll") {
+    const dy = Math.round(sNum(step && step.delta_y, 380));
+    return ["scroll", `${dy >= 0 ? "Down" : "Up"} ${Math.abs(dy)}px`];
+  }
+  if (act === "type") return ["type", `${sStr(step && step.selector, 24)} "${sStr(step && step.text, 20)}"${step && step.submit === true ? " + Enter" : ""}`];
+  if (act === "keyboard_type") return ["keyboard", `"${sStr(step && step.text, 24)}"`];
+  if (act === "click" || act === "wait_for") return [act, sStr(step && step.selector, 34)];
+  if (act === "press") {
+    const k = sStr(step && step.key);
+    const sel = sStr(step && step.selector, 20);
+    return ["press", sel ? `${k} (${sel})` : k];
+  }
+  if (act === "back") return ["back", "History back"];
+  if (act === "tab_select" || act === "tab_close") return [act, `Tab #${Math.trunc(sNum(step && step.index, 0))}`];
+  return [act, ""];
+}
+
+function openWarmingModal() {
+  let cleanup = () => {};
+  let closeModalFn = null;
+  const closeDialog = () => { cleanup(); if (closeModalFn) closeModalFn(); };
+  modal((close) => {
+    closeModalFn = close;
+    const initialTargets = new Set(selected.size ? [...selected] : profiles.slice(0, 1).map((p) => p.name));
+    let scenarios = [
+      { id: "youtube_trust", recommended_minutes: 4, default_urls: ["https://www.youtube.com", "https://www.google.com/search?q=technology+trends", "https://news.google.com"], sample_steps: [] },
+      { id: "social_news", recommended_minutes: 4, default_urls: ["https://www.wikipedia.org", "https://www.reddit.com", "https://news.ycombinator.com"], sample_steps: [] },
+      { id: "ecommerce_cookie", recommended_minutes: 4, default_urls: ["https://www.amazon.com", "https://www.ebay.com", "https://www.etsy.com"], sample_steps: [] },
+      { id: "custom", recommended_minutes: 3, default_urls: [], sample_steps: [] },
+      { id: "script", recommended_minutes: 3, default_urls: [], sample_steps: [] },
+    ];
+    let catalogState = "loading";
+    let catalogError = "";
+    let tasks = [];
+    let currentPreset = "youtube_trust";
+    const drafts = { url: "", script: "" };
+    let draftMode = "url";
+    let closed = false;
+    let pollTimer = null;
+    let queueAbort = null;
+    let inFlight = false;
+    let inFlightPromise = null;
+    let pendingRefresh = false;
+    let pendingInitial = false;
+    let tasksSeq = 0;
+    let lastTasksKey = "";
+    let mutationGen = 0;
+    let queueErrorMsg = "";
+    cleanup = () => {
+      if (closed) return;
+      closed = true;
+      if (pollTimer !== null) { clearTimeout(pollTimer); pollTimer = null; }
+      if (queueAbort) { queueAbort.abort(); queueAbort = null; }
+    };
+
+    const scenariosGrid = h("div", { class: "warm-scenarios" });
+    const targetsBox = h("div", { class: "warm-targets" });
+    const warnNote = h("div", { class: "note hidden" });
+    const nameInput = h("input", { id: "warm-name", type: "text", value: `Warm ${initialTargets.size} profile(s)` });
+    const stepsTitle = h("span", {}, t("warm_steps_url_title"));
+    const stepsCountBadge = h("span", { class: "warm-badge" });
+    const customizeBtn = h("button", { type: "button", id: "warm-customize-btn", class: "btn btn-line", style: "height:30px;padding:0 10px;font-size:12px", disabled: true }, t("warm_customize"));
+    const tplRow = h("div", { class: "inline-btns hidden", style: "margin-top:0;margin-bottom:8px;align-items:center" });
+    const modeNote = h("div", { id: "warm-mode-note", class: "muted", style: "font-size:12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap" });
+    const stepsList = h("div", { id: "warm-steps", class: "warm-steps" });
+    const payloadLabel = h("label", { for: "warm-payload" }, t("warm_payload_urls"));
+    const payloadArea = h("textarea", { id: "warm-payload", class: "data", rows: 3 });
+    const addAction = h("select", { id: "warm-add-action" },
+      ["navigate", "wait", "scroll", "type", "click", "press", "wait_for", "back"].map((a) => h("option", { value: a }, a)));
+    const addVal = h("input", { id: "warm-add-val", type: "text", placeholder: "https://example.com" });
+    const addExtra = h("input", { id: "warm-add-extra", type: "text", class: "hidden", placeholder: "Search text" });
+    const addStepBtn = h("button", { type: "button", id: "warm-add-btn", class: "btn btn-line" }, t("warm_add_step"));
+    const addBar = h("div", { class: "warm-add-bar hidden" }, addAction, addVal, addExtra, addStepBtn);
+    const durInput = h("input", { id: "warm-duration", type: "text", value: "4", style: "width:96px" });
+    const schedInput = h("input", { id: "warm-schedule", type: "text", placeholder: "09:30", style: "width:140px" });
+    const repeatCheck = h("input", { id: "warm-repeat", type: "checkbox", checked: true });
+    const msgBox = h("div", { id: "warm-msg", class: "msg hidden", role: "alert" });
+    const saveBtn = h("button", { type: "button", id: "warm-save-btn", class: "btn btn-line" }, t("warm_save"));
+    const runBtn = h("button", { type: "button", id: "warm-run-btn", class: "btn btn-act" }, icon("play", true), t("warm_run"));
+    const queueErrBox = h("div", { class: "hidden" });
+    const tasksList = h("div", { style: "display:flex;flex-direction:column;gap:8px" }, h("div", { class: "note calm" }, t("warm_loading")));
+    const tasksBox = h("div", { id: "warm-tasks", class: "warm-tasks" }, queueErrBox, tasksList);
+
+    const isValidStepObj = (st) => Boolean(st && typeof st === "object" && !Array.isArray(st) && typeof st.action === "string" && st.action.trim());
+    const isValidCatalog = (list) => Array.isArray(list) && ["youtube_trust", "social_news", "ecommerce_cookie", "script"].every((reqId) => {
+      const entry = list.find((item) => item && item.id === reqId);
+      return Boolean(entry && Array.isArray(entry.sample_steps) && entry.sample_steps.length > 0 && entry.sample_steps.every(isValidStepObj));
+    });
+    const tplButtons = ["youtube_trust", "social_news", "ecommerce_cookie"].map((tid) =>
+      h("button", { type: "button", class: "btn btn-line", style: "height:28px;padding:0 10px;font-size:12px", "data-warm-tpl": tid, disabled: true, onclick: () => loadTemplate(tid) }, t(`warm_card_${tid}_title`))
+    );
+    const sampleBtn = h("button", { type: "button", id: "warm-sample-btn", class: "btn btn-ghost", style: "height:28px;padding:0 10px;font-size:12px", disabled: true, onclick: () => loadTemplate("script") }, t("warm_sample"));
+    const syncCatalogControls = () => {
+      const notReady = catalogState !== "ready";
+      customizeBtn.disabled = notReady;
+      sampleBtn.disabled = notReady;
+      for (const b of tplButtons) b.disabled = notReady;
+    };
+
+    const showMsg = (cls, txt) => {
+      msgBox.className = txt ? `msg ${cls}` : "msg hidden";
+      msgBox.textContent = txt || "";
+    };
+    const setQueueError = (msg) => {
+      queueErrorMsg = msg || "";
+      if (queueErrorMsg) {
+        queueErrBox.className = "msg err";
+        queueErrBox.setAttribute("role", "alert");
+        queueErrBox.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:0";
+        queueErrBox.replaceChildren(
+          h("span", {}, queueErrorMsg),
+          h("button", { type: "button", class: "btn btn-line", style: "height:28px;padding:0 12px;font-size:12px", onclick: () => fetchWarmingState({ initial: catalogState !== "ready", force: true }) }, t("warm_catalog_retry"))
+        );
+      } else {
+        queueErrBox.className = "hidden";
+        queueErrBox.removeAttribute("role");
+        queueErrBox.style.cssText = "";
+        queueErrBox.replaceChildren();
+      }
+      tasksList.classList.toggle("hidden", !tasks.length && Boolean(queueErrorMsg));
+    };
+    const updateTargetsWarn = () => {
+      const n = initialTargets.size;
+      warnNote.className = n > 5 ? "note" : "note hidden";
+      warnNote.replaceChildren(icon("alert", true), h("span", {}, t("warm_many_warn", { n })));
+    };
+    const renderTargets = () => {
+      targetsBox.replaceChildren(
+        ...profiles.map((p) => {
+          const cb = h("input", {
+            type: "checkbox",
+            checked: initialTargets.has(p.name),
+            onchange: (e) => {
+              e.target.checked ? initialTargets.add(p.name) : initialTargets.delete(p.name);
+              nameInput.value = `Warm ${initialTargets.size} profile(s)`;
+              updateTargetsWarn();
+            },
+          });
+          return h("label", { class: "warm-prof-chip" }, cb, h("span", {}, p.name));
+        })
+      );
+      updateTargetsWarn();
+    };
+    const parseDraftSteps = () => {
+      const raw = payloadArea.value.trim();
+      if (!raw) return [[], null];
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [[], "Script must be a JSON array"];
+        for (let i = 0; i < parsed.length; i++) {
+          const item = parsed[i];
+          if (!item || typeof item !== "object" || Array.isArray(item) || typeof item.action !== "string" || !item.action.trim()) {
+            return [[], `Step ${i + 1} must be a JSON object with a string 'action'`];
+          }
+        }
+        return [parsed, null];
+      } catch (e) { return [[], e.message]; }
+    };
+    const writeDraftSteps = (steps) => {
+      const jsonStr = JSON.stringify(steps, null, 2);
+      payloadArea.value = jsonStr;
+      drafts.script = jsonStr;
+      renderSteps();
+    };
+    const renderSteps = () => {
+      const sc = scenarios.find((s) => s.id === currentPreset);
+      const isBuiltin = ["youtube_trust", "social_news", "ecommerce_cookie"].includes(currentPreset);
+      let steps = [];
+      let editable = false;
+      let err = null;
+      let invalidUrls = 0;
+      if (currentPreset === "script") {
+        editable = true;
+        [steps, err] = parseDraftSteps();
+        stepsTitle.textContent = t("warm_steps_script_title");
+      } else {
+        const parsedUrls = parseWarmingUrlsWeb(payloadArea.value);
+        invalidUrls = parsedUrls.invalidCount;
+        if (parsedUrls.tokens.length > 0 && !parsedUrls.valid.length) {
+          steps = [];
+          err = t("warm_override_invalid");
+          stepsTitle.textContent = t(isBuiltin ? "warm_steps_url_override_title" : "warm_steps_url_title");
+        } else {
+          const usingOverride = parsedUrls.valid.length > 0;
+          const defaultUrls = (sc && Array.isArray(sc.default_urls)) ? sc.default_urls : [];
+          const effectiveUrls = usingOverride ? parsedUrls.valid : defaultUrls;
+          steps = effectiveUrls.flatMap((u) => [
+            { action: "navigate", url: u },
+            { action: "scroll", delta_y: 480 },
+          ]);
+          stepsTitle.textContent = t(isBuiltin && usingOverride ? "warm_steps_url_override_title" : "warm_steps_url_title");
+        }
+      }
+      const noteChildren = [];
+      if (invalidUrls > 0 && !err) {
+        noteChildren.push(h("span", { style: "color:var(--warn-ink)" }, t("warm_urls_ignored", { n: invalidUrls })));
+      }
+      if (catalogState === "error") {
+        noteChildren.push(
+          h("span", { style: "color:var(--err)" }, t("warm_catalog_unavailable", { e: catalogError || "Error" })),
+          h("button", { type: "button", id: "warm-retry-btn", class: "btn btn-line", style: "height:28px;padding:0 12px;font-size:12px", onclick: () => fetchWarmingState({ initial: true, force: true }) }, t("warm_catalog_retry"))
+        );
+      } else if (isBuiltin && !err && invalidUrls === 0) {
+        if (catalogState === "ready" && sc && sc.sample_steps.length) {
+          noteChildren.push(h("span", {}, t("warm_url_template_note", { n: sc.sample_steps.length })));
+        } else {
+          noteChildren.push(h("span", {}, t("warm_catalog_loading")));
+        }
+      }
+      if (noteChildren.length) {
+        modeNote.className = "muted";
+        modeNote.replaceChildren(...noteChildren);
+      } else {
+        modeNote.className = "hidden";
+        modeNote.replaceChildren();
+      }
+      stepsCountBadge.textContent = t("warm_steps_count", { n: steps.length });
+      if (err) {
+        stepsList.replaceChildren(h("div", { class: "msg err", style: "margin:4px 0" }, err));
+        return;
+      }
+      if (!steps.length) {
+        stepsList.replaceChildren(h("div", { class: "muted", style: "padding:8px 0;font-size:12px" }, t(`warm_card_${currentPreset}_desc`)));
+        return;
+      }
+      stepsList.replaceChildren(
+        ...steps.map((st, idx) => {
+          const [act, det] = describeWarmStepWeb(st);
+          const row = h("div", { class: "warm-step-row" },
+            h("span", { class: "warm-step-idx" }, String(idx + 1).padStart(2, "0")),
+            h("span", { class: "warm-step-act" }, st && st.optional === true ? `${act}?` : act),
+            h("span", { class: "warm-step-det", title: det }, det)
+          );
+          if (editable) {
+            const up = h("button", { type: "button", class: "icon-btn", "data-step-up": String(idx), "aria-label": t("warm_move_up"), disabled: idx === 0, onclick: () => {
+              const [cur, e] = parseDraftSteps();
+              if (e || idx <= 0) return showMsg("err", t("warm_json_sync_err"));
+              [cur[idx - 1], cur[idx]] = [cur[idx], cur[idx - 1]];
+              writeDraftSteps(cur);
+            } }, icon("up", true));
+            const down = h("button", { type: "button", class: "icon-btn", "data-step-down": String(idx), "aria-label": t("warm_move_down"), disabled: idx === steps.length - 1, onclick: () => {
+              const [cur, e] = parseDraftSteps();
+              if (e || idx >= cur.length - 1) return showMsg("err", t("warm_json_sync_err"));
+              [cur[idx], cur[idx + 1]] = [cur[idx + 1], cur[idx]];
+              writeDraftSteps(cur);
+            } }, icon("down", true));
+            const del = h("button", { type: "button", class: "icon-btn danger", "data-step-del": String(idx), "aria-label": t("warm_remove_step"), onclick: () => {
+              const [cur, e] = parseDraftSteps();
+              if (e) return showMsg("err", t("warm_json_sync_err"));
+              cur.splice(idx, 1);
+              writeDraftSteps(cur);
+            } }, icon("x", true));
+            row.append(up, down, del);
+          }
+          return row;
+        })
+      );
+    };
+    const renderCards = () => {
+      scenariosGrid.replaceChildren(
+        ...scenarios.map((s) => {
+          const isAct = s.id === currentPreset;
+          const cnt = ["youtube_trust", "social_news", "ecommerce_cookie"].includes(s.id)
+            ? t("warm_sites_count", { n: (s.default_urls || []).length })
+            : (s.id === "custom" ? "URL" : "JSON");
+          return h("button", {
+            type: "button",
+            class: "warm-card" + (isAct ? " active" : ""),
+            "data-scenario": s.id,
+            onclick: () => selectScenario(s.id, true),
+          },
+            h("span", { class: "warm-card-top" }, h("span", {}, s.id === "script" ? "JSON" : `${s.recommended_minutes}m`), h("span", {}, cnt)),
+            h("span", { class: "warm-card-title" }, t(`warm_card_${s.id}_title`)),
+            h("span", { class: "warm-card-desc" }, t(`warm_card_${s.id}_desc`))
+          );
+        })
+      );
+    };
+    const selectScenario = (id, updateDur = false) => {
+      currentPreset = id;
+      const isScript = id === "script";
+      const isBuiltin = ["youtube_trust", "social_news", "ecommerce_cookie"].includes(id);
+      const nextMode = isScript ? "script" : "url";
+      if (nextMode !== draftMode) {
+        drafts[draftMode] = payloadArea.value;
+        draftMode = nextMode;
+        payloadArea.value = drafts[nextMode];
+      }
+      if (updateDur) {
+        const sc = scenarios.find((s) => s.id === id);
+        if (sc) durInput.value = String(sc.recommended_minutes);
+      }
+      customizeBtn.classList.toggle("hidden", !isBuiltin);
+      tplRow.classList.toggle("hidden", !isScript);
+      addBar.classList.toggle("hidden", !isScript);
+      payloadLabel.textContent = t(isScript ? "warm_payload_script" : "warm_payload_urls");
+      payloadArea.rows = isScript ? 4 : 2;
+      renderCards();
+      renderSteps();
+    };
+    const loadTemplate = async (tplId) => {
+      if (catalogState !== "ready") return;
+      const sc = scenarios.find((s) => s.id === tplId);
+      if (!sc || !Array.isArray(sc.sample_steps) || !sc.sample_steps.length) return;
+      const targetJson = JSON.stringify(sc.sample_steps, null, 2);
+      const existing = (draftMode === "script" ? payloadArea.value : drafts.script).trim();
+      if (existing && existing !== targetJson) {
+        const ok = await confirmDialog(t("warm_replace_confirm"), t("warm_replace_btn"));
+        if (!ok || closed) return;
+      }
+      selectScenario("script", false);
+      durInput.value = String(sc.recommended_minutes || 4);
+      writeDraftSteps(sc.sample_steps);
+    };
+    customizeBtn.onclick = () => loadTemplate(currentPreset);
+    tplRow.append(h("span", { class: "muted", style: "font-size:12px" }, t("warm_tpl")), ...tplButtons, sampleBtn);
+    payloadArea.oninput = renderSteps;
+    addAction.onchange = () => {
+      const a = addAction.value;
+      addVal.classList.toggle("hidden", a === "back");
+      addExtra.classList.toggle("hidden", a !== "type" && a !== "wait");
+      addVal.placeholder = a === "navigate" ? "https://example.com" : a === "wait" ? "Min s (4)" : a === "scroll" ? "Delta Y (480)" : a === "press" ? "PageDown" : "#selector";
+      addExtra.placeholder = a === "wait" ? "Max s (9)" : "Text to type";
+    };
+    addStepBtn.onclick = () => {
+      const [cur, err] = parseDraftSteps();
+      if (err) return showMsg("err", t("warm_json_sync_err"));
+      const a = addAction.value;
+      const v = addVal.value.trim();
+      const ex = addExtra.value.trim();
+      let step;
+      if (a === "navigate") step = { action: "navigate", url: v || "https://example.com" };
+      else if (a === "wait") {
+        const minS = Number(v || 3);
+        if (!Number.isFinite(minS) || minS < 0 || minS > 120) {
+          return showMsg("err", "Wait seconds must be between 0 and 120");
+        }
+        if (ex) {
+          const maxS = Number(ex);
+          if (!Number.isFinite(maxS) || maxS < minS || maxS > 120) {
+            return showMsg("err", "Wait max_s must be between min_s and 120");
+          }
+          step = { action: "wait", min_s: minS, max_s: maxS };
+        } else {
+          step = { action: "wait", seconds: minS };
+        }
+      } else if (a === "scroll") {
+        const dy = Number(v || 480);
+        if (!Number.isFinite(dy) || dy < -10000 || dy > 10000) {
+          return showMsg("err", "Scroll delta_y must be between -10000 and 10000");
+        }
+        step = { action: "scroll", delta_y: dy, humanize: true };
+      }
+      else if (a === "type") step = { action: "type", selector: v || "input", text: ex || "news", submit: true };
+      else if (a === "click" || a === "wait_for") step = { action: a, selector: v || "a" };
+      else if (a === "press") step = { action: "press", key: v || "PageDown" };
+      else step = { action: "back" };
+      cur.push(step);
+      addVal.value = "";
+      addExtra.value = "";
+      showMsg("", "");
+      writeDraftSteps(cur);
+    };
+    const renderTasks = () => {
+      if (!tasks.length) {
+        tasksList.replaceChildren(h("div", { class: "note calm" }, t("warm_empty")));
+        tasksList.classList.toggle("hidden", Boolean(queueErrorMsg));
+        return;
+      }
+      tasksList.classList.remove("hidden");
+      tasksList.replaceChildren(
+        ...[...tasks].reverse().map((tk) => {
+          const isRun = tk.status === "running";
+          const stCls = isRun ? "stamp" : tk.status === "completed" ? "stamp" : tk.status === "failed" ? "stamp failed" : "stamp pending";
+          const actBtn = h("button", { type: "button", class: "btn btn-line", style: "height:30px;padding:0 10px;font-size:12px", onclick: async () => {
+            try {
+              const runRes = await api("POST", `/warming/tasks/${enc(tk.id)}/${isRun ? "stop" : "run"}`);
+              mutationGen += 1;
+              if (!isRun && runRes && runRes.started === false) showMsg("err", t("warm_still_running"));
+              if (inFlight) void fetchWarmingState({ force: true });
+              else await fetchWarmingState({ force: true });
+            } catch (e) { showMsg("err", e.message); }
+          } }, icon(isRun ? "stop" : "play", true), t(isRun ? "stop" : "launch"));
+          const delBtn = h("button", { type: "button", class: "icon-btn danger", "data-warm-del": tk.id, title: t("delete"), "aria-label": `${t("delete")}: ${tk.name}`, onclick: async () => {
+            try {
+              await api("DELETE", `/warming/tasks/${enc(tk.id)}`);
+              mutationGen += 1;
+              tasks = tasks.filter((x) => x.id !== tk.id);
+              lastTasksKey = JSON.stringify(tasks);
+              renderTasks();
+              if (inFlight) void fetchWarmingState({ force: true });
+              else await fetchWarmingState({ force: true });
+            } catch (e) { showMsg("err", e.message); }
+          } }, icon("trash", true));
+          return h("div", { class: "warm-task-row" },
+            h("div", { style: "min-width:0;flex:1" },
+              h("div", { style: "font-weight:600;font-size:13.5px" }, tk.name),
+              h("div", { class: "warm-task-meta" },
+                h("span", {}, tk.preset === "script" ? `script (${(tk.script_steps || []).length} steps)` : tk.preset),
+                h("span", {}, `${(tk.profile_names || []).length} profiles`),
+                h("span", {}, `${tk.duration_minutes}m`),
+                h("span", {}, tk.schedule_time || t("warm_manual"))
+              )
+            ),
+            h("div", { class: "warm-task-acts" },
+              h("span", { class: stCls, style: "min-width:74px" }, tk.last_result || tk.status),
+              actBtn,
+              delBtn
+            )
+          );
+        })
+      );
+    };
+    const GET_TIMEOUT_MS = 5000;
+    let dialogBox = null;
+    const schedulePoll = () => {
+      if (closed || catalogState === "error" || pollTimer !== null || (dialogBox && !dialogBox.isConnected)) return;
+      pollTimer = setTimeout(() => {
+        pollTimer = null;
+        if (closed || catalogState === "error" || (dialogBox && !dialogBox.isConnected)) { cleanup(); return; }
+        if (document.hidden) schedulePoll();
+        else fetchWarmingState();
+      }, 2000);
+    };
+    const fetchWarmingState = async ({ initial = false, force = false } = {}) => {
+      if (closed) return;
+      if (inFlight) {
+        if (force || initial) {
+          pendingRefresh = true;
+          if (initial) pendingInitial = true;
+        }
+        return inFlightPromise;
+      }
+      if (pollTimer !== null) { clearTimeout(pollTimer); pollTimer = null; }
+      inFlight = true;
+      const seq = ++tasksSeq;
+      const startMutationGen = mutationGen;
+      const ac = new AbortController();
+      queueAbort = ac;
+      let timedOut = false;
+      const reqTimer = setTimeout(() => { timedOut = true; ac.abort(); }, GET_TIMEOUT_MS);
+      if (initial || catalogState === "error") {
+        catalogState = "loading";
+        catalogError = "";
+        syncCatalogControls();
+        renderSteps();
+      }
+      const run = (async () => {
+        try {
+          const res = await api("GET", "/warming/tasks", undefined, { signal: ac.signal });
+          if (closed || seq !== tasksSeq) return;
+          setQueueError("");
+          if (initial || catalogState !== "ready") {
+            if (isValidCatalog(res.scenarios)) {
+              scenarios = res.scenarios;
+              catalogState = "ready";
+              catalogError = "";
+            } else {
+              catalogState = "error";
+              catalogError = "Invalid scenario catalog";
+            }
+            syncCatalogControls();
+            renderCards();
+            renderSteps();
+          }
+          if (startMutationGen !== mutationGen) {
+            pendingRefresh = true;
+          } else {
+            const nextTasks = Array.isArray(res.tasks) ? res.tasks : [];
+            const nextKey = JSON.stringify(nextTasks);
+            if (nextKey !== lastTasksKey) {
+              lastTasksKey = nextKey;
+              tasks = nextTasks;
+              renderTasks();
+            }
+          }
+        } catch (e) {
+          if (e && e.name === "AbortError" && !timedOut) return;
+          if (closed || seq !== tasksSeq) return;
+          const errMsg = timedOut ? t("warm_timeout_err") : (e.message || "Request failed");
+          if (initial || catalogState !== "ready") {
+            catalogState = "error";
+            catalogError = errMsg;
+            syncCatalogControls();
+            renderSteps();
+          }
+          if (timedOut) {
+            pendingRefresh = false;
+            pendingInitial = false;
+          }
+          setQueueError(errMsg);
+        } finally {
+          clearTimeout(reqTimer);
+          if (queueAbort === ac) queueAbort = null;
+          inFlight = false;
+          inFlightPromise = null;
+          if (closed || (dialogBox && !dialogBox.isConnected)) {
+            cleanup();
+          } else if (pendingRefresh) {
+            const nextInit = pendingInitial;
+            pendingRefresh = false;
+            pendingInitial = false;
+            fetchWarmingState({ initial: nextInit, force: true });
+          } else {
+            schedulePoll();
+          }
+        }
+      })();
+      inFlightPromise = run;
+      return run;
+    };
+    const submitTask = async (runNow) => {
+      showMsg("", "");
+      const targetList = [...initialTargets];
+      if (!nameInput.value.trim() || !targetList.length) {
+        return showMsg("err", t("warm_invalid"));
+      }
+      const dur = parseInt(durInput.value.trim(), 10) || 3;
+      const body = {
+        name: nameInput.value.trim(),
+        profile_names: targetList,
+        preset: currentPreset,
+        duration_minutes: Math.max(1, Math.min(60, dur)),
+        schedule_time: runNow ? "" : schedInput.value.trim(),
+        repeat_daily: Boolean(repeatCheck.checked),
+        enabled: true,
+      };
+      if (currentPreset === "script") {
+        const [steps, err] = parseDraftSteps();
+        if (err) return showMsg("err", err);
+        body.script_steps = steps;
+      } else {
+        const parsedUrls = parseWarmingUrlsWeb(payloadArea.value);
+        if ((currentPreset === "custom" || parsedUrls.tokens.length > 0) && !parsedUrls.valid.length) {
+          return showMsg("err", t("warm_override_invalid"));
+        }
+        body.custom_urls = parsedUrls.valid;
+      }
+      let createdOk = false;
+      saveBtn.disabled = runBtn.disabled = true;
+      try {
+        const created = await api("POST", "/warming/tasks", body);
+        mutationGen += 1;
+        createdOk = true;
+        if (created && created.id && !tasks.some((x) => x.id === created.id)) {
+          tasks = [...tasks, created];
+          lastTasksKey = JSON.stringify(tasks);
+          renderTasks();
+        }
+        if (runNow && created && created.id) {
+          const runRes = await api("POST", `/warming/tasks/${enc(created.id)}/run`);
+          mutationGen += 1;
+          if (runRes && runRes.started === false) showMsg("err", t("warm_still_running"));
+          else showMsg("ok", t("saved"));
+        } else {
+          showMsg("ok", t("saved"));
+        }
+      } catch (e) {
+        showMsg("err", e.message);
+      } finally {
+        saveBtn.disabled = runBtn.disabled = false;
+      }
+      if (createdOk) void fetchWarmingState({ force: true });
+    };
+    saveBtn.onclick = () => submitTask(false);
+    runBtn.onclick = () => submitTask(true);
+
+    dialogBox = h("div", {},
+      modalHead(t("warm_title"), t("warm_sub"), closeDialog),
+      h("div", { class: "modal-body" },
+        h("div", { class: "field", style: "margin-top:8px" }, h("label", {}, t("warm_targets")), targetsBox, warnNote),
+        scenariosGrid,
+        h("div", { class: "field" }, h("label", { for: "warm-name" }, t("warm_name")), nameInput),
+        h("div", { class: "warm-workspace" },
+          h("div", { class: "warm-ws-head" },
+            h("div", { class: "warm-ws-title" }, stepsTitle, stepsCountBadge),
+            customizeBtn),
+          tplRow,
+          modeNote,
+          stepsList,
+          h("div", { class: "field", style: "margin-top:6px" }, payloadLabel, payloadArea),
+          addBar),
+        h("div", { class: "warm-sched-row" },
+          h("div", { class: "warm-sched-inputs" },
+            h("div", { class: "field", style: "margin-top:0" }, h("label", { for: "warm-duration" }, t("warm_duration")), durInput),
+            h("div", { class: "field", style: "margin-top:0" }, h("label", { for: "warm-schedule" }, t("warm_schedule")), schedInput),
+            h("label", { class: "check", style: "margin-bottom:8px" }, repeatCheck, h("span", {}, t("warm_repeat")))
+          ),
+          h("div", { class: "inline-btns", style: "margin-top:0" }, saveBtn, runBtn)
+        ),
+        msgBox,
+        h("div", { class: "step" }, t("warm_tasks_title")),
+        tasksBox
+      ),
+      h("div", { class: "modal-foot" }, h("button", { type: "button", class: "btn btn-line", onclick: closeDialog }, t("close"))));
+
+    renderTargets();
+    selectScenario("youtube_trust", true);
+    syncCatalogControls();
+    fetchWarmingState({ initial: true });
+
+    return dialogBox;
+  }, { wide: true, onDismiss: closeDialog });
+}
+$("warming-btn").onclick = openWarmingModal;
 $("ext-btn").onclick = openExtensionsModal;
 $("cores-btn").onclick = openCores;
 $("new-btn").onclick = () => openEditor(null);

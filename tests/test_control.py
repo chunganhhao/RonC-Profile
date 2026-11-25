@@ -362,6 +362,33 @@ def test_control_server_rejects_closed_target_on_tab_select_and_require_current(
         # 4. require_current=False still falls back to remaining open tab0
         bl.control("p", "back", {}, require_current=False)
         assert tab0.events == ["back"]
+
+        # 5. target_page_id validates type/non-empty and rejects tab_select switch while open
+        with pytest.raises(BrowserControlError) as exc_bad_pid:
+            bl.control("p", "tabs", {}, target_page_id="")
+        assert exc_bad_pid.value.status == 400
+
+        res_back, pid2 = bl.control("p", "back", {}, return_page_id=True)
+        assert res_back["url"] == "https://base.test/"
+        assert isinstance(pid2, str) and pid2
+
+        # Open a second tab and switch active tab to index 1 while original tab0 stays open
+        ctx.pages = [tab0, TabStub("https://other.test/")]
+        tab0_events_before = len(tab0.events)
+        _, pid0 = bl.control("p", "tab_select", {"index": 0}, return_page_id=True)
+        bl.control("p", "tab_select", {"index": 1})
+        with pytest.raises(BrowserControlError) as exc_switched:
+            bl.control("p", "back", {}, require_current=True, target_page_id=pid0)
+        assert exc_switched.value.status == 422
+        assert exc_switched.value.error_code == "state_uncertain"
+        assert exc_switched.value.unknown_state is True
+        assert ctx.pages[1].events == ["bring_to_front"]
+        assert len(tab0.events) == tab0_events_before + 1  # bring_to_front only
+
+        # Switching back to tab0 restores pid0 identity so back succeeds
+        bl.control("p", "tab_select", {"index": 0})
+        bl.control("p", "back", {}, require_current=True, target_page_id=pid0)
+        assert tab0.events[-1] == "back"
     finally:
         bl._active_sessions.clear()
         bl._controls.clear()

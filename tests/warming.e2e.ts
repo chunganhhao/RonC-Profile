@@ -1,0 +1,654 @@
+import { test } from '@e2e-dev/web';
+import { expect } from 'e2e';
+
+test('Account Warming studio: scenario cards, visual step builder, and task persistence', async ({ app, browser }) => {
+  await browser.setViewport({ width: 1440, height: 900 });
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('#app')).toBeVisible();
+
+  await browser.locator('#warming-btn').click();
+  await expect(browser.locator('[role=dialog]')).toBeVisible();
+
+  // 1. All 5 separated scenario cards render visually; built-in cards advertise URL site count
+  for (const id of ['youtube_trust', 'social_news', 'ecommerce_cookie', 'custom', 'script']) {
+    await expect(browser.locator(`[data-scenario="${id}"]`)).toBeVisible();
+  }
+  await expect(browser.locator('[data-scenario="social_news"]')).toContainText('3 sites');
+
+  // 2. Built-in Social & News shows truthful active URL mode sites & optional URL override
+  await browser.locator('[data-scenario="social_news"]').click();
+  await expect(browser.locator('[data-scenario="social_news"]')).toHaveAttribute('class', /active/);
+  await expect(browser.locator('#warm-steps')).toContainText('www.wikipedia.org');
+  await expect(browser.locator('#warm-steps')).not.toContainText('#searchInput');
+
+  await browser.locator('#warm-payload').fill('https://example.test/override');
+  await expect(browser.locator('#warm-steps')).toContainText('example.test/override');
+  await expect(browser.locator('#warm-steps')).not.toContainText('www.wikipedia.org');
+  await browser.locator('#warm-payload').fill('');
+
+  // 3. Customize as Script (empty draft -> no prompt) copies full playbook into editable visual builder
+  await browser.locator('#warm-customize-btn').click();
+  await expect(browser.locator('[data-scenario="script"]')).toHaveAttribute('class', /active/);
+  await expect(browser.locator('#warm-payload')).toHaveValue(/wikipedia\.org/);
+  await expect(browser.locator('#warm-steps')).toContainText('#searchInput');
+
+  const initialCount = await browser.locator('.warm-step-row').count();
+  expect(initialCount).toBeGreaterThan(5);
+
+  // Add a step visually and verify step list & JSON stay synced
+  await browser.locator('#warm-add-action').selectOption('click');
+  await browser.locator('#warm-add-val').fill('#main-banner');
+  await browser.locator('#warm-add-btn').click();
+  await expect(browser.locator('.warm-step-row')).toHaveCount(initialCount + 1);
+  await expect(browser.locator('#warm-payload')).toHaveValue(/#main-banner/);
+
+  // Reorder last step up, then remove the last step visually
+  await browser.locator('[data-step-up]').last().click();
+  await browser.locator('[data-step-del]').last().click();
+  await expect(browser.locator('.warm-step-row')).toHaveCount(initialCount);
+
+  // 4. [null] JSON item and non-numeric wait input are rejected cleanly without uncaught errors
+  await browser.locator('#warm-payload').fill('[null]');
+  await expect(browser.locator('#warm-steps .msg.err')).toContainText('Step 1');
+  await browser.locator('[data-warm-tpl="social_news"]').click();
+  // Confirm replacing non-empty unsaved JSON draft
+  await browser.locator('.modal:has-text("Replace your unsaved") .btn-act').click();
+  await browser.locator('#warm-add-action').selectOption('wait');
+  await browser.locator('#warm-add-val').fill('abc');
+  await browser.locator('#warm-add-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+
+  // 5. Invalid script shows clean REST 400 validation error without saving
+  await browser.locator('#warm-payload').fill('[{"action":"evaluate","script":"alert(1)"}]');
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+
+  // 6. Load Social template (confirm overwrite), save schedule, verify persistence across reload, then delete
+  await browser.locator('[data-warm-tpl="social_news"]').click();
+  await browser.locator('.modal:has-text("Replace your unsaved") .btn-act').click();
+  await browser.locator('#warm-name').fill('E2E Social Flow');
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-tasks')).toContainText('E2E Social Flow');
+
+  await browser.reload();
+  await browser.locator('#warming-btn').click();
+  await expect(browser.locator('#warm-tasks')).toContainText('E2E Social Flow');
+
+  await browser.locator('[data-warm-del]').first().click();
+  await expect(browser.locator('#warm-tasks')).not.toContainText('E2E Social Flow');
+});
+
+test('Account Warming studio: redacts malformed URLs, gates delayed catalog, guards unsaved drafts, and polls queue live', async ({ app, browser }) => {
+  await browser.setViewport({ width: 1440, height: 900 });
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('#app')).toBeVisible();
+
+  await browser.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__warmPageErrors = [];
+    window.addEventListener('error', (e) => (w.__warmPageErrors as string[]).push(e.message));
+    const origFetch = window.fetch.bind(window);
+    const fullSteps = Array.from({ length: 15 }, (_, i) => ({
+      action: i === 0 ? 'navigate' : 'wait',
+      ...(i === 0 ? { url: 'https://www.wikipedia.org' } : { seconds: 1 }),
+    }));
+    const catalogPayload = [
+      { id: 'youtube_trust', recommended_minutes: 4, default_urls: ['https://www.youtube.com'], sample_steps: fullSteps },
+      { id: 'social_news', recommended_minutes: 4, default_urls: ['https://www.wikipedia.org'], sample_steps: fullSteps },
+      { id: 'ecommerce_cookie', recommended_minutes: 4, default_urls: ['https://www.amazon.com'], sample_steps: fullSteps },
+      { id: 'custom', recommended_minutes: 3, default_urls: [], sample_steps: [] },
+      { id: 'script', recommended_minutes: 3, default_urls: [], sample_steps: [{ action: 'navigate', url: 'https://news.google.com' }] },
+    ];
+    let phase = 0; // 0: fail GET, 1: idle, 2: running, 3+: completed
+    w.__warmGetCount = 0;
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (url.endsWith('/api/v1/warming/tasks')) {
+        w.__warmGetCount = (w.__warmGetCount as number) + 1;
+        phase += 1;
+        if (phase === 1) {
+          return new Response(JSON.stringify({ detail: 'Catalog offline' }), {
+            status: 503,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        const status = phase === 2 ? 'idle' : phase === 3 ? 'running' : 'completed';
+        const lastResult = status === 'completed' ? 'OK (1/1 profiles)' : '';
+        return new Response(JSON.stringify({
+          scenarios: catalogPayload,
+          tasks: [{
+            id: 't-live',
+            name: 'Live Poll Task',
+            profile_names: ['Studio Gmail'],
+            preset: 'youtube_trust',
+            duration_minutes: 3,
+            schedule_time: '',
+            status,
+            last_result: lastResult,
+          }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.endsWith('/api/v1/warming/tasks/t-live/run')) {
+        return new Response(JSON.stringify({ started: false, task_id: 't-live' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return origFetch(input, init);
+    };
+  });
+
+  await browser.locator('#warming-btn').click();
+  await expect(browser.locator('[role=dialog]')).toBeVisible();
+
+  // #5 Failed GET disables Customize and surfaces Retry, while allowing custom Script authoring
+  await expect(browser.locator('#warm-customize-btn')).toBeDisabled();
+  await expect(browser.locator('#warm-retry-btn')).toBeVisible();
+
+  await browser.locator('[data-scenario="script"]').click();
+  const unsavedDraft = '[{"action":"navigate","url":"https://user.example/unsaved"}]';
+  await browser.locator('#warm-payload').fill(unsavedDraft);
+
+  // Retry succeeds without overwriting user's /unsaved script draft
+  await browser.locator('#warm-retry-btn').click();
+  await expect(browser.locator('#warm-payload')).toHaveValue(unsavedDraft);
+  await expect(browser.locator('[data-warm-tpl="social_news"]')).toBeEnabled();
+
+  // #6 Customize over unsaved draft prompts; Cancel keeps JSON, preset, and duration intact
+  await browser.locator('[data-scenario="social_news"]').click();
+  await browser.locator('#warm-duration').fill('12');
+  await expect(browser.locator('#warm-customize-btn')).toBeEnabled();
+  await browser.locator('#warm-customize-btn').click();
+  await expect(browser.locator('.modal:has-text("Replace your unsaved")')).toBeVisible();
+  await browser.locator('.modal:has-text("Replace your unsaved") button:has-text("Cancel")').click();
+  await expect(browser.locator('[data-scenario="social_news"]')).toHaveAttribute('class', /active/);
+  await expect(browser.locator('#warm-duration')).toHaveValue('12');
+  await browser.locator('[data-scenario="script"]').click();
+  await expect(browser.locator('#warm-payload')).toHaveValue(unsavedDraft);
+
+  // #3 Malformed URL & {"toString":null} render safely as "URL" with zero raw secret leak or uncaught error
+  await browser.locator('#warm-payload').fill('[{"action":"navigate","url":"https://u:DUMMY@x:bad/?q=FAKE#z"}]');
+  await expect(browser.locator('#warm-steps .warm-step-det')).toHaveText('URL');
+  await expect(browser.locator('#warm-steps .warm-step-det')).toHaveAttribute('title', 'URL');
+  await expect(browser.locator('#warm-steps')).not.toContainText('DUMMY');
+  await expect(browser.locator('#warm-steps')).not.toContainText('FAKE');
+
+  await browser.locator('#warm-payload').fill('[{"action":"navigate","url":{"toString":null}}]');
+  await expect(browser.locator('#warm-steps .warm-step-det')).toHaveText('URL');
+  const pageErrors = await browser.evaluate(() => (window as unknown as { __warmPageErrors: string[] }).__warmPageErrors);
+  expect(pageErrors).toEqual([]);
+
+  // #4 Live queue polling transitions idle -> running (Stop) -> completed (Launch) while modal stays open
+  await expect(browser.locator('#warm-tasks button:has-text("Stop")')).toBeVisible({ timeout: 5000 });
+  await expect(browser.locator('#warm-tasks button:has-text("Launch")')).toBeVisible({ timeout: 5000 });
+  await expect(browser.locator('#warm-tasks')).toContainText('OK (1/1 profiles)');
+
+  // started:false on Launch shows explicit error instead of silent success
+  await browser.locator('#warm-tasks button:has-text("Launch")').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+
+  // Closing modal stops background queue polling
+  await browser.locator('.modal-foot button:has-text("Close")').click();
+  const countAtClose = await browser.evaluate(() => (window as unknown as { __warmGetCount: number }).__warmGetCount);
+  await new Promise((r) => setTimeout(r, 2300));
+  const countLater = await browser.evaluate(() => (window as unknown as { __warmGetCount: number }).__warmGetCount);
+  expect(countLater).toBe(countAtClose);
+});
+
+test('Account Warming studio: slow >2s GETs are not self-aborted and unsupported overrides are rejected cleanly', async ({ app, browser }) => {
+  await browser.setViewport({ width: 1440, height: 900 });
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('#app')).toBeVisible();
+
+  await browser.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    const origFetch = window.fetch.bind(window);
+    const fullSteps = Array.from({ length: 15 }, (_, i) => ({
+      action: i === 0 ? 'navigate' : 'wait',
+      ...(i === 0 ? { url: 'https://www.wikipedia.org' } : { seconds: 1 }),
+    }));
+    const catalogPayload = [
+      { id: 'youtube_trust', recommended_minutes: 4, default_urls: ['https://www.youtube.com'], sample_steps: fullSteps },
+      { id: 'social_news', recommended_minutes: 4, default_urls: ['https://www.wikipedia.org'], sample_steps: fullSteps },
+      { id: 'ecommerce_cookie', recommended_minutes: 4, default_urls: ['https://www.amazon.com'], sample_steps: fullSteps },
+      { id: 'custom', recommended_minutes: 3, default_urls: [], sample_steps: [] },
+      { id: 'script', recommended_minutes: 3, default_urls: [], sample_steps: [{ action: 'navigate', url: 'https://news.google.com' }] },
+    ];
+    let getIdx = 0;
+    w.__warmAbortedGets = 0;
+    w.__warmPostBodies = [];
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.endsWith('/api/v1/warming/tasks') && method === 'GET') {
+        getIdx += 1;
+        const status = getIdx === 1 ? 'idle' : 'running';
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 2350);
+          init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            w.__warmAbortedGets = (w.__warmAbortedGets as number) + 1;
+            reject(new DOMException('Aborted', 'AbortError'));
+          });
+        });
+        return new Response(JSON.stringify({
+          scenarios: catalogPayload,
+          tasks: [{
+            id: 't-slow',
+            name: 'Slow Backend Task',
+            profile_names: ['Studio Gmail'],
+            preset: 'social_news',
+            duration_minutes: 4,
+            schedule_time: '',
+            status,
+            last_result: '',
+          }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.endsWith('/api/v1/warming/tasks') && method === 'POST') {
+        const parsed = JSON.parse(String(init?.body || '{}'));
+        (w.__warmPostBodies as unknown[]).push(parsed);
+        return new Response(JSON.stringify({ ...parsed, id: 't-created', status: 'idle', last_result: '' }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return origFetch(input, init);
+    };
+  });
+
+  await browser.locator('#warming-btn').click();
+  await expect(browser.locator('[role=dialog]')).toBeVisible();
+
+  // §9.2 Slow 2.35s GET #1 completes without self-abort, enables Customize, and slow GET #2 updates idle -> running
+  await expect(browser.locator('#warm-customize-btn')).toBeEnabled({ timeout: 5000 });
+  await expect(browser.locator('#warm-tasks button:has-text("Launch")')).toBeVisible();
+  await expect(browser.locator('#warm-tasks button:has-text("Stop")')).toBeVisible({ timeout: 6000 });
+  const aborted = await browser.evaluate(() => (window as unknown as { __warmAbortedGets: number }).__warmAbortedGets);
+  expect(aborted).toBe(0);
+
+  // §9.4 Unsupported scheme override is flagged in preview and blocked on Save (zero silent Wikipedia default save)
+  await browser.locator('[data-scenario="social_news"]').click();
+  await browser.locator('#warm-payload').fill('ftp://example.test/override');
+  await expect(browser.locator('#warm-steps .msg.err')).toBeVisible();
+  await expect(browser.locator('#warm-steps')).not.toContainText('example.test/override');
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+  const postsBeforeValid = await browser.evaluate(() => (window as unknown as { __warmPostBodies: unknown[] }).__warmPostBodies.length);
+
+  // Mixed override displays only valid HTTP(S) target, warns about ignored token, and submits filtered list
+  await browser.locator('#warm-payload').fill('ftp://bad.test https://good.example/override');
+  await expect(browser.locator('#warm-steps')).toContainText('good.example/override');
+  await expect(browser.locator('#warm-mode-note')).toContainText('1 unsupported');
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /ok/);
+  const postBodies = await browser.evaluate(() => (window as unknown as { __warmPostBodies: Array<{ custom_urls: string[] }> }).__warmPostBodies);
+  expect(postsBeforeValid).toBe(postBodies.length - 1);
+  expect(postBodies.at(-1)?.custom_urls).toEqual(['https://good.example/override']);
+});
+
+test('Account Warming studio: Web rejects extra-slash URLs like backend and decouples Save from hung GET timeout', async ({ app, browser }) => {
+  await browser.setViewport({ width: 1440, height: 900 });
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('#app')).toBeVisible();
+
+  // §11.4 Real REST loopback: extra-slash URL is rejected in preview & filtered/blocked consistently
+  await browser.locator('#warming-btn').click();
+  await expect(browser.locator('[role=dialog]')).toBeVisible();
+  await expect(browser.locator('#warm-customize-btn')).toBeEnabled();
+
+  await browser.locator('[data-scenario="social_news"]').click();
+  await browser.locator('#warm-payload').fill('https:///bad.example/old https://good.example/only');
+  await expect(browser.locator('#warm-steps')).toContainText('good.example/only');
+  await expect(browser.locator('#warm-steps')).not.toContainText('bad.example');
+  await expect(browser.locator('#warm-mode-note')).toContainText('1 unsupported');
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /ok/);
+
+  const savedCheck = await browser.evaluate(async () => {
+    const r = await fetch('/api/v1/warming/tasks', {
+      headers: { Authorization: 'Bearer ' + localStorage.getItem('foxprofile.token') },
+    });
+    return r.json();
+  });
+  expect(savedCheck.tasks.at(-1).custom_urls).toEqual(['https://good.example/only']);
+
+  // Pure extra-slash override shows preview error (never active) and fails client-side without POST
+  await browser.locator('#warm-payload').fill('https:///bad.example/old');
+  await expect(browser.locator('#warm-steps .msg.err')).toBeVisible();
+  await expect(browser.locator('#warm-steps')).not.toContainText('bad.example');
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+
+  // Clean up test task and close modal
+  await browser.locator('[data-warm-del]').first().click();
+  await expect(browser.locator('#warm-tasks')).not.toContainText('Warm 1 profile(s)');
+  await browser.locator('.modal-foot button:has-text("Close")').click();
+
+  // §11.2 Hung GET #1 (>5s timeout) does NOT freeze Save/Run buttons and recovers on Retry
+  await browser.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    const origFetch = window.fetch.bind(window);
+    let getIdx = 0;
+    w.__warmHangUnblock = false;
+    w.__warmHungPosts = 0;
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.endsWith('/api/v1/warming/tasks') && method === 'GET') {
+        getIdx += 1;
+        if (getIdx === 1 && !w.__warmHangUnblock) {
+          return await new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('Aborted', 'AbortError'));
+            });
+          });
+        }
+      }
+      if (url.endsWith('/api/v1/warming/tasks') && method === 'POST') {
+        w.__warmHungPosts = (w.__warmHungPosts as number) + 1;
+      }
+      return origFetch(input, init);
+    };
+  });
+
+  await browser.locator('#warming-btn').click();
+  await expect(browser.locator('[role=dialog]')).toBeVisible();
+  await browser.locator('[data-scenario="custom"]').click();
+  await browser.locator('#warm-payload').fill('https://good.example/hung-save');
+  await browser.locator('#warm-save-btn').click();
+
+  // Save completes & re-enables Save/Run immediately despite hung GET #1
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /ok/);
+  await expect(browser.locator('#warm-save-btn')).toBeEnabled();
+  await expect(browser.locator('#warm-run-btn')).toBeEnabled();
+  await expect(browser.locator('#warm-tasks')).toContainText('Warm 1 profile(s)');
+
+  // After independent GET timeout (5s), Retry becomes visible and recovers queue when unblocked
+  await expect(browser.locator('#warm-retry-btn')).toBeVisible({ timeout: 7500 });
+  await browser.evaluate(() => {
+    (window as unknown as Record<string, unknown>).__warmHangUnblock = true;
+  });
+  await browser.locator('#warm-retry-btn').click();
+  await expect(browser.locator('#warm-customize-btn')).toBeEnabled({ timeout: 5000 });
+  const postsMade = await browser.evaluate(() => (window as unknown as { __warmHungPosts: number }).__warmHungPosts);
+  expect(postsMade).toBe(1);
+
+  await browser.locator('[data-warm-del]').first().click();
+});
+
+test('Account Warming studio: recovers empty queue after 503, blocks stale GET overwrites on Save/Delete, and matches backend port validation', async ({ app, browser }) => {
+  await browser.setViewport({ width: 1440, height: 900 });
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('#app')).toBeVisible();
+
+  await browser.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    const origFetch = window.fetch.bind(window);
+    const held: Array<() => void> = [];
+    w.__s13Mode = 'pass';
+    w.__s13HeldCount = 0;
+    w.__s13ReleaseOne = () => {
+      const fn = held.shift();
+      if (fn) {
+        w.__s13HeldCount = held.length;
+        fn();
+        return true;
+      }
+      return false;
+    };
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.endsWith('/api/v1/warming/tasks') && method === 'GET') {
+        const mode = String(w.__s13Mode || 'pass');
+        if (mode === 'fail503') {
+          return new Response(JSON.stringify({ detail: 'Simulated 503 outage' }), {
+            status: 503,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        const realResp = await origFetch(input, init);
+        if (w.__s13Mode === 'hold') {
+          await new Promise<void>((resolve, reject) => {
+            held.push(resolve);
+            w.__s13HeldCount = held.length;
+            init?.signal?.addEventListener('abort', () => {
+              const idx = held.indexOf(resolve);
+              if (idx !== -1) held.splice(idx, 1);
+              w.__s13HeldCount = held.length;
+              reject(new DOMException('Aborted', 'AbortError'));
+            });
+          });
+        }
+        return realResp;
+      }
+      return origFetch(input, init);
+    };
+  });
+
+  const waitForHeldCount = async (target: number) => {
+    const deadline = Date.now() + 6000;
+    while (Date.now() < deadline) {
+      const cnt = await browser.evaluate(() => (window as unknown as { __s13HeldCount: number }).__s13HeldCount);
+      if (cnt >= target) return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error(`Timed out waiting for __s13HeldCount >= ${target}`);
+  };
+
+  // §13.1: 200 [] -> 503 -> 200 [] poll recovery & Retry recovery without clearing client validation msg
+  await browser.locator('#warming-btn').click();
+  await expect(browser.locator('[role=dialog]')).toBeVisible();
+  await expect(browser.locator('#warm-customize-btn')).toBeEnabled();
+  await expect(browser.locator('#warm-tasks')).toContainText('No warming tasks yet');
+
+  await browser.evaluate(() => { (window as unknown as Record<string, unknown>).__s13Mode = 'fail503'; });
+  await expect(browser.locator('#warm-tasks .msg.err')).toContainText('Simulated 503 outage', { timeout: 5000 });
+
+  await browser.locator('[data-scenario="custom"]').click();
+  await browser.locator('#warm-payload').fill('');
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+
+  await browser.evaluate(() => { (window as unknown as Record<string, unknown>).__s13Mode = 'pass'; });
+  await expect(browser.locator('#warm-tasks .msg.err')).toHaveCount(0, { timeout: 5000 });
+  await expect(browser.locator('#warm-tasks')).toContainText('No warming tasks yet');
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+
+  await browser.evaluate(() => { (window as unknown as Record<string, unknown>).__s13Mode = 'fail503'; });
+  await expect(browser.locator('#warm-tasks .msg.err')).toContainText('Simulated 503 outage', { timeout: 5000 });
+  await browser.evaluate(() => { (window as unknown as Record<string, unknown>).__s13Mode = 'pass'; });
+  await browser.locator('#warm-tasks button:has-text("Retry")').click();
+  await expect(browser.locator('#warm-tasks .msg.err')).toHaveCount(0, { timeout: 5000 });
+  await expect(browser.locator('#warm-tasks')).toContainText('No warming tasks yet');
+
+  // §13.2: In-flight stale GET started before Save or Delete must never overwrite optimistic queue
+  await browser.evaluate(() => { (window as unknown as Record<string, unknown>).__s13Mode = 'hold'; });
+  await waitForHeldCount(1);
+
+  await browser.locator('#warm-name').fill('Stale GET Guard');
+  await browser.locator('[data-scenario="custom"]').click();
+  await browser.locator('#warm-payload').fill('https://example.test:8443/ok');
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /ok/);
+  await expect(browser.locator('#warm-tasks')).toContainText('Stale GET Guard');
+  await expect(browser.locator('#warm-save-btn')).toBeEnabled();
+  await expect(browser.locator('#warm-run-btn')).toBeEnabled();
+
+  // Release stale empty GET #1 while still holding follow-up GET #2 -> saved row must remain visible
+  const rel1 = await browser.evaluate(() => (window as unknown as { __s13ReleaseOne: () => boolean }).__s13ReleaseOne());
+  expect(rel1).toBe(true);
+  await waitForHeldCount(1);
+  await expect(browser.locator('#warm-tasks')).toContainText('Stale GET Guard');
+  await expect(browser.locator('#warm-tasks')).not.toContainText('No warming tasks yet');
+
+  // Release GET #2 ([Stale GET Guard]) -> wait for next held poll GET #3 (reading [Stale GET Guard])
+  await browser.evaluate(() => (window as unknown as { __s13ReleaseOne: () => boolean }).__s13ReleaseOne());
+  await waitForHeldCount(1);
+
+  // Delete while GET #3 (containing Stale GET Guard) is in flight, then release GET #3 while holding GET #4
+  await browser.locator('[data-warm-del]').first().click();
+  await expect(browser.locator('#warm-tasks')).toContainText('No warming tasks yet');
+  await expect(browser.locator('#warm-tasks')).not.toContainText('Stale GET Guard');
+
+  const rel3 = await browser.evaluate(() => (window as unknown as { __s13ReleaseOne: () => boolean }).__s13ReleaseOne());
+  expect(rel3).toBe(true);
+  await waitForHeldCount(1);
+  await expect(browser.locator('#warm-tasks')).not.toContainText('Stale GET Guard');
+  await expect(browser.locator('#warm-tasks')).toContainText('No warming tasks yet');
+
+  await browser.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__s13Mode = 'pass';
+    (w.__s13ReleaseOne as () => boolean)();
+  });
+  await expect(browser.locator('#warm-tasks')).toContainText('No warming tasks yet');
+
+  // §13.3: Web and real REST loopback match on out-of-range port rejection and mixed filtering
+  await browser.locator('[data-scenario="social_news"]').click();
+  await browser.locator('#warm-payload').fill('https://example.test:70000/');
+  await expect(browser.locator('#warm-steps .msg.err')).toBeVisible();
+  await expect(browser.locator('#warm-steps')).not.toContainText('70000');
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+
+  await browser.locator('#warm-payload').fill('https://example.test:70000/ https://example.test:8443/ok');
+  await expect(browser.locator('#warm-steps')).toContainText('example.test:8443/ok');
+  await expect(browser.locator('#warm-steps')).not.toContainText('70000');
+  await expect(browser.locator('#warm-mode-note')).toContainText('1 unsupported');
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /ok/);
+
+  const savedPortCheck = await browser.evaluate(async () => {
+    const r = await fetch('/api/v1/warming/tasks', {
+      headers: { Authorization: 'Bearer ' + localStorage.getItem('foxprofile.token') },
+    });
+    return r.json();
+  });
+  expect(savedPortCheck.tasks.at(-1).custom_urls).toEqual(['https://example.test:8443/ok']);
+
+  await browser.locator('[data-warm-del]').first().click();
+  await expect(browser.locator('#warm-tasks')).toContainText('No warming tasks yet');
+});
+
+test('Account Warming studio: background GET timeout and recovery preserve failed DELETE error and task row', async ({ app, browser }) => {
+  await browser.setViewport({ width: 1440, height: 900 });
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('#app')).toBeVisible();
+
+  await browser.evaluate(async () => {
+    const token = localStorage.getItem('foxprofile.token') || '';
+    const r = await fetch('/api/v1/warming/tasks', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        Authorization: 'Bearer ' + token,
+      },
+      body: JSON.stringify({
+        name: 'Keep On Delete Error',
+        profile_names: ['Studio Profile'],
+        preset: 'custom',
+        custom_urls: ['https://example.test/keep'],
+        duration_minutes: 3,
+      }),
+    });
+    if (!r.ok) throw new Error('Seed POST failed: ' + r.status);
+  });
+
+  await browser.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    const origFetch = window.fetch.bind(window);
+    let getIdx = 0;
+    w.__s15Get2Started = false;
+    w.__s15Get2Aborted = false;
+    w.__s15RecoveredGets = 0;
+    w.__s15FailDelete = true;
+    w.__s15DeleteCalls = 0;
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.endsWith('/api/v1/warming/tasks') && method === 'GET') {
+        getIdx += 1;
+        if (getIdx === 2) {
+          w.__s15Get2Started = true;
+          return await new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              w.__s15Get2Aborted = true;
+              reject(new DOMException('Aborted', 'AbortError'));
+            });
+          });
+        }
+        if (getIdx >= 3) {
+          w.__s15RecoveredGets = (w.__s15RecoveredGets as number) + 1;
+        }
+      }
+      if (/\/api\/v1\/warming\/tasks\/[^/]+$/.test(url) && method === 'DELETE' && w.__s15FailDelete) {
+        w.__s15DeleteCalls = (w.__s15DeleteCalls as number) + 1;
+        return new Response(JSON.stringify({ detail: 'Fixture: could not delete' }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return origFetch(input, init);
+    };
+  });
+
+  await browser.locator('#warming-btn').click();
+  await expect(browser.locator('[role=dialog]')).toBeVisible();
+  await expect(browser.locator('#warm-customize-btn')).toBeEnabled();
+  await expect(browser.locator('#warm-tasks')).toContainText('Keep On Delete Error');
+
+  const deadline = Date.now() + 5000;
+  let get2Started = false;
+  while (Date.now() < deadline) {
+    get2Started = await browser.evaluate(() => Boolean((window as unknown as { __s15Get2Started: boolean }).__s15Get2Started));
+    if (get2Started) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  expect(get2Started).toBe(true);
+
+  // Trigger failing DELETE 500 while background poll GET #2 is in-flight
+  await browser.locator('[data-warm-del]').first().click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+  await expect(browser.locator('#warm-msg')).toContainText('Fixture: could not delete');
+  await expect(browser.locator('#warm-tasks')).toContainText('Keep On Delete Error');
+
+  // Background GET #2 hits 5s timeout: queue banner shows timeout error, action feedback keeps DELETE error
+  await expect(browser.locator('#warm-tasks .msg.err')).toContainText('Request timed out', { timeout: 7500 });
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+  await expect(browser.locator('#warm-msg')).toContainText('Fixture: could not delete');
+  await expect(browser.locator('#warm-tasks')).toContainText('Keep On Delete Error');
+
+  // Subsequent poll / Retry recovers queue banner (GET #3 returns 200) without wiping DELETE error or task row
+  await browser.locator('#warm-tasks button:has-text("Retry")').click();
+  await expect(browser.locator('#warm-tasks .msg.err')).toHaveCount(0, { timeout: 5000 });
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
+  await expect(browser.locator('#warm-msg')).toContainText('Fixture: could not delete');
+  await expect(browser.locator('#warm-tasks')).toContainText('Keep On Delete Error');
+
+  const state = await browser.evaluate(() => {
+    const w = window as unknown as { __s15Get2Aborted: boolean; __s15RecoveredGets: number; __s15DeleteCalls: number };
+    return { aborted: w.__s15Get2Aborted, recovered: w.__s15RecoveredGets, delCalls: w.__s15DeleteCalls };
+  });
+  expect(state.aborted).toBe(true);
+  expect(state.recovered).toBeGreaterThanOrEqual(1);
+  expect(state.delCalls).toBe(1);
+
+  // Clean up seeded task from local store
+  await browser.evaluate(() => { (window as unknown as Record<string, unknown>).__s15FailDelete = false; });
+  await browser.locator('[data-warm-del]').first().click();
+  await expect(browser.locator('#warm-tasks')).toContainText('No warming tasks yet');
+});

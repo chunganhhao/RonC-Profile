@@ -10,6 +10,7 @@ from ...services.warming.scheduler import (
     WARMING_PRESETS,
     WarmingStopTimeout,
     WarmingTaskNotFound,
+    list_warming_scenarios,
     normalize_warming_steps,
 )
 from ..dependencies import (
@@ -45,7 +46,11 @@ def list_warming_tasks(
     ws: WarmingSchedulerService = Depends(get_warming_scheduler),
 ) -> dict:
     tasks = [t.to_dict() for t in ws.list_tasks()]
-    return {"tasks": tasks, "presets": list(WARMING_PRESETS.keys())}
+    return {
+        "tasks": tasks,
+        "presets": list(WARMING_PRESETS.keys()),
+        "scenarios": list_warming_scenarios(),
+    }
 
 
 @router.post("/tasks", status_code=201)

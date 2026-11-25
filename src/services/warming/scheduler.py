@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from ...core import config as app_config
 from ...core.logging import get_logger
-from ..browser.control import ControlError, _check_url
+from ..browser.control import ControlError, PartialActionError, _check_url
 from ..browser.launcher import BrowserControlError
 from ..browser.lease import discard_lease, profile_lease, waiting_lease
 
@@ -83,6 +83,74 @@ SAMPLE_WARMING_SCRIPT: list[dict[str, Any]] = [
     {"action": "scroll", "delta_y": 420, "humanize": True},
     {"action": "wait", "min_s": 2, "max_s": 5},
 ]
+
+_RAW_SCENARIO_PLAYBOOKS: dict[str, list[dict[str, Any]]] = {
+    "youtube_trust": [
+        {"action": "navigate", "url": "https://news.google.com"},
+        {"action": "wait", "min_s": 5, "max_s": 10},
+        {"action": "scroll", "delta_y": 520, "steps": 8, "humanize": True},
+        {"action": "wait", "min_s": 6, "max_s": 12},
+        {"action": "scroll", "delta_y": -220, "steps": 5, "humanize": True},
+        {"action": "wait", "min_s": 3, "max_s": 6},
+        {"action": "navigate", "url": "https://www.google.com/search?q=technology+trends"},
+        {"action": "wait", "min_s": 5, "max_s": 9},
+        {"action": "scroll", "delta_y": 580, "steps": 9, "humanize": True},
+        {"action": "wait", "min_s": 5, "max_s": 10},
+        {"action": "navigate", "url": "https://www.youtube.com"},
+        {"action": "wait", "min_s": 6, "max_s": 12},
+        {"action": "scroll", "delta_y": 680, "steps": 10, "humanize": True},
+        {"action": "wait", "min_s": 6, "max_s": 11},
+    ],
+    "social_news": [
+        {"action": "navigate", "url": "https://www.wikipedia.org"},
+        {"action": "wait", "min_s": 4, "max_s": 7},
+        {
+            "action": "type",
+            "selector": "#searchInput",
+            "text": "Web browser",
+            "submit": True,
+            "clear": True,
+            "timeout": 8000,
+            "optional": True,
+        },
+        {"action": "wait", "min_s": 5, "max_s": 9},
+        {"action": "scroll", "delta_y": 560, "steps": 8, "humanize": True},
+        {"action": "wait", "min_s": 5, "max_s": 10},
+        {"action": "press", "key": "PageDown", "optional": True},
+        {"action": "wait", "min_s": 4, "max_s": 8},
+        {"action": "scroll", "delta_y": -240, "steps": 6, "humanize": True},
+        {"action": "back", "optional": True},
+        {"action": "navigate", "url": "https://news.ycombinator.com"},
+        {"action": "wait", "min_s": 4, "max_s": 8},
+        {"action": "scroll", "delta_y": 520, "steps": 8, "humanize": True},
+        {"action": "navigate", "url": "https://www.reddit.com"},
+        {"action": "wait", "min_s": 5, "max_s": 10},
+    ],
+    "ecommerce_cookie": [
+        {"action": "navigate", "url": "https://www.amazon.com"},
+        {"action": "wait", "min_s": 5, "max_s": 10},
+        {"action": "scroll", "delta_y": 580, "steps": 9, "humanize": True},
+        {"action": "wait", "min_s": 5, "max_s": 10},
+        {"action": "scroll", "delta_y": 620, "steps": 9, "humanize": True},
+        {"action": "wait", "min_s": 4, "max_s": 8},
+        {"action": "scroll", "delta_y": -260, "steps": 6, "humanize": True},
+        {"action": "navigate", "url": "https://www.ebay.com"},
+        {"action": "wait", "min_s": 5, "max_s": 9},
+        {"action": "scroll", "delta_y": 540, "steps": 8, "humanize": True},
+        {"action": "wait", "min_s": 5, "max_s": 9},
+        {"action": "navigate", "url": "https://www.etsy.com"},
+        {"action": "wait", "min_s": 5, "max_s": 10},
+        {"action": "scroll", "delta_y": 560, "steps": 8, "humanize": True},
+    ],
+}
+
+WARMING_SCENARIO_META: dict[str, dict[str, Any]] = {
+    "youtube_trust": {"recommended_minutes": 4},
+    "social_news": {"recommended_minutes": 4},
+    "ecommerce_cookie": {"recommended_minutes": 4},
+    "custom": {"recommended_minutes": 3},
+    "script": {"recommended_minutes": 3},
+}
 
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 # How often a running task rereads the shared file for a Stop or Delete sent to another process.
@@ -313,6 +381,126 @@ def normalize_warming_steps(steps: list[dict[str, Any]] | str) -> list[dict[str,
     return normalized
 
 
+WARMING_SCENARIO_PLAYBOOKS: dict[str, list[dict[str, Any]]] = {
+    key: normalize_warming_steps(steps) for key, steps in _RAW_SCENARIO_PLAYBOOKS.items()
+}
+
+
+def _redact_url_for_display(raw: Any, *, empty_label: str = "URL") -> str:
+    """Return `host[:port][/path]` without userinfo/query/fragment, or safe fallback."""
+    if not isinstance(raw, str):
+        return "URL"
+    text = raw.strip()
+    if not text:
+        return empty_label
+    try:
+        parsed = urlparse(text if "://" in text else f"https://{text}")
+        host = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        path = parsed.path or ""
+    except ValueError:
+        return "URL"
+    if not host:
+        return "URL"
+    if len(path) > 22:
+        path = path[:19] + "..."
+    return f"{host}{port}{path}"
+
+
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    f = float(value)
+    return f if math.isfinite(f) else None
+
+
+def describe_warming_step(step: Any) -> tuple[str, str]:
+    """Return a short, secret-free `(action, detail)` summary for UI step previews."""
+    if not isinstance(step, dict):
+        return "step", ""
+    raw_action = step.get("action")
+    action = raw_action.strip() if isinstance(raw_action, str) and raw_action.strip() else "step"
+    if action in ("navigate", "tab_new"):
+        raw_url = step.get("url")
+        if raw_url is None:
+            return action, "Blank tab"
+        return action, _redact_url_for_display(raw_url, empty_label="Blank tab")
+    if action == "wait":
+        sec = _finite_number(step.get("seconds"))
+        if sec is not None:
+            return "wait", f"{sec:g}s"
+        min_s = _finite_number(step.get("min_s"))
+        max_s = _finite_number(step.get("max_s"))
+        return (
+            "wait",
+            f"{min_s if min_s is not None else 1:g}-{max_s if max_s is not None else 3:g}s",
+        )
+    if action == "scroll":
+        raw_dy = _finite_number(step.get("delta_y"))
+        dy = int(round(raw_dy if raw_dy is not None else 380.0))
+        direction = "Down" if dy >= 0 else "Up"
+        return "scroll", f"{direction} {abs(dy)}px"
+    if action == "type":
+        raw_sel = step.get("selector")
+        raw_txt = step.get("text")
+        sel = raw_sel[:24] if isinstance(raw_sel, str) else ""
+        txt = raw_txt[:20] if isinstance(raw_txt, str) else ""
+        suffix = " + Enter" if step.get("submit") is True else ""
+        return "type", f'{sel} "{txt}"{suffix}'.strip()
+    if action == "keyboard_type":
+        raw_txt = step.get("text")
+        txt = raw_txt[:24] if isinstance(raw_txt, str) else ""
+        return "keyboard", f'"{txt}"'
+    if action in ("click", "wait_for"):
+        raw_sel = step.get("selector")
+        return action, raw_sel[:34] if isinstance(raw_sel, str) else ""
+    if action == "click_at":
+        x = _finite_number(step.get("x"))
+        y = _finite_number(step.get("y"))
+        return "click_at", f"({int(x if x is not None else 0)}, {int(y if y is not None else 0)})"
+    if action == "press":
+        raw_key = step.get("key")
+        key = raw_key if isinstance(raw_key, str) else ""
+        raw_sel = step.get("selector")
+        sel = raw_sel[:20] if isinstance(raw_sel, str) else ""
+        return "press", f"{key} ({sel})" if sel else key
+    if action == "back":
+        return "back", "History back"
+    if action in ("tab_select", "tab_close"):
+        idx = _finite_number(step.get("index"))
+        return action, f"Tab #{int(idx if idx is not None else 0)}"
+    return action, ""
+
+
+def list_warming_scenarios() -> list[dict[str, Any]]:
+    """Return metadata and human-like playbooks for every Warming scenario."""
+    scenarios: list[dict[str, Any]] = []
+    for scenario_id, meta in WARMING_SCENARIO_META.items():
+        if scenario_id in WARMING_SCENARIO_PLAYBOOKS:
+            sample_steps = [dict(s) for s in WARMING_SCENARIO_PLAYBOOKS[scenario_id]]
+        elif scenario_id == "script":
+            sample_steps = [dict(s) for s in SAMPLE_WARMING_SCRIPT]
+        else:
+            sample_steps = []
+        actions: list[str] = []
+        for s in sample_steps:
+            act = str(s["action"])
+            if act not in actions:
+                actions.append(act)
+        if not actions:
+            actions = ["navigate", "scroll", "wait"]
+        scenarios.append(
+            {
+                "id": scenario_id,
+                "recommended_minutes": int(meta["recommended_minutes"]),
+                "default_urls": list(WARMING_PRESETS.get(scenario_id, [])),
+                "sample_steps": sample_steps,
+                "interactive_actions": actions,
+            }
+        )
+    return scenarios
+
+
 def validate_schedule_time(value: str) -> bool:
     val = (value or "").strip()
     if not val:
@@ -326,10 +514,19 @@ def normalize_warming_urls(urls: list[str] | str) -> list[str]:
     for u in raw_list:
         if not u:
             continue
-        if "://" not in u:
-            u = "https://" + u
-        if u.lower().startswith(("http://", "https://")):
-            cleaned.append(u)
+        try:
+            checked = _check_url(u)
+            parsed = urlparse(checked)
+            _ = parsed.port
+        except (ControlError, ValueError):
+            continue
+        if (
+            parsed.scheme.lower() in ("http", "https")
+            and parsed.hostname
+            and "\\" not in parsed.netloc
+            and not any(ch.isspace() for ch in parsed.netloc)
+        ):
+            cleaned.append(checked)
     return cleaned
 
 
@@ -354,9 +551,7 @@ class WarmingTask:
         if self.preset == "script":
             return []
         if self.preset == "custom" or self.custom_urls:
-            custom = normalize_warming_urls(self.custom_urls)
-            if custom:
-                return custom
+            return normalize_warming_urls(self.custom_urls)
         return list(WARMING_PRESETS.get(self.preset) or WARMING_PRESETS["youtube_trust"])
 
     def to_dict(self) -> dict:
@@ -378,7 +573,16 @@ class WarmingTask:
             sched = ""
         dur = max(1, min(60, int(data.get("duration_minutes") or 3)))
         pnames = [str(p).strip() for p in (data.get("profile_names") or []) if str(p).strip()]
-        urls = normalize_warming_urls(data.get("custom_urls") or [])
+        raw_custom = data.get("custom_urls") or []
+        if isinstance(raw_custom, str):
+            raw_tokens = raw_custom.split()
+        elif isinstance(raw_custom, list):
+            raw_tokens = [str(u).strip() for u in raw_custom if str(u).strip()]
+        else:
+            raw_tokens = []
+        valid_urls = normalize_warming_urls(raw_tokens)
+        # Keep legacy unaccepted override tokens intact instead of collapsing to preset defaults.
+        urls = valid_urls if len(valid_urls) == len(raw_tokens) else raw_tokens
         raw_steps = data.get("script_steps")
         if preset == "script":
             steps = normalize_warming_steps(raw_steps)
@@ -605,8 +809,13 @@ class WarmingSchedulerService:
             if script_steps:
                 return None
             steps = []
-            urls = normalize_warming_urls(custom_urls or [])
-            if preset == "custom" and not urls:
+            raw_tokens = (
+                custom_urls.split()
+                if isinstance(custom_urls, str)
+                else [str(u).strip() for u in (custom_urls or []) if str(u).strip()]
+            )
+            urls = normalize_warming_urls(raw_tokens)
+            if (preset == "custom" or raw_tokens) and not urls:
                 return None
         with self._lock:
             tid = secrets.token_hex(5)
@@ -770,13 +979,25 @@ class WarmingSchedulerService:
 
     @staticmethod
     def _is_unknown_state_error(exc: Exception) -> bool:
-        if isinstance(exc, TimeoutError):
+        if isinstance(exc, (TimeoutError, PartialActionError)):
             return True
         if getattr(exc, "unknown_state", False) is True:
             return True
         if getattr(exc, "error_code", None) == "state_uncertain":
             return True
         return getattr(exc, "status", None) in (409, 503, 504)
+
+    @staticmethod
+    def _supports_require_current(bl: IBrowserLauncher) -> bool:
+        ctrl_params = inspect.signature(bl.control).parameters
+        return "require_current" in ctrl_params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in ctrl_params.values()
+        )
+
+    @staticmethod
+    def _supports_page_pin(bl: IBrowserLauncher) -> bool:
+        ctrl_params = inspect.signature(bl.control).parameters
+        return "target_page_id" in ctrl_params and "return_page_id" in ctrl_params
 
     def _run_script_steps(
         self,
@@ -792,10 +1013,7 @@ class WarmingSchedulerService:
         total_steps = len(steps)
         acted_any = False
         has_target = False
-        ctrl_params = inspect.signature(bl.control).parameters
-        supports_pin = "require_current" in ctrl_params or any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in ctrl_params.values()
-        )
+        supports_pin = self._supports_require_current(bl)
 
         for step_idx, step in enumerate(steps, 1):
             if cancel_ev.is_set():
@@ -926,6 +1144,7 @@ class WarmingSchedulerService:
         is_script = task.preset == "script"
         steps = task.script_steps
         urls = [] if is_script else task.resolved_urls()
+        invalid_urls = (not is_script) and (not urls)
         targets = task.profile_names
         dur_mins = task.duration_minutes
         task_name = task.name
@@ -948,7 +1167,11 @@ class WarmingSchedulerService:
         busy_count = 0
         timed_out_count = 0
         interrupted_count = 0
-        for prof_name in targets:
+        if invalid_urls:
+            log(
+                f"[Warming] Task '{task_name}' has no valid HTTP/HTTPS URLs; update its custom URLs before running"
+            )
+        for prof_name in [] if invalid_urls else targets:
             if cancel_ev.is_set():
                 break
             prof = pm.profiles.get(prof_name)
@@ -1008,51 +1231,188 @@ class WarmingSchedulerService:
                     continue
 
                 visited_any = False
+                has_target = False
+                pinned_page_id: str | None = None
+                url_interrupted = False
+                supports_pin = self._supports_require_current(bl)
+                supports_page_pin = self._supports_page_pin(bl)
                 single_pass = step_dwell_seconds is not None
                 remaining_dwell = total_budget_seconds
-                while not cancel_ev.is_set():
+                while not cancel_ev.is_set() and not url_interrupted:
                     visited_in_pass = False
                     for url in urls:
                         if cancel_ev.is_set() or (not single_pass and remaining_dwell <= 0):
                             break
+                        safe_url = _redact_url_for_display(url)
                         try:
-                            bl.control(
-                                prof_name,
-                                "navigate",
-                                {"url": url, "wait_until": "domcontentloaded"},
-                                timeout=25.0,
-                            )
+                            nav_params = {"url": url, "wait_until": "domcontentloaded"}
+                            if supports_page_pin:
+                                if not has_target:
+                                    res = bl.control(
+                                        prof_name,
+                                        "navigate",
+                                        nav_params,
+                                        timeout=25.0,
+                                        return_page_id=True,
+                                    )
+                                    pid = (
+                                        res[1] if isinstance(res, tuple) and len(res) == 2 else None
+                                    )
+                                    if not isinstance(pid, str) or not pid:
+                                        log(
+                                            f"[Warming] [{prof_name}] Navigate interrupted on {safe_url}: missing page identity"
+                                        )
+                                        url_interrupted = True
+                                        break
+                                    pinned_page_id = pid
+                                else:
+                                    bl.control(
+                                        prof_name,
+                                        "navigate",
+                                        nav_params,
+                                        timeout=25.0,
+                                        require_current=True,
+                                        target_page_id=pinned_page_id,
+                                    )
+                            elif has_target and supports_pin:
+                                bl.control(
+                                    prof_name,
+                                    "navigate",
+                                    nav_params,
+                                    timeout=25.0,
+                                    require_current=True,
+                                )
+                            else:
+                                bl.control(prof_name, "navigate", nav_params, timeout=25.0)
                             visited_any = True
                             visited_in_pass = True
-                            log(f"[Warming] [{prof_name}] Visited {url}")
+                            has_target = True
+                            log(f"[Warming] [{prof_name}] Visited {safe_url}")
                         except Exception as nav_err:
-                            log(f"[Warming] [{prof_name}] Navigate warning on {url}: {nav_err}")
+                            if cancel_ev.is_set():
+                                break
+                            err_label = self._safe_step_error(nav_err)
+                            if self._is_unknown_state_error(nav_err):
+                                log(
+                                    f"[Warming] [{prof_name}] Navigate interrupted on {safe_url}: {err_label}"
+                                )
+                                url_interrupted = True
+                                break
+                            if supports_page_pin and not has_target:
+                                err_pid = getattr(nav_err, "page_id", None)
+                                if isinstance(err_pid, str) and err_pid:
+                                    pinned_page_id = err_pid
+                                    has_target = True
+                                else:
+                                    log(
+                                        f"[Warming] [{prof_name}] Navigate interrupted on {safe_url}: missing page identity"
+                                    )
+                                    url_interrupted = True
+                                    break
+                            log(
+                                f"[Warming] [{prof_name}] Navigate warning on {safe_url}: {err_label}"
+                            )
                             continue
 
+                        if cancel_ev.is_set():
+                            break
                         dwell = (
                             per_url_dwell if single_pass else min(per_url_dwell, remaining_dwell)
                         )
                         if not single_pass:
                             remaining_dwell -= dwell
-                        if dwell > 0 and not cancel_ev.wait(dwell / 2.0):
-                            with contextlib.suppress(Exception):
-                                bl.control(
-                                    prof_name,
-                                    "scroll",
-                                    {"delta_y": 380, "humanize": True},
-                                    timeout=8.0,
+                        if dwell > 0:
+                            t1 = dwell * 0.25
+                            t2 = dwell * 0.40
+                            scroll_phases: list[tuple[float, dict[str, Any]]] = [
+                                (
+                                    t1,
+                                    {
+                                        "delta_y": random.randint(320, 620),
+                                        "steps": random.randint(5, 9),
+                                        "humanize": True,
+                                    },
+                                ),
+                                (
+                                    t2,
+                                    {
+                                        "delta_y": random.randint(360, 680),
+                                        "steps": random.randint(6, 10),
+                                        "humanize": True,
+                                    },
+                                ),
+                            ]
+                            if dwell >= 6.0:
+                                scroll_phases.append(
+                                    (
+                                        0.0,
+                                        {
+                                            "delta_y": -random.randint(140, 260),
+                                            "steps": random.randint(4, 7),
+                                            "humanize": True,
+                                        },
+                                    )
                                 )
-                            cancel_ev.wait(dwell / 2.0)
-                    if single_pass or not visited_in_pass or remaining_dwell <= 0:
+                            waited = 0.0
+                            for wait_before, scroll_params in scroll_phases:
+                                if cancel_ev.is_set():
+                                    break
+                                if wait_before > 0:
+                                    if cancel_ev.wait(wait_before):
+                                        break
+                                    waited += wait_before
+                                if cancel_ev.is_set():
+                                    break
+                                try:
+                                    if supports_page_pin:
+                                        bl.control(
+                                            prof_name,
+                                            "scroll",
+                                            scroll_params,
+                                            timeout=8.0,
+                                            require_current=True,
+                                            target_page_id=pinned_page_id,
+                                        )
+                                    elif supports_pin:
+                                        bl.control(
+                                            prof_name,
+                                            "scroll",
+                                            scroll_params,
+                                            timeout=8.0,
+                                            require_current=True,
+                                        )
+                                    else:
+                                        bl.control(prof_name, "scroll", scroll_params, timeout=8.0)
+                                except Exception as scroll_err:
+                                    if cancel_ev.is_set():
+                                        break
+                                    if self._is_unknown_state_error(scroll_err):
+                                        log(
+                                            f"[Warming] [{prof_name}] Scroll interrupted on {safe_url}: {self._safe_step_error(scroll_err)}"
+                                        )
+                                        url_interrupted = True
+                                    break
+                                if cancel_ev.is_set():
+                                    break
+                            if url_interrupted or cancel_ev.is_set():
+                                break
+                            remaining_url_wait = max(0.0, dwell - waited)
+                            if remaining_url_wait > 0:
+                                cancel_ev.wait(remaining_url_wait)
+                    if (
+                        single_pass
+                        or url_interrupted
+                        or not visited_in_pass
+                        or remaining_dwell <= 0
+                    ):
                         break
 
-                if visited_any:
+                if url_interrupted:
+                    interrupted_count += 1
+                elif visited_any:
                     succeeded += 1
             except Exception as e:
-                if is_script:
-                    log(f"[Warming] Error warming '{prof_name}': {self._safe_step_error(e)}")
-                else:
-                    log(f"[Warming] Error warming '{prof_name}': {e}")
+                log(f"[Warming] Error warming '{prof_name}': {self._safe_step_error(e)}")
             finally:
                 if acquired_lease:
                     with self._lease_lock:
@@ -1109,6 +1469,8 @@ class WarmingSchedulerService:
                             task.last_result = f"Timed out (0/{len(targets)} profiles)"
                         elif busy_count > 0:
                             task.last_result = f"Busy (0/{len(targets)} profiles)"
+                        elif invalid_urls:
+                            task.last_result = "Invalid URLs (update task URLs)"
                         else:
                             task.last_result = f"Failed (0/{len(targets)} profiles)"
                     if not task.repeat_daily and task.schedule_time:

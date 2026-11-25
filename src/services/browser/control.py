@@ -40,6 +40,9 @@ _TAB_SWITCH_ACTIONS = frozenset({"tab_new", "tab_select", "tab_close"})
 _REQUIRE_CURRENT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_control_require_current", default=False
 )
+_TARGET_PAGE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_control_target_page_id", default=None
+)
 _monotonic = time.monotonic
 
 
@@ -100,13 +103,41 @@ class PageController:
     def __init__(self, context: Any) -> None:
         self._context = context
         self._current: Any = None
+        self._page_ids: dict[int, tuple[Any, str]] = {}
 
     # --- page selection ---------------------------------------------------
 
     def _open_pages(self) -> list[Any]:
         return [p for p in self._context.pages if not p.is_closed()]
 
+    def _page_id(self, page: Any) -> str:
+        existing = self._page_ids.get(id(page))
+        if existing is not None and existing[0] is page:
+            return existing[1]
+        self._page_ids = {
+            k: v
+            for k, v in self._page_ids.items()
+            if not (callable(getattr(v[0], "is_closed", None)) and v[0].is_closed())
+        }
+        pid = secrets.token_hex(8)
+        self._page_ids[id(page)] = (page, pid)
+        return pid
+
+    def current_page_id(self) -> str | None:
+        if self._current is None or self._current.is_closed():
+            return None
+        return self._page_id(self._current)
+
     async def _page(self) -> Any:
+        expected_page_id = _TARGET_PAGE_ID.get()
+        if expected_page_id is not None:
+            if (
+                self._current is None
+                or self._current.is_closed()
+                or self._page_id(self._current) != expected_page_id
+            ):
+                raise PartialActionError("Active target tab changed or is no longer open")
+            return self._current
         if _REQUIRE_CURRENT.get():
             if self._current is None or self._current.is_closed():
                 raise PartialActionError("Active target tab is no longer open")
@@ -339,17 +370,29 @@ class PageController:
     )
 
     async def dispatch(
-        self, action: str, params: dict[str, Any], *, require_current: bool = False
+        self,
+        action: str,
+        params: dict[str, Any],
+        *,
+        require_current: bool = False,
+        target_page_id: str | None = None,
     ) -> Any:
         if action not in self.ACTIONS:
             raise ControlError(f"Unknown action '{action}'")
         strict = require_current and action not in _TAB_SWITCH_ACTIONS
+        pinned = (
+            target_page_id
+            if (target_page_id is not None and action not in _TAB_SWITCH_ACTIONS)
+            else None
+        )
         token = _REQUIRE_CURRENT.set(strict)
+        pid_token = _TARGET_PAGE_ID.set(pinned)
         try:
             return await getattr(self, action)(**params)
         except TypeError as e:
             raise ControlError(f"Invalid parameters for '{action}': {e}") from e
         finally:
+            _TARGET_PAGE_ID.reset(pid_token)
             _REQUIRE_CURRENT.reset(token)
 
 
@@ -378,6 +421,13 @@ def build_app(controller: PageController, token: str) -> web.Application:
         if not isinstance(raw_require_current, bool):
             return web.json_response(
                 {"ok": False, "error": "require_current must be a boolean"}, status=400
+            )
+        raw_target_page_id = body.get("target_page_id")
+        if raw_target_page_id is not None and (
+            not isinstance(raw_target_page_id, str) or not raw_target_page_id.strip()
+        ):
+            return web.json_response(
+                {"ok": False, "error": "target_page_id must be a non-empty string"}, status=400
             )
 
         raw_timeout_ms = body.get("timeout_ms")
@@ -437,8 +487,13 @@ def build_app(controller: PageController, token: str) -> web.Application:
                         status=504,
                     )
             coro = (
-                controller.dispatch(action, params, require_current=True)
-                if raw_require_current
+                controller.dispatch(
+                    action,
+                    params,
+                    require_current=raw_require_current,
+                    target_page_id=raw_target_page_id,
+                )
+                if (raw_require_current or raw_target_page_id is not None)
                 else controller.dispatch(action, params)
             )
             task = asyncio.create_task(coro)
@@ -494,15 +549,16 @@ def build_app(controller: PageController, token: str) -> web.Application:
                 if unknown_state
                 else ("action_timeout" if is_timeout else "action_error")
             )
-            return web.json_response(
-                {
-                    "ok": False,
-                    "error": f"{type(e).__name__}: {message[:500]}",
-                    "error_code": error_code,
-                    "unknown_state": unknown_state,
-                },
-                status=422,
-            )
+            err_body: dict[str, Any] = {
+                "ok": False,
+                "error": f"{type(e).__name__}: {message[:500]}",
+                "error_code": error_code,
+                "unknown_state": unknown_state,
+            }
+            err_page_id = controller.current_page_id() if not unknown_state else None
+            if err_page_id is not None:
+                err_body["page_id"] = err_page_id
+            return web.json_response(err_body, status=422)
         finally:
             if not lock_handed_off:
                 if task is not None and not task.done():
@@ -510,7 +566,9 @@ def build_app(controller: PageController, token: str) -> web.Application:
                     task.add_done_callback(_release_on_done)
                 elif action_lock.locked():
                     action_lock.release()
-        return web.json_response({"ok": True, "result": result})
+        return web.json_response(
+            {"ok": True, "result": result, "page_id": controller.current_page_id()}
+        )
 
     app = web.Application(client_max_size=4 * 1024 * 1024)
     app.router.add_post("/action", handle)

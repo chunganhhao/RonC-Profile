@@ -2381,6 +2381,12 @@ def test_warming_script_api_and_ui_flow(tmp_path, monkeypatch):
     assert ws.list_tasks() == []
 
     sample_btn.on_click(None)
+    replace_btn = next(
+        c
+        for c in _walk_controls(page.dialog)
+        if getattr(c, "content", None) == get_string("warming_replace_draft_btn")
+    )
+    replace_btn.on_click(None)
     save_btn.on_click(None)
     assert feedback.color == COLORS["success"]
     assert len(ws.list_tasks()) == 1
@@ -2739,6 +2745,12 @@ def test_codex_f6_f7_validation_parity_and_ui_preset_draft_isolation(tmp_path, m
 
     # Script -> Insert Sample -> YouTube -> Save must NOT turn JSON tokens into custom_urls
     sample_btn.on_click(None)
+    replace_btn = next(
+        c
+        for c in _walk_controls(page.dialog)
+        if getattr(c, "content", None) == get_string("warming_replace_draft_btn")
+    )
+    replace_btn.on_click(None)
     assert "news.google.com" in payload_field.value
     dropdown.value = "youtube_trust"
     dropdown.on_select(None)
@@ -3677,3 +3689,1248 @@ def test_codex_s13_1_popup_close_between_request_and_dispatch_never_types_into_b
         monkeypatch.setattr(control.asyncio, "create_task", orig_create_task)
         stop_loop.set()
         srv.join(3)
+
+
+def test_warming_playbooks_catalog_api_and_natural_url_browsing(tmp_path, monkeypatch):
+    from src.core import config as app_config
+    from src.services.warming.scheduler import (
+        WARMING_SCENARIO_PLAYBOOKS,
+        describe_warming_step,
+        list_warming_scenarios,
+        normalize_warming_steps,
+    )
+
+    # Every built-in scenario playbook validates cleanly and uses realistic human interactions
+    scenarios = list_warming_scenarios()
+    by_id = {s["id"]: s for s in scenarios}
+    assert {"youtube_trust", "social_news", "ecommerce_cookie", "custom", "script"} <= set(by_id)
+    assert "type" in by_id["social_news"]["interactive_actions"]
+    assert "press" in by_id["social_news"]["interactive_actions"]
+    assert "scroll" in by_id["youtube_trust"]["interactive_actions"]
+    for pid, steps in WARMING_SCENARIO_PLAYBOOKS.items():
+        assert len(steps) >= 10, pid
+        assert normalize_warming_steps(steps) == steps
+
+    lbl, det = describe_warming_step(
+        {
+            "action": "navigate",
+            "url": "https://user:SECRET_PW@example.test:8443/watch?token=SECRET_SHOULD_NOT_APPEAR",
+        }
+    )
+    assert lbl == "navigate"
+    assert det == "example.test:8443/watch"
+    assert "SECRET_PW" not in det
+    assert "SECRET_SHOULD_NOT_APPEAR" not in det
+
+    # REST GET /warming/tasks exposes scenario catalog alongside tasks/presets
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    container = Container()
+    container.profile_manager.add_profile("nat-prof", "", "macos")
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        res = client.get("/api/v1/warming/tasks").json()
+        assert len(res["scenarios"]) == 5
+
+    # Natural multi-phase URL browsing calls scroll + press/re-scroll while preserving dwell sum
+    from src.services.warming import scheduler as sched_mod
+
+    ws = container.warming_scheduler
+    task = ws.add_task(
+        "Natural URL Phase",
+        ["nat-prof"],
+        preset="custom",
+        custom_urls=["https://example.test/"],
+        duration_minutes=1,
+    )
+    waits = []
+    controls = []
+
+    class FakeEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, sec):
+            waits.append(sec)
+            return False
+
+    class RecordLauncher:
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, params=None, timeout=60):
+            controls.append((action, params))
+            return {}
+
+    orig_threading = sched_mod.threading
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=FakeEvent, Thread=orig_threading.Thread)
+    )
+    try:
+        assert ws.execute_task_sync(task.id, container.profile_manager, RecordLauncher()) is True
+    finally:
+        monkeypatch.setattr(sched_mod, "threading", orig_threading)
+    assert pytest.approx(sum(waits), rel=1e-6) == 60.0
+    assert [c[0] for c in controls].count("scroll") >= 6
+
+
+def test_warming_dialog_hallmark_scenario_cards_step_preview_and_visual_builder(tmp_path):
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming_ui.json"))
+    many_profiles = [SimpleNamespace(name=f"p{i}") for i in range(6)]
+    page = _DummyPage()
+    open_warming_dialog(page, ws, SimpleNamespace(list_profiles=lambda: many_profiles), None)
+
+    controls = list(_walk_controls(page.dialog))
+    # Existing widget index contracts stay invariant
+    text_fields = [c for c in controls if isinstance(c, ft.TextField)]
+    assert text_fields[0].value == "Warm 6 profile(s)"
+    dropdowns = [c for c in controls if isinstance(c, ft.Dropdown)]
+    assert dropdowns[0].value == "youtube_trust"
+    hidden_size12 = [
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    ]
+    assert len(hidden_size12) == 1
+
+    # > 5 targets warning pill visible
+    assert any(
+        isinstance(c, ft.Text)
+        and "6" in (c.value or "")
+        and "sequentially" in (c.value or "").lower()
+        for c in controls
+    )
+
+    # All 5 scenario cards are clickable; built-in Social & News shows active URL mode sites first
+    social_title = get_string("warming_card_social_title")
+    social_card = next(
+        c
+        for c in controls
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and any(isinstance(t, ft.Text) and t.value == social_title for t in _walk_controls(c))
+    )
+    social_card.on_click(None)
+    assert dropdowns[0].value == "social_news"
+    preview_texts = [c.value or "" for c in _walk_controls(page.dialog) if isinstance(c, ft.Text)]
+    assert any("www.wikipedia.org" in t for t in preview_texts)
+    assert not any("#searchInput" in t for t in preview_texts)
+
+    # Override URL in built-in mode updates active preview without showing template #searchInput
+    payload_field = text_fields[1]
+    payload_field.value = "https://example.test/override"
+    payload_field.on_change(None)
+    override_texts = [c.value or "" for c in _walk_controls(page.dialog) if isinstance(c, ft.Text)]
+    assert any("example.test/override" in t for t in override_texts)
+    assert not any("www.wikipedia.org" in t for t in override_texts)
+    payload_field.value = ""
+    payload_field.on_change(None)
+
+    # Customize as Script copies built-in Social playbook into script JSON + editable builder
+    customize_btn = next(
+        c
+        for c in controls
+        if isinstance(c, ft.OutlinedButton)
+        and c.content == get_string("warming_customize_script_btn")
+    )
+    customize_btn.on_click(None)
+    assert dropdowns[0].value == "script"
+    assert "wikipedia.org" in (payload_field.value or "")
+    assert any(
+        isinstance(c, ft.Text) and "#searchInput" in (c.value or "")
+        for c in _walk_controls(page.dialog)
+    )
+    before_steps = json.loads(payload_field.value)
+
+    # Add a step via Quick-Add Step builder
+    step_action_dd = dropdowns[1]
+    step_val_field = text_fields[2]
+    add_step_btn = next(
+        c
+        for c in controls
+        if isinstance(c, ft.OutlinedButton) and c.content == get_string("warming_add_step_btn")
+    )
+    step_action_dd.value = "click"
+    step_action_dd.on_select(None)
+    step_val_field.value = ".custom-target"
+    add_step_btn.on_click(None)
+    after_add = json.loads(payload_field.value)
+    assert len(after_add) == len(before_steps) + 1
+    assert after_add[-1]["action"] == "click"
+    assert after_add[-1]["selector"] == ".custom-target"
+
+    # Reorder and remove via inline step buttons
+    move_up_btns = [
+        c
+        for c in _walk_controls(page.dialog)
+        if isinstance(c, ft.IconButton) and c.tooltip == get_string("warming_move_up")
+    ]
+    move_up_btns[-1].on_click(None)
+    after_move = json.loads(payload_field.value)
+    assert after_move[-2]["selector"] == ".custom-target"
+
+    remove_btns = [
+        c
+        for c in _walk_controls(page.dialog)
+        if isinstance(c, ft.IconButton) and c.tooltip == get_string("warming_remove_step")
+    ]
+    remove_btns[-2].on_click(None)
+    after_remove = json.loads(payload_field.value)
+    assert len(after_remove) == len(before_steps)
+
+    # Save task and verify rendered task rows contain zero middots
+    save_btn = next(
+        c
+        for c in _walk_controls(page.dialog)
+        if getattr(c, "content", None) == get_string("warming_save_schedule_btn")
+    )
+    save_btn.on_click(None)
+    assert len(ws.list_tasks()) == 1
+    rendered_texts = [c.value or "" for c in _walk_controls(page.dialog) if isinstance(c, ft.Text)]
+    assert any(f"script ({len(before_steps)} steps)" in t for t in rendered_texts)
+    assert not any(" · " in t for t in rendered_texts)
+
+
+def test_codex_r2_1_url_mode_pins_tab_on_close_and_drops_press(tmp_path, monkeypatch):
+    from src.core import config as app_config
+    from src.services.browser import control
+    from src.services.browser.launcher import BrowserLauncher
+    from src.services.warming import scheduler as sched_mod
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("url-tab-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+
+    class TwoTabStub:
+        def __init__(self, url: str, label: str):
+            self.url = url
+            self._label = label
+            self.closed = False
+            self.events: list[str] = []
+
+            class _Kb:
+                def __init__(self, page):
+                    self._p = page
+
+                async def press(self, key: str):
+                    self._p.events.append(f"press:{key}")
+
+            self.keyboard = _Kb(self)
+
+        def is_closed(self):
+            return self.closed
+
+        async def title(self):
+            return self._label
+
+        async def goto(self, url: str, wait_until: str = "load"):
+            self.events.append(f"goto:{url}")
+
+        async def evaluate(self, _expr: str):
+            self.events.append("scroll")
+            return True
+
+    bg_page = TwoTabStub("https://background.test/", "Background")
+    target_page = TwoTabStub("https://target.test/", "Target")
+    ctx = SimpleNamespace(pages=[bg_page, target_page])
+    ready = threading.Event()
+    stop_loop = threading.Event()
+    info: dict = {}
+
+    def _serve():
+        async def _run():
+            runner, port, token = await control.serve(ctx)
+            info["port"], info["token"] = port, token
+            ready.set()
+            while not stop_loop.is_set():
+                await asyncio.sleep(0.02)
+            await runner.cleanup()
+
+        asyncio.run(_run())
+
+    srv = threading.Thread(target=_serve, daemon=True)
+    srv.start()
+    assert ready.wait(3)
+
+    bl = BrowserLauncher()
+    bl._active_sessions["url-tab-prof"] = SimpleNamespace(poll=lambda: None)
+    bl._controls["url-tab-prof"] = (info["port"], info["token"])
+    scrolls_seen = 0
+    orig_control = bl.control
+
+    def _closing_control(
+        prof_name,
+        action,
+        params=None,
+        timeout=60,
+        *,
+        require_current=False,
+        target_page_id=None,
+        return_page_id=False,
+    ):
+        nonlocal scrolls_seen
+        res = orig_control(
+            prof_name,
+            action,
+            params,
+            timeout=timeout,
+            require_current=require_current,
+            target_page_id=target_page_id,
+            return_page_id=return_page_id,
+        )
+        if action == "scroll":
+            scrolls_seen += 1
+            if scrolls_seen == 2:
+                target_page.closed = True
+        return res
+
+    bl.control = _closing_control
+
+    class InstantEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, _sec):
+            return False
+
+    orig_threading = sched_mod.threading
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=InstantEvent, Thread=orig_threading.Thread)
+    )
+    try:
+        task = ws.add_task(
+            "URL Two-Tab Pin",
+            ["url-tab-prof"],
+            preset="custom",
+            custom_urls=["https://example.test/start"],
+            duration_minutes=1,
+        )
+        assert ws.execute_task_sync(task.id, pm, bl, step_dwell_seconds=6.0) is False
+        assert task.status == "failed"
+        assert task.last_result == "Interrupted (0/1 profiles)"
+        assert target_page.events == ["goto:https://example.test/start", "scroll", "scroll"]
+        assert bg_page.events == []
+    finally:
+        monkeypatch.setattr(sched_mod, "threading", orig_threading)
+        bl._active_sessions.clear()
+        bl._controls.clear()
+        stop_loop.set()
+        srv.join(3)
+
+
+def test_codex_r2_2_url_mode_stop_during_scroll2_sends_no_more_commands(tmp_path, monkeypatch):
+    from src.core import config as app_config
+    from src.services.warming import scheduler as sched_mod
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("stop-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    task = ws.add_task(
+        "URL Stop Mid-Scroll",
+        ["stop-prof"],
+        preset="custom",
+        custom_urls=["https://example.test/stop"],
+        duration_minutes=1,
+    )
+
+    trace: list[str] = []
+    scrolls = 0
+
+    class StopLauncher:
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, _params=None, timeout=60, *, require_current=False):
+            nonlocal scrolls
+            trace.append(action)
+            if action == "scroll":
+                scrolls += 1
+                if scrolls == 2:
+                    ws.stop_task(task.id)
+            return {}
+
+    class ZeroWaitEvent:
+        def __init__(self):
+            self._flag = False
+
+        def set(self):
+            self._flag = True
+
+        def is_set(self):
+            return self._flag
+
+        def wait(self, _sec):
+            return self._flag
+
+    orig_threading = sched_mod.threading
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=ZeroWaitEvent, Thread=orig_threading.Thread)
+    )
+    try:
+        assert ws.execute_task_sync(task.id, pm, StopLauncher(), step_dwell_seconds=6.0) is True
+    finally:
+        monkeypatch.setattr(sched_mod, "threading", orig_threading)
+
+    assert trace == ["navigate", "scroll", "scroll"]
+    assert task.status == "idle"
+    assert task.last_result == "Stopped (1/1)"
+
+
+def test_codex_r2_3_redacts_malformed_urls_step_objects_and_url_logs(tmp_path):
+    from src.services.browser.launcher import BrowserControlError
+    from src.services.warming.scheduler import describe_warming_step
+
+    assert describe_warming_step(
+        {"action": "navigate", "url": "https://user:SECRET_PW@example.test:8443/path?k=SEC#frag"}
+    ) == ("navigate", "example.test:8443/path")
+    assert describe_warming_step({"action": "navigate", "url": "https://[broken"}) == (
+        "navigate",
+        "URL",
+    )
+    assert describe_warming_step(
+        {"action": "navigate", "url": "https://u:DUMMY@x:bad/?q=FAKE#z"}
+    ) == ("navigate", "URL")
+    assert describe_warming_step({"action": "navigate", "url": {"toString": None}}) == (
+        "navigate",
+        "URL",
+    )
+    assert describe_warming_step(None) == ("step", "")
+
+    pm = SimpleNamespace(
+        profiles={"log-prof": SimpleNamespace(name="log-prof")},
+        list_profiles=lambda: [SimpleNamespace(name="log-prof")],
+    )
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    secret_url = "https://u:SECRET_PW@good.example.test:8443/feed?tok=SECRET_Q#FRAG_SECRET"
+    bad_url = "https://u:SECRET_PW@bad.example.test:8443/fail?tok=SECRET_Q#FRAG_SECRET"
+    task = ws.add_task(
+        "Redacted Logs",
+        ["log-prof"],
+        preset="custom",
+        custom_urls=[secret_url, bad_url],
+    )
+    logs: list[str] = []
+
+    class LogTestLauncher:
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, params=None, timeout=60, *, require_current=False):
+            if action == "navigate" and params and "bad.example.test" in params.get("url", ""):
+                raise BrowserControlError(f"boom {bad_url}", status=422)
+            return {}
+
+    assert (
+        ws.execute_task_sync(
+            task.id, pm, LogTestLauncher(), log_fn=logs.append, step_dwell_seconds=0.0
+        )
+        is True
+    )
+    joined = "\n".join(logs)
+    assert "good.example.test:8443/feed" in joined
+    assert "bad.example.test:8443/fail" in joined
+    for leaked in ("SECRET_PW", "SECRET_Q", "FRAG_SECRET"):
+        assert leaked not in joined
+
+    # Flet Custom URLs tolerates partial invalid IPv6 URLs without raising
+    page = _DummyPage()
+    open_warming_dialog(page, ws, pm, SimpleNamespace())
+    controls = list(_walk_controls(page.dialog))
+    custom_title = get_string("warming_card_custom_title")
+    custom_card = next(
+        c
+        for c in controls
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and any(isinstance(t, ft.Text) and t.value == custom_title for t in _walk_controls(c))
+    )
+    custom_card.on_click(None)
+    payload_field = [c for c in _walk_controls(page.dialog) if isinstance(c, ft.TextField)][1]
+    payload_field.value = "https://[broken"
+    payload_field.on_change(None)
+    assert any(
+        isinstance(c, ft.Text) and c.value == get_string("warming_override_invalid_msg")
+        for c in _walk_controls(page.dialog)
+    )
+
+
+def test_codex_r2_6_7_flet_draft_overwrite_guard_and_truthful_preview(tmp_path):
+    from src.core.strings import get_string
+
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming_guard.json"))
+    pm = SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name="p1")])
+    page = _DummyPage()
+    open_warming_dialog(page, ws, pm, SimpleNamespace())
+    controls = list(_walk_controls(page.dialog))
+    dropdown = next(c for c in controls if isinstance(c, ft.Dropdown))
+    text_fields = [c for c in controls if isinstance(c, ft.TextField)]
+    payload_field = text_fields[1]
+    duration_field = text_fields[4]
+
+    # Built-in cards display site counts (3 sites), not 15 steps
+    card_texts = [c.value or "" for c in controls if isinstance(c, ft.Text)]
+    assert any(get_string("warming_sites_count_badge", count=3) == t for t in card_texts)
+
+    # Create unsaved script draft, switch to Social & News, then try Customize -> Cancel keeps draft
+    dropdown.value = "script"
+    dropdown.on_select(None)
+    unsaved_json = '[{"action": "navigate", "url": "https://draft.test/unsaved"}]'
+    payload_field.value = unsaved_json
+    payload_field.on_change(None)
+
+    social_title = get_string("warming_card_social_title")
+    social_card = next(
+        c
+        for c in controls
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and any(isinstance(t, ft.Text) and t.value == social_title for t in _walk_controls(c))
+    )
+    social_card.on_click(None)
+    assert dropdown.value == "social_news"
+    assert duration_field.value == "4"
+    duration_field.value = "9"
+
+    # Attempt Customize -> Cancel keeps preset, duration, and /unsaved script draft intact
+    customize_btn = next(
+        c
+        for c in controls
+        if isinstance(c, ft.OutlinedButton)
+        and c.content == get_string("warming_customize_script_btn")
+    )
+    customize_btn.on_click(None)
+    cancel_btn = next(
+        c
+        for c in _walk_controls(page.dialog)
+        if isinstance(c, ft.TextButton) and c.content == get_string("cancel")
+    )
+    cancel_btn.on_click(None)
+    assert dropdown.value == "social_news"
+    assert duration_field.value == "9"
+    dropdown.value = "script"
+    dropdown.on_select(None)
+    assert "/unsaved" in payload_field.value
+
+    # Template pill and Insert Sample also prompt; Replace overwrites cleanly
+    sample_btn = next(
+        c for c in controls if isinstance(c, ft.TextButton) and c.icon == ft.Icons.CODE_ROUNDED
+    )
+    sample_btn.on_click(None)
+    replace_btn = next(
+        c
+        for c in _walk_controls(page.dialog)
+        if getattr(c, "content", None) == get_string("warming_replace_draft_btn")
+    )
+    replace_btn.on_click(None)
+    assert "news.google.com" in payload_field.value
+    assert "/unsaved" not in payload_field.value
+
+
+def test_codex_s9_1_url_mode_aborts_when_active_tab_switched_while_both_open(tmp_path, monkeypatch):
+    from src.core import config as app_config
+    from src.services.browser import control
+    from src.services.browser.launcher import BrowserLauncher
+    from src.services.warming import scheduler as sched_mod
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("switch-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+
+    class OpenTabStub:
+        def __init__(self, url: str, label: str):
+            self.url = url
+            self._label = label
+            self.closed = False
+            self.events: list[str] = []
+
+        def is_closed(self):
+            return self.closed
+
+        async def title(self):
+            return self._label
+
+        async def bring_to_front(self):
+            self.events.append("bring_to_front")
+
+        async def goto(self, url: str, wait_until: str = "load"):
+            self.events.append(f"goto:{url}")
+
+        async def evaluate(self, _expr: str):
+            self.events.append("scroll")
+            return True
+
+    tab0 = OpenTabStub("https://work.test/", "Work")
+    tab1 = OpenTabStub("https://start.test/", "WarmingTab")
+    ctx = SimpleNamespace(pages=[tab0, tab1])
+    ready = threading.Event()
+    stop_loop = threading.Event()
+    info: dict = {}
+
+    def _serve():
+        async def _run():
+            runner, port, token = await control.serve(ctx)
+            info["port"], info["token"] = port, token
+            ready.set()
+            while not stop_loop.is_set():
+                await asyncio.sleep(0.02)
+            await runner.cleanup()
+
+        asyncio.run(_run())
+
+    srv = threading.Thread(target=_serve, daemon=True)
+    srv.start()
+    assert ready.wait(3)
+
+    bl = BrowserLauncher()
+    bl._active_sessions["switch-prof"] = SimpleNamespace(poll=lambda: None)
+    bl._controls["switch-prof"] = (info["port"], info["token"])
+    orig_control = bl.control
+    scrolls_seen = 0
+
+    def _switching_control(
+        prof_name,
+        action,
+        params=None,
+        timeout=60,
+        *,
+        require_current=False,
+        target_page_id=None,
+        return_page_id=False,
+    ):
+        nonlocal scrolls_seen
+        res = orig_control(
+            prof_name,
+            action,
+            params,
+            timeout=timeout,
+            require_current=require_current,
+            target_page_id=target_page_id,
+            return_page_id=return_page_id,
+        )
+        if action == "scroll":
+            scrolls_seen += 1
+            if scrolls_seen == 2:
+                # Switch active tab to tab0 while BOTH tabs remain open.
+                orig_control(prof_name, "tab_select", {"index": 0}, timeout=5)
+        return res
+
+    bl.control = _switching_control
+
+    class InstantEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, _sec):
+            return False
+
+    orig_threading = sched_mod.threading
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=InstantEvent, Thread=orig_threading.Thread)
+    )
+    try:
+        task = ws.add_task(
+            "URL Tab Switch Guard",
+            ["switch-prof"],
+            preset="custom",
+            custom_urls=["https://example.test/one", "https://example.test/two"],
+            duration_minutes=1,
+        )
+        assert ws.execute_task_sync(task.id, pm, bl, step_dwell_seconds=6.0) is False
+        assert task.status == "failed"
+        assert task.last_result == "Interrupted (0/1 profiles)"
+        assert tab1.events == ["goto:https://example.test/one", "scroll", "scroll"]
+        assert tab0.events == ["bring_to_front"]
+        assert not tab0.closed and not tab1.closed
+    finally:
+        monkeypatch.setattr(sched_mod, "threading", orig_threading)
+        bl._active_sessions.clear()
+        bl._controls.clear()
+        stop_loop.set()
+        srv.join(3)
+
+
+def test_codex_s9_3_url_mode_known_scroll_error_keeps_dwell_budget(tmp_path, monkeypatch):
+    from src.core import config as app_config
+    from src.services.browser.launcher import BrowserControlError
+    from src.services.warming import scheduler as sched_mod
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("dwell-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    task = ws.add_task(
+        "Dwell Known Scroll Error",
+        ["dwell-prof"],
+        preset="custom",
+        custom_urls=["https://example.test/only"],
+        duration_minutes=1,
+    )
+    waits: list[float] = []
+    controls: list[str] = []
+
+    class RecordEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, sec):
+            waits.append(sec)
+            return False
+
+    class FailingScrollLauncher:
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, params=None, timeout=60):
+            controls.append(action)
+            if action == "scroll":
+                raise BrowserControlError(
+                    "wheel failed", status=422, error_code="action_error", unknown_state=False
+                )
+            return {}
+
+    orig_threading = sched_mod.threading
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=RecordEvent, Thread=orig_threading.Thread)
+    )
+    try:
+        assert ws.execute_task_sync(task.id, pm, FailingScrollLauncher()) is True
+    finally:
+        monkeypatch.setattr(sched_mod, "threading", orig_threading)
+
+    assert pytest.approx(sum(waits), rel=1e-6) == 60.0
+    assert controls.count("navigate") == 3
+    assert controls.count("scroll") == 3
+    assert task.status == "completed"
+
+
+def test_codex_s9_4_override_validation_rejects_unsupported_schemes_and_filters_mixed(
+    tmp_path, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    from src.api.app import create_app
+    from src.core import config as app_config
+    from src.core.container import Container
+    from src.core.strings import get_string
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+
+    container = Container()
+    container.profile_manager.add_profile("ovr-prof", "", "macos")
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        bad_res = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "Bad Override",
+                "profile_names": ["ovr-prof"],
+                "preset": "social_news",
+                "custom_urls": ["ftp://example.test/override"],
+                "duration_minutes": 4,
+            },
+        )
+        assert bad_res.status_code == 400
+    assert container.warming_scheduler.list_tasks() == []
+
+    # Flet: unsupported override on Social & News shows error and never silently saves Wikipedia defaults
+    page = _DummyPage()
+    ws = container.warming_scheduler
+    open_warming_dialog(page, ws, container.profile_manager, SimpleNamespace())
+    controls = list(_walk_controls(page.dialog))
+    social_title = get_string("warming_card_social_title")
+    social_card = next(
+        c
+        for c in controls
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and any(isinstance(t, ft.Text) and t.value == social_title for t in _walk_controls(c))
+    )
+    social_card.on_click(None)
+    payload_field = [c for c in controls if isinstance(c, ft.TextField)][1]
+    save_btn = next(
+        c
+        for c in controls
+        if getattr(c, "content", None) == get_string("warming_save_schedule_btn")
+    )
+    feedback = next(
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    )
+
+    payload_field.value = "ftp://example.test/override"
+    payload_field.on_change(None)
+    preview_texts = [c.value or "" for c in _walk_controls(page.dialog) if isinstance(c, ft.Text)]
+    assert any(get_string("warming_override_invalid_msg") == t for t in preview_texts)
+    assert not any("example.test/override" in t for t in preview_texts)
+    save_btn.on_click(None)
+    assert feedback.visible is True and feedback.color == COLORS["error"]
+    assert ws.list_tasks() == []
+
+    # Mixed override keeps only HTTP(S), surfaces ignored count, and saves filtered URL list
+    payload_field.value = "ftp://bad.test https://good.example/override"
+    payload_field.on_change(None)
+    mixed_texts = [c.value or "" for c in _walk_controls(page.dialog) if isinstance(c, ft.Text)]
+    assert any("good.example/override" in t for t in mixed_texts)
+    assert any(get_string("warming_urls_ignored_warn", count=1) == t for t in mixed_texts)
+    save_btn.on_click(None)
+    assert len(ws.list_tasks()) == 1
+    assert ws.list_tasks()[0].custom_urls == ["https://good.example/override"]
+
+    # Blank intentional override still saves built-in Social & News defaults cleanly
+    payload_field.value = ""
+    payload_field.on_change(None)
+    save_btn.on_click(None)
+    assert len(ws.list_tasks()) == 2
+    assert ws.list_tasks()[1].custom_urls == []
+    assert "https://www.wikipedia.org" in ws.list_tasks()[1].resolved_urls()
+
+
+def test_codex_s11_1_failed_first_navigate_cannot_redirect_url2_after_tab_switch(
+    tmp_path, monkeypatch
+):
+    from src.core import config as app_config
+    from src.services.browser import control
+    from src.services.browser.launcher import BrowserLauncher
+    from src.services.warming import scheduler as sched_mod
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("fail-nav-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+
+    class NavErrTabStub:
+        def __init__(self, url: str, label: str, *, fail_url_substr: str = ""):
+            self.url = url
+            self._label = label
+            self.fail_url_substr = fail_url_substr
+            self.closed = False
+            self.events: list[str] = []
+
+        def is_closed(self):
+            return self.closed
+
+        async def title(self):
+            return self._label
+
+        async def bring_to_front(self):
+            self.events.append("bring_to_front")
+
+        async def goto(self, url: str, wait_until: str = "load"):
+            self.events.append(f"goto:{url}")
+            if self.fail_url_substr and self.fail_url_substr in url:
+                raise RuntimeError("net::ERR_CONNECTION_REFUSED")
+
+        async def evaluate(self, _expr: str):
+            self.events.append("scroll")
+            return True
+
+    tab0 = NavErrTabStub("https://work.test/", "Work")
+    tab1 = NavErrTabStub(
+        "https://start.test/", "WarmingTab", fail_url_substr="example.test/fail-first"
+    )
+    ctx = SimpleNamespace(pages=[tab0, tab1])
+    ready = threading.Event()
+    stop_loop = threading.Event()
+    info: dict = {}
+
+    def _serve():
+        async def _run():
+            runner, port, token = await control.serve(ctx)
+            info["port"], info["token"] = port, token
+            ready.set()
+            while not stop_loop.is_set():
+                await asyncio.sleep(0.02)
+            await runner.cleanup()
+
+        asyncio.run(_run())
+
+    srv = threading.Thread(target=_serve, daemon=True)
+    srv.start()
+    assert ready.wait(3)
+
+    bl = BrowserLauncher()
+    bl._active_sessions["fail-nav-prof"] = SimpleNamespace(poll=lambda: None)
+    bl._controls["fail-nav-prof"] = (info["port"], info["token"])
+    orig_control = bl.control
+    switched = [False]
+
+    def _switching_on_first_nav_err(
+        prof_name,
+        action,
+        params=None,
+        timeout=60,
+        *,
+        require_current=False,
+        target_page_id=None,
+        return_page_id=False,
+    ):
+        try:
+            return orig_control(
+                prof_name,
+                action,
+                params,
+                timeout=timeout,
+                require_current=require_current,
+                target_page_id=target_page_id,
+                return_page_id=return_page_id,
+            )
+        except Exception:
+            if not switched[0]:
+                switched[0] = True
+                orig_control(prof_name, "tab_select", {"index": 0}, timeout=5)
+            raise
+
+    bl.control = _switching_on_first_nav_err
+
+    class InstantEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, _sec):
+            return False
+
+    orig_threading = sched_mod.threading
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=InstantEvent, Thread=orig_threading.Thread)
+    )
+    try:
+        task = ws.add_task(
+            "Fail First Nav Switch",
+            ["fail-nav-prof"],
+            preset="custom",
+            custom_urls=["https://example.test/fail-first", "https://example.test/second"],
+            duration_minutes=1,
+        )
+        assert ws.execute_task_sync(task.id, pm, bl, step_dwell_seconds=6.0) is False
+        assert task.status == "failed"
+        assert task.last_result == "Interrupted (0/1 profiles)"
+        assert tab1.events == ["goto:https://example.test/fail-first"]
+        assert tab0.events == ["bring_to_front"]
+
+        # Even if initial navigate error lacks page_id (e.g. HTTP 400), URL #2 is never tried unpinned
+        class MissingIdLauncher:
+            def __init__(self):
+                self.calls = 0
+
+            def is_running(self, _name):
+                return True
+
+            def control(
+                self,
+                _name,
+                _action,
+                _params=None,
+                timeout=60,
+                *,
+                require_current=False,
+                target_page_id=None,
+                return_page_id=False,
+            ):
+                self.calls += 1
+                raise BrowserControlError("bad request", status=400, unknown_state=False)
+
+        from src.services.browser.launcher import BrowserControlError
+
+        missing_bl = MissingIdLauncher()
+        task2 = ws.add_task(
+            "Missing Pid First Err",
+            ["fail-nav-prof"],
+            preset="custom",
+            custom_urls=["https://example.test/one", "https://example.test/two"],
+            duration_minutes=1,
+        )
+        assert ws.execute_task_sync(task2.id, pm, missing_bl, step_dwell_seconds=0.0) is False
+        assert missing_bl.calls == 1
+        assert task2.status == "failed"
+        assert task2.last_result == "Interrupted (0/1 profiles)"
+    finally:
+        monkeypatch.setattr(sched_mod, "threading", orig_threading)
+        bl._active_sessions.clear()
+        bl._controls.clear()
+        stop_loop.set()
+        srv.join(3)
+
+
+def test_codex_s11_3_legacy_invalid_custom_and_builtin_overrides_preserve_disk_and_block_run(
+    tmp_path, monkeypatch
+):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    warming_file = tmp_path / "warming.json"
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(warming_file))
+
+    legacy_store = [
+        {
+            "id": "legacy-custom",
+            "name": "Legacy Custom Bad",
+            "profile_names": ["leg-prof"],
+            "preset": "custom",
+            "custom_urls": ["https:///example.test/old"],
+            "duration_minutes": 3,
+        },
+        {
+            "id": "legacy-builtin",
+            "name": "Legacy Social Bad",
+            "profile_names": ["leg-prof"],
+            "preset": "social_news",
+            "custom_urls": ["https:///example.test/legacy-ovr"],
+            "duration_minutes": 3,
+        },
+        {
+            "id": "valid-yt",
+            "name": "Valid YouTube",
+            "profile_names": ["leg-prof"],
+            "preset": "youtube_trust",
+            "custom_urls": [],
+            "duration_minutes": 3,
+        },
+    ]
+    warming_file.write_text(json.dumps(legacy_store, indent=2), encoding="utf-8")
+
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("leg-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(warming_file))
+
+    assert ws.get_task("legacy-custom").custom_urls == ["https:///example.test/old"]
+    assert ws.get_task("legacy-builtin").custom_urls == ["https:///example.test/legacy-ovr"]
+    assert ws.get_task("legacy-custom").resolved_urls() == []
+    assert ws.get_task("legacy-builtin").resolved_urls() == []
+
+    launches: list[str] = []
+    controls: list[tuple[str, dict | None]] = []
+
+    class RecordLauncher:
+        def is_running(self, _name):
+            return False
+
+        def start_thread(self, profile, _log):
+            launches.append(profile.name)
+            return True
+
+        def wait_for_launch(self, _name, timeout=45):
+            return True, None
+
+        def control(self, _name, action, params=None, timeout=60):
+            controls.append((action, params))
+            return {}
+
+        def stop_profile(self, _name):
+            return True
+
+    launcher = RecordLauncher()
+    for tid, orig_url in (
+        ("legacy-custom", "https:///example.test/old"),
+        ("legacy-builtin", "https:///example.test/legacy-ovr"),
+    ):
+        assert ws.execute_task_sync(tid, pm, launcher, step_dwell_seconds=0.0) is False
+        tk = ws.get_task(tid)
+        assert tk.status == "failed"
+        assert "Invalid URLs" in tk.last_result
+        assert tk.custom_urls == [orig_url]
+        assert launches == []
+        assert controls == []
+
+    persisted = {item["id"]: item for item in json.loads(warming_file.read_text(encoding="utf-8"))}
+    assert persisted["legacy-custom"]["custom_urls"] == ["https:///example.test/old"]
+    assert persisted["legacy-builtin"]["custom_urls"] == ["https:///example.test/legacy-ovr"]
+
+    # Valid task in the same store still runs cleanly
+    assert ws.execute_task_sync("valid-yt", pm, launcher, step_dwell_seconds=0.0) is True
+    assert launches == ["leg-prof"]
+    assert any("youtube.com" in (c[1] or {}).get("url", "") for c in controls)
+
+
+def test_codex_s13_3_port_validation_parity_across_scheduler_rest_and_flet(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from src.api.app import create_app
+    from src.core import config as app_config
+    from src.core.container import Container
+    from src.core.strings import get_string
+    from src.services.warming.scheduler import normalize_warming_urls
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    warming_file = tmp_path / "warming.json"
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(warming_file))
+
+    for bad_url in (
+        "https://example.test:70000/",
+        "https://example.test:65536/",
+        "https://example.test:-1/",
+        "https://example.test:bad/",
+        "https://[::1]:70000/x",
+        "localhost:70000/x",
+        "https://example.test\\foo",
+        ["https://bad host/x"],
+    ):
+        assert normalize_warming_urls(bad_url) == []
+
+    assert normalize_warming_urls(
+        "https://example.test:8443/ok https://example.test:65535/ https://[::1]:8080/x localhost:8080/x"
+    ) == [
+        "https://example.test:8443/ok",
+        "https://example.test:65535/",
+        "https://[::1]:8080/x",
+        "https://localhost:8080/x",
+    ]
+
+    container = Container()
+    container.profile_manager.add_profile("port-prof", "", "macos")
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        for bad_preset in ("social_news", "custom"):
+            bad_res = client.post(
+                "/api/v1/warming/tasks",
+                json={
+                    "name": f"Bad Port {bad_preset}",
+                    "profile_names": ["port-prof"],
+                    "preset": bad_preset,
+                    "custom_urls": ["https://example.test:70000/"],
+                    "duration_minutes": 3,
+                },
+            )
+            assert bad_res.status_code == 400
+        assert container.warming_scheduler.list_tasks() == []
+
+        mixed_res = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "Mixed Port Override",
+                "profile_names": ["port-prof"],
+                "preset": "social_news",
+                "custom_urls": ["https://example.test:70000/", "https://example.test:8443/ok"],
+                "duration_minutes": 4,
+            },
+        )
+        assert mixed_res.status_code == 201
+        assert mixed_res.json()["custom_urls"] == ["https://example.test:8443/ok"]
+
+        ok_res = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "Valid Port Custom",
+                "profile_names": ["port-prof"],
+                "preset": "custom",
+                "custom_urls": ["https://example.test:8443/ok"],
+                "duration_minutes": 3,
+            },
+        )
+        assert ok_res.status_code == 201
+        assert ok_res.json()["custom_urls"] == ["https://example.test:8443/ok"]
+
+    # Flet: bad port on Social & News rejects save and never renders raw "URL" step fallback
+    page = _DummyPage()
+    ws = container.warming_scheduler
+    for existing_task in list(ws.list_tasks()):
+        ws.delete_task(existing_task.id)
+    open_warming_dialog(page, ws, container.profile_manager, SimpleNamespace())
+    controls = list(_walk_controls(page.dialog))
+    social_title = get_string("warming_card_social_title")
+    social_card = next(
+        c
+        for c in controls
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and any(isinstance(t, ft.Text) and t.value == social_title for t in _walk_controls(c))
+    )
+    social_card.on_click(None)
+    payload_field = [c for c in controls if isinstance(c, ft.TextField)][1]
+    save_btn = next(
+        c
+        for c in controls
+        if getattr(c, "content", None) == get_string("warming_save_schedule_btn")
+    )
+    feedback = next(
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    )
+
+    payload_field.value = "https://example.test:70000/"
+    payload_field.on_change(None)
+    preview_texts = [c.value or "" for c in _walk_controls(page.dialog) if isinstance(c, ft.Text)]
+    assert get_string("warming_override_invalid_msg") in preview_texts
+    assert "navigate" not in preview_texts
+    assert not any("70000" in t or "wikipedia.org" in t for t in preview_texts)
+    save_btn.on_click(None)
+    assert feedback.visible is True and feedback.color == COLORS["error"]
+    assert ws.list_tasks() == []
+
+    payload_field.value = "https://example.test:70000/ https://example.test:8443/ok"
+    payload_field.on_change(None)
+    mixed_texts = [c.value or "" for c in _walk_controls(page.dialog) if isinstance(c, ft.Text)]
+    assert any("example.test:8443/ok" in t for t in mixed_texts)
+    assert get_string("warming_urls_ignored_warn", count=1) in mixed_texts
+    save_btn.on_click(None)
+    assert len(ws.list_tasks()) == 1
+    assert ws.list_tasks()[0].custom_urls == ["https://example.test:8443/ok"]
+
+    payload_field.value = "https://example.test:8443/ok"
+    payload_field.on_change(None)
+    save_btn.on_click(None)
+    assert len(ws.list_tasks()) == 2
+    assert ws.list_tasks()[1].custom_urls == ["https://example.test:8443/ok"]
+
+    # Legacy store entry with invalid port is preserved verbatim on disk and blocked from running
+    warming_file.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "legacy-bad-port",
+                    "name": "Legacy Bad Port",
+                    "profile_names": ["port-prof"],
+                    "preset": "custom",
+                    "custom_urls": ["https://example.test:70000/"],
+                    "duration_minutes": 3,
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    reloaded = WarmingSchedulerService(file_path=str(warming_file))
+    legacy_task = reloaded.get_task("legacy-bad-port")
+    assert legacy_task.custom_urls == ["https://example.test:70000/"]
+    assert legacy_task.resolved_urls() == []
+    launches: list[str] = []
+
+    class NoLaunch:
+        def is_running(self, _name):
+            return False
+
+        def start_thread(self, profile, _log):
+            launches.append(profile.name)
+            return True
+
+    assert (
+        reloaded.execute_task_sync("legacy-bad-port", container.profile_manager, NoLaunch())
+        is False
+    )
+    assert legacy_task.status == "failed"
+    assert "Invalid URLs" in legacy_task.last_result
+    assert launches == []
