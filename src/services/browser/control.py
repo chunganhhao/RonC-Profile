@@ -7,22 +7,48 @@ stdout as "CONTROL:<port>:<token>" so the launcher can forward API calls.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
+import contextvars
+import math
 import re
 import secrets
+import time
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 from aiohttp import web
 
+try:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+except ImportError:  # pragma: no cover
+    PlaywrightTimeoutError = ()  # type: ignore[assignment]
+
+try:
+    from playwright._impl._errors import TargetClosedError as PlaywrightTargetClosedError
+except ImportError:  # pragma: no cover
+    PlaywrightTargetClosedError = ()  # type: ignore[assignment]
+
 ALLOWED_SCHEMES = ("http", "https", "about")
+DEFAULT_CANCEL_GRACE_SECONDS = 1.5
 MAX_FULL_PAGE_HEIGHT = 16_384
 MAX_TEXT = 40_000
 TOKEN_HEADER = "X-Control-Token"
+_NON_MUTATING_TIMEOUT_ACTIONS = frozenset({"wait_for", "snapshot", "text", "tabs", "screenshot"})
+_TAB_SWITCH_ACTIONS = frozenset({"tab_new", "tab_select", "tab_close"})
+_REQUIRE_CURRENT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_control_require_current", default=False
+)
+_monotonic = time.monotonic
 
 
 class ControlError(Exception):
     pass
+
+
+class PartialActionError(Exception):
+    """Raised when a multi-step action fails after an earlier sub-step mutated page state."""
 
 
 _SCHEME = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):(.*)$", re.S)
@@ -81,6 +107,10 @@ class PageController:
         return [p for p in self._context.pages if not p.is_closed()]
 
     async def _page(self) -> Any:
+        if _REQUIRE_CURRENT.get():
+            if self._current is None or self._current.is_closed():
+                raise PartialActionError("Active target tab is no longer open")
+            return self._current
         pages = self._open_pages()
         if self._current is not None and not self._current.is_closed():
             return self._current
@@ -93,17 +123,41 @@ class PageController:
     async def _describe(self, page: Any) -> dict[str, Any]:
         return {"url": page.url, "title": await page.title()}
 
+    async def _describe_after_mutation(self, page: Any) -> dict[str, Any]:
+        if page.is_closed():
+            raise PartialActionError("Target page closed during action")
+        try:
+            return await self._describe(page)
+        except Exception as exc:
+            raise PartialActionError(f"{type(exc).__name__}: {exc}") from exc
+
+    async def _tabs_after_mutation(self, expected_current: Any = None) -> dict[str, Any]:
+        if expected_current is not None and expected_current.is_closed():
+            raise PartialActionError("Target tab closed during action")
+        try:
+            pages = self._open_pages()
+            current = expected_current if expected_current is not None else await self._page()
+            tabs = [
+                {"index": i, "url": p.url, "title": await p.title(), "active": p is current}
+                for i, p in enumerate(pages)
+            ]
+        except Exception as exc:
+            raise PartialActionError(f"{type(exc).__name__}: {exc}") from exc
+        if expected_current is not None and expected_current.is_closed():
+            raise PartialActionError("Target tab closed during action")
+        return {"tabs": tabs}
+
     # --- actions ----------------------------------------------------------
 
     async def navigate(self, url: str, wait_until: str = "load") -> dict[str, Any]:
         page = await self._page()
         await page.goto(_check_url(url), wait_until=wait_until)
-        return await self._describe(page)
+        return await self._describe_after_mutation(page)
 
     async def back(self) -> dict[str, Any]:
         page = await self._page()
         await page.go_back()
-        return await self._describe(page)
+        return await self._describe_after_mutation(page)
 
     async def snapshot(self, max_chars: int = MAX_TEXT) -> dict[str, Any]:
         """Accessibility tree of the page: roles, names and text, compact."""
@@ -121,7 +175,7 @@ class PageController:
     async def click(self, selector: str, timeout: int = 10_000) -> dict[str, Any]:
         page = await self._page()
         await page.locator(selector).first.click(timeout=timeout)
-        return await self._describe(page)
+        return await self._describe_after_mutation(page)
 
     async def type(
         self,
@@ -138,8 +192,11 @@ class PageController:
         else:
             await field.press_sequentially(text, timeout=timeout)
         if submit:
-            await field.press("Enter")
-        return await self._describe(page)
+            try:
+                await field.press("Enter")
+            except Exception as exc:
+                raise PartialActionError(f"{type(exc).__name__}: {exc}") from exc
+        return await self._describe_after_mutation(page)
 
     async def press(self, key: str, selector: str | None = None) -> dict[str, Any]:
         page = await self._page()
@@ -147,7 +204,7 @@ class PageController:
             await page.locator(selector).first.press(key)
         else:
             await page.keyboard.press(key)
-        return await self._describe(page)
+        return await self._describe_after_mutation(page)
 
     async def click_at(self, x: float, y: float, humanize: bool = False) -> dict[str, Any]:
         """Click viewport coordinates, as seen on a screenshot of the active tab."""
@@ -158,7 +215,7 @@ class PageController:
             await human_click_at(page, x, y)
         else:
             await page.mouse.click(x, y)
-        return await self._describe(page)
+        return await self._describe_after_mutation(page)
 
     async def keyboard_type(self, text: str, humanize: bool = False) -> dict[str, Any]:
         """Type into whatever element has focus."""
@@ -169,7 +226,7 @@ class PageController:
             await human_type(page, text)
         else:
             await page.keyboard.type(text)
-        return await self._describe(page)
+        return await self._describe_after_mutation(page)
 
     async def scroll(
         self,
@@ -191,7 +248,7 @@ class PageController:
                 await wheel_fn(float(delta_x), float(delta_y))
             else:
                 await page.evaluate(f"window.scrollBy({float(delta_x)}, {float(delta_y)}); true;")
-        return await self._describe(page)
+        return await self._describe_after_mutation(page)
 
     async def wait_for(self, selector: str, timeout: int = 15_000) -> dict[str, Any]:
         page = await self._page()
@@ -225,18 +282,30 @@ class PageController:
         }
 
     async def tab_new(self, url: str | None = None) -> dict[str, Any]:
-        self._current = await self._context.new_page()
-        if url:
-            await self._current.goto(_check_url(url))
-        return await self.tabs()
+        checked = _check_url(url) if url else None
+        target = await self._context.new_page()
+        self._current = target
+        if checked:
+            try:
+                await target.goto(checked)
+            except Exception as exc:
+                raise PartialActionError(f"{type(exc).__name__}: {exc}") from exc
+        return await self._tabs_after_mutation(expected_current=target)
 
     async def tab_select(self, index: int) -> dict[str, Any]:
         pages = self._open_pages()
         if not 0 <= index < len(pages):
             raise ControlError(f"No tab at index {index}")
-        self._current = pages[index]
-        await self._current.bring_to_front()
-        return await self.tabs()
+        target = pages[index]
+        try:
+            await target.bring_to_front()
+        except Exception as exc:
+            if target.is_closed():
+                self._current = target
+                raise PartialActionError(f"{type(exc).__name__}: {exc}") from exc
+            raise
+        self._current = target
+        return await self._tabs_after_mutation(expected_current=target)
 
     async def tab_close(self, index: int) -> dict[str, Any]:
         pages = self._open_pages()
@@ -247,7 +316,7 @@ class PageController:
             raise ControlError("Cannot close the last tab; stop the profile instead")
         await pages[index].close()
         self._current = None
-        return await self.tabs()
+        return await self._tabs_after_mutation()
 
     ACTIONS = (
         "navigate",
@@ -269,32 +338,178 @@ class PageController:
         "tab_close",
     )
 
-    async def dispatch(self, action: str, params: dict[str, Any]) -> Any:
+    async def dispatch(
+        self, action: str, params: dict[str, Any], *, require_current: bool = False
+    ) -> Any:
         if action not in self.ACTIONS:
             raise ControlError(f"Unknown action '{action}'")
+        strict = require_current and action not in _TAB_SWITCH_ACTIONS
+        token = _REQUIRE_CURRENT.set(strict)
         try:
             return await getattr(self, action)(**params)
         except TypeError as e:
             raise ControlError(f"Invalid parameters for '{action}': {e}") from e
+        finally:
+            _REQUIRE_CURRENT.reset(token)
 
 
 def build_app(controller: PageController, token: str) -> web.Application:
+    action_lock = asyncio.Lock()
+
+    def _release_on_done(done_task: asyncio.Task[Any]) -> None:
+        if not done_task.cancelled():
+            with contextlib.suppress(BaseException):
+                done_task.exception()
+        if action_lock.locked():
+            action_lock.release()
+
     async def handle(request: web.Request) -> web.Response:
         if not secrets.compare_digest(request.headers.get(TOKEN_HEADER, ""), token):
             return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
             body = await request.json()
-            result = await controller.dispatch(body.get("action", ""), body.get("params") or {})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": f"Invalid JSON: {e}"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response(
+                {"ok": False, "error": "Request body must be a JSON object"}, status=400
+            )
+        raw_require_current = body.get("require_current", False)
+        if not isinstance(raw_require_current, bool):
+            return web.json_response(
+                {"ok": False, "error": "require_current must be a boolean"}, status=400
+            )
+
+        raw_timeout_ms = body.get("timeout_ms")
+        timeout_s: float | None = None
+        if raw_timeout_ms is not None:
+            if isinstance(raw_timeout_ms, bool) or not isinstance(raw_timeout_ms, (int, float)):
+                return web.json_response(
+                    {"ok": False, "error": "timeout_ms must be a positive number"}, status=400
+                )
+            try:
+                timeout_val = float(raw_timeout_ms)
+            except OverflowError:
+                return web.json_response(
+                    {"ok": False, "error": "timeout_ms is out of range"}, status=400
+                )
+            if not math.isfinite(timeout_val) or timeout_val <= 0:
+                return web.json_response(
+                    {"ok": False, "error": "timeout_ms must be a positive number"}, status=400
+                )
+            timeout_s = timeout_val / 1000.0
+        deadline = _monotonic() + timeout_s if timeout_s is not None else None
+
+        if timeout_s is not None:
+            try:
+                await asyncio.wait_for(action_lock.acquire(), timeout=timeout_s)
+            except asyncio.TimeoutError:
+                return web.json_response(
+                    {
+                        "ok": False,
+                        "error": "TimeoutError: Previous browser action is still running",
+                        "error_code": "action_busy",
+                        "unknown_state": False,
+                        "settled": False,
+                    },
+                    status=504,
+                )
+        else:
+            await action_lock.acquire()
+
+        lock_handed_off = False
+        task: asyncio.Task[Any] | None = None
+        try:
+            action = body.get("action", "")
+            params = body.get("params") or {}
+            remaining: float | None = None
+            if deadline is not None:
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    return web.json_response(
+                        {
+                            "ok": False,
+                            "error": f"TimeoutError: Deadline expired before '{action}' started",
+                            "error_code": "deadline_expired",
+                            "unknown_state": False,
+                            "settled": True,
+                        },
+                        status=504,
+                    )
+            coro = (
+                controller.dispatch(action, params, require_current=True)
+                if raw_require_current
+                else controller.dispatch(action, params)
+            )
+            task = asyncio.create_task(coro)
+            if remaining is not None:
+                done, _ = await asyncio.wait({task}, timeout=remaining)
+                if not done:
+                    task.cancel()
+                    grace = min(DEFAULT_CANCEL_GRACE_SECONDS, max(0.15, (timeout_s or 1.0) * 0.25))
+                    done_after, _ = await asyncio.wait({task}, timeout=grace)
+                    settled = bool(done_after)
+                    if settled:
+                        if not task.cancelled():
+                            with contextlib.suppress(BaseException):
+                                task.exception()
+                    else:
+                        # Keep action_lock held until the uninterruptible action finishes
+                        # so subsequent commands cannot interleave with its late side effects.
+                        lock_handed_off = True
+                        task.add_done_callback(_release_on_done)
+                    return web.json_response(
+                        {
+                            "ok": False,
+                            "error": f"TimeoutError: Action '{action}' timed out",
+                            "error_code": "state_uncertain",
+                            "unknown_state": True,
+                            "settled": settled,
+                        },
+                        status=504,
+                    )
+            result = await task
         except ControlError as e:
             return web.json_response({"ok": False, "error": str(e)}, status=400)
         except Exception as e:  # Playwright timeouts, navigation errors, JS errors
             message = " ".join(str(e).split())
             if "Call log:" in message:
                 message = message.split("Call log:", 1)[0].strip()
+            current = getattr(controller, "_current", None)
+            page_closed = bool(
+                current is not None
+                and callable(getattr(current, "is_closed", None))
+                and current.is_closed()
+            )
+            is_partial = isinstance(e, PartialActionError)
+            is_timeout = isinstance(e, (TimeoutError, PlaywrightTimeoutError))
+            is_target_closed = isinstance(e, PlaywrightTargetClosedError) or page_closed
+            unknown_state = (
+                is_partial
+                or is_target_closed
+                or (is_timeout and action not in _NON_MUTATING_TIMEOUT_ACTIONS)
+            )
+            error_code = (
+                "state_uncertain"
+                if unknown_state
+                else ("action_timeout" if is_timeout else "action_error")
+            )
             return web.json_response(
-                {"ok": False, "error": f"{type(e).__name__}: {message[:500]}"},
+                {
+                    "ok": False,
+                    "error": f"{type(e).__name__}: {message[:500]}",
+                    "error_code": error_code,
+                    "unknown_state": unknown_state,
+                },
                 status=422,
             )
+        finally:
+            if not lock_handed_off:
+                if task is not None and not task.done():
+                    task.cancel()
+                    task.add_done_callback(_release_on_done)
+                elif action_lock.locked():
+                    action_lock.release()
         return web.json_response({"ok": True, "result": result})
 
     app = web.Application(client_max_size=4 * 1024 * 1024)

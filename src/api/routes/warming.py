@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -10,6 +10,7 @@ from ...services.warming.scheduler import (
     WARMING_PRESETS,
     WarmingStopTimeout,
     WarmingTaskNotFound,
+    normalize_warming_steps,
 )
 from ..dependencies import (
     get_browser_launcher,
@@ -32,6 +33,7 @@ class WarmingCreateRequest(BaseModel):
     profile_names: list[str] = Field(..., min_length=1)
     preset: str = "youtube_trust"
     custom_urls: list[str] = Field(default_factory=list)
+    script_steps: list[dict[str, Any]] | None = None
     duration_minutes: int = Field(default=3, ge=1, le=60)
     schedule_time: str = ""
     repeat_daily: bool = True
@@ -52,11 +54,23 @@ def create_warming_task(
     ws: WarmingSchedulerService = Depends(get_warming_scheduler),
     eb: EventBus = Depends(get_event_bus),
 ) -> dict:
+    normalized_steps: list[dict[str, Any]] | None = None
+    if body.preset == "script":
+        try:
+            normalized_steps = normalize_warming_steps(
+                body.script_steps if body.script_steps is not None else []
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid warming script: {exc}") from exc
+    elif body.script_steps:
+        raise HTTPException(status_code=400, detail="script_steps requires preset='script'")
+
     task = ws.add_task(
         name=body.name,
         profile_names=body.profile_names,
         preset=body.preset,
         custom_urls=body.custom_urls,
+        script_steps=normalized_steps,
         duration_minutes=body.duration_minutes,
         schedule_time=body.schedule_time,
         repeat_daily=body.repeat_daily,

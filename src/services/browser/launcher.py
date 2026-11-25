@@ -55,9 +55,20 @@ class ProfileBusyError(Exception):
 class BrowserControlError(Exception):
     """A page action failed or the profile has no controllable browser."""
 
-    def __init__(self, message: str, status: int = 400) -> None:
+    def __init__(
+        self,
+        message: str,
+        status: int = 400,
+        *,
+        error_code: str | None = None,
+        unknown_state: bool | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
+        self.error_code = error_code
+        self.unknown_state = (
+            bool(unknown_state) if unknown_state is not None else status in (409, 503, 504)
+        )
 
 
 class BrowserLauncher:
@@ -220,6 +231,8 @@ class BrowserLauncher:
         action: str,
         params: dict[str, Any] | None = None,
         timeout: float = 60,
+        *,
+        require_current: bool = False,
     ) -> Any:
         """Run a page action in a running profile's browser and return its result."""
         with self._lock:
@@ -230,20 +243,41 @@ class BrowserLauncher:
             # Process is up but has not announced its control channel yet.
             raise BrowserControlError("Browser is still starting", status=503)
         port, token = endpoint
+        payload: dict[str, Any] = {"action": action, "params": params or {}}
+        if require_current is not False:
+            payload["require_current"] = require_current
+        socket_timeout = timeout
+        if timeout is not None and timeout > 0:
+            payload["timeout_ms"] = max(1, int(timeout * 1000))
+            socket_timeout = timeout + min(2.0, max(0.3, timeout * 0.35))
         request = urllib.request.Request(
             f"http://127.0.0.1:{port}/action",
-            data=json.dumps({"action": action, "params": params or {}}).encode(),
+            data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json", TOKEN_HEADER: token},
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, timeout=socket_timeout) as response:
                 body = json.loads(response.read())
         except urllib.error.HTTPError as e:
-            body = json.loads(e.read() or b"{}")
-            raise BrowserControlError(body.get("error", f"HTTP {e.code}"), status=e.code) from e
+            raw_err = e.read() or b"{}"
+            try:
+                body = json.loads(raw_err)
+            except ValueError:
+                body = {}
+            raise BrowserControlError(
+                body.get("error", f"HTTP {e.code}"),
+                status=e.code,
+                error_code=body.get("error_code"),
+                unknown_state=body.get("unknown_state"),
+            ) from e
         except (urllib.error.URLError, TimeoutError) as e:
-            raise BrowserControlError(f"Browser did not respond: {e}", status=504) from e
+            raise BrowserControlError(
+                f"Browser did not respond: {e}",
+                status=504,
+                error_code="transport_timeout",
+                unknown_state=True,
+            ) from e
         return body["result"]
 
     def running_profile_names(self) -> set[str]:

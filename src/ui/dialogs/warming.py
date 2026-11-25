@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -8,6 +9,7 @@ from typing import TYPE_CHECKING
 import flet as ft
 
 from ...core.strings import get_string
+from ...services.warming.scheduler import SAMPLE_WARMING_SCRIPT, normalize_warming_steps
 from ..theme.colors import COLORS, FONT_BOLD, FONT_DATA, FONT_SEMIBOLD
 from ..theme.styles import (
     ACCENT_STYLE,
@@ -58,7 +60,14 @@ def open_warming_dialog(
             ft.dropdown.Option("social_news", get_string("warming_preset_social")),
             ft.dropdown.Option("ecommerce_cookie", get_string("warming_preset_ecommerce")),
             ft.dropdown.Option("custom", get_string("warming_preset_custom")),
+            ft.dropdown.Option("script", get_string("warming_preset_script")),
         ],
+    )
+    payload_label = ft.Text(
+        get_string("warming_custom_urls_label"),
+        size=12,
+        font_family=FONT_SEMIBOLD,
+        color=COLORS["text_sub"],
     )
     custom_urls_field = ft.TextField(
         multiline=True,
@@ -68,6 +77,47 @@ def open_warming_dialog(
         text_style=_DATA,
         **DLG_FIELD_KWARGS,
     )
+
+    drafts = {"url": "", "script": ""}
+    active_mode = ["url"]
+
+    def _insert_sample_script(_: ft.ControlEvent | None = None) -> None:
+        sample = json.dumps(SAMPLE_WARMING_SCRIPT, indent=2, ensure_ascii=False)
+        custom_urls_field.value = sample
+        drafts["script"] = sample
+        with contextlib.suppress(Exception):
+            page.update()
+
+    sample_script_btn = ft.TextButton(
+        get_string("warming_script_sample_btn"),
+        icon=ft.Icons.CODE_ROUNDED,
+        visible=False,
+        on_click=_insert_sample_script,
+    )
+
+    def _sync_preset_mode(_: ft.ControlEvent | None = None) -> None:
+        is_script = (preset_dropdown.value or "youtube_trust") == "script"
+        new_mode = "script" if is_script else "url"
+        if new_mode != active_mode[0]:
+            drafts[active_mode[0]] = custom_urls_field.value or ""
+            active_mode[0] = new_mode
+            custom_urls_field.value = drafts[new_mode]
+        payload_label.value = get_string(
+            "warming_script_steps_label" if is_script else "warming_custom_urls_label"
+        )
+        custom_urls_field.hint_text = (
+            '[{"action": "navigate", "url": "https://news.google.com"}, '
+            '{"action": "wait", "min_s": 3, "max_s": 7}]'
+            if is_script
+            else "https://www.youtube.com\nhttps://docs.google.com"
+        )
+        custom_urls_field.min_lines = 4 if is_script else 2
+        custom_urls_field.max_lines = 6 if is_script else 3
+        sample_script_btn.visible = is_script
+        with contextlib.suppress(Exception):
+            page.update()
+
+    preset_dropdown.on_select = _sync_preset_mode
     duration_field = ft.TextField(
         value="3",
         width=130,
@@ -168,6 +218,9 @@ def open_warming_dialog(
                 last_str = (
                     time.strftime("%H:%M:%S", time.localtime(t.last_run)) if t.last_run else "-"
                 )
+                preset_tag = (
+                    f"script ({len(t.script_steps)} steps)" if t.preset == "script" else t.preset
+                )
                 rows.append(
                     ft.Container(
                         padding=ft.Padding.symmetric(horizontal=12, vertical=8),
@@ -193,7 +246,7 @@ def open_warming_dialog(
                                                 overflow=ft.TextOverflow.ELLIPSIS,
                                             ),
                                             ft.Text(
-                                                f"{t.preset} · {len(t.profile_names)} profile(s) · {t.duration_minutes}m · Last: {last_str}",
+                                                f"{preset_tag} · {len(t.profile_names)} profile(s) · {t.duration_minutes}m · Last: {last_str}",
                                                 size=11.5,
                                                 font_family=FONT_DATA,
                                                 color=COLORS["text_dim"],
@@ -265,10 +318,26 @@ def open_warming_dialog(
     def _create_from_inputs(run_immediately: bool) -> None:
         name = (task_name_field.value or "").strip()
         preset = preset_dropdown.value or "youtube_trust"
-        raw_urls = (custom_urls_field.value or "").strip()
+        raw_payload = (custom_urls_field.value or "").strip()
         dur_str = (duration_field.value or "3").strip()
         dur = int(dur_str) if dur_str.isdigit() else 3
         sched = "" if run_immediately else (schedule_field.value or "").strip()
+
+        parsed_steps = None
+        raw_urls = raw_payload
+        if preset == "script":
+            # Check core fields first so empty name/targets still show warming_invalid_msg.
+            if name and targets:
+                try:
+                    parsed_steps = normalize_warming_steps(raw_payload)
+                except ValueError as exc:
+                    feedback_text.value = get_string("warming_script_invalid_msg", error=str(exc))
+                    feedback_text.color = COLORS["error"]
+                    feedback_text.visible = True
+                    with contextlib.suppress(Exception):
+                        page.update()
+                    return
+            raw_urls = ""
 
         try:
             task = warming_service.add_task(
@@ -280,6 +349,11 @@ def open_warming_dialog(
                 schedule_time=sched,
                 repeat_daily=bool(repeat_checkbox.value),
                 enabled=True,
+                **(
+                    {"script_steps": parsed_steps}
+                    if preset == "script" and parsed_steps is not None
+                    else {}
+                ),
             )
         except OSError as exc:
             _show_save_error(exc)
@@ -364,11 +438,10 @@ def open_warming_dialog(
                         ),
                     ],
                 ),
-                ft.Text(
-                    get_string("warming_custom_urls_label"),
-                    size=12,
-                    font_family=FONT_SEMIBOLD,
-                    color=COLORS["text_sub"],
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[payload_label, sample_script_btn],
                 ),
                 custom_urls_field,
                 ft.Row(

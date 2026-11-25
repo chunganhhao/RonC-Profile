@@ -1902,3 +1902,1778 @@ def test_warming_ui_create_save_feedback(tmp_path, monkeypatch, run_immediately,
         else:
             assert feedback.value == get_string("warming_invalid_msg")
             assert logs == []
+
+
+def test_warming_script_actions_match_page_controller_signatures():
+    import inspect
+
+    from src.services.browser.control import PageController
+    from src.services.warming.scheduler import WARMING_SCRIPT_ACTIONS, normalize_warming_steps
+
+    assert WARMING_SCRIPT_ACTIONS - {"wait"} <= set(PageController.ACTIONS)
+    sample = normalize_warming_steps(
+        [
+            {"action": "navigate", "url": "https://example.com"},
+            {"action": "back"},
+            {"action": "scroll", "delta_y": 250, "delta_x": 10, "steps": 4, "humanize": True},
+            {"action": "click", "selector": "button.ok", "timeout": 5000},
+            {"action": "click_at", "x": 120, "y": 240, "humanize": True},
+            {"action": "type", "selector": "input[name=q]", "text": "hello", "submit": True},
+            {"action": "keyboard_type", "text": "world", "humanize": False},
+            {"action": "press", "key": "Enter", "selector": "input[name=q]"},
+            {"action": "wait_for", "selector": "#ready", "timeout": 8000},
+            {"action": "tab_new", "url": "https://example.org"},
+            {"action": "tab_select", "index": 0},
+            {"action": "tab_close", "index": 1},
+            {"action": "wait", "seconds": 1},
+        ]
+    )
+    for step in sample:
+        action = step["action"]
+        if action == "wait":
+            continue
+        sig = inspect.signature(getattr(PageController, action))
+        param_keys = {k for k in step if k not in ("action", "optional")}
+        assert param_keys <= set(sig.parameters), f"Mismatch for {action}: {param_keys}"
+
+
+def test_warming_script_validation_and_store_fail_closed(tmp_path):
+    from src.services.warming.scheduler import MAX_SCRIPT_JSON_CHARS, normalize_warming_steps
+
+    # Allowed actions normalize cleanly and preserve typed whitespace
+    normalized = normalize_warming_steps(
+        [
+            {"action": "navigate", "url": "example.com", "optional": False},
+            {"action": "type", "selector": "input", "text": "  keep spaces  "},
+            {"action": "press", "key": "Enter", "selector": None},
+            {"action": "tab_new", "url": None},
+            {"action": "wait", "min_s": 1, "max_s": 3},
+        ]
+    )
+    assert normalized[0] == {
+        "action": "navigate",
+        "url": "https://example.com",
+        "wait_until": "domcontentloaded",
+    }
+    assert normalized[1]["text"] == "  keep spaces  "
+    assert "selector" not in normalized[2]
+    assert "url" not in normalized[3]
+
+    invalid_payloads = [
+        "",
+        "[]",
+        "{not json",
+        "x" * (MAX_SCRIPT_JSON_CHARS + 1),
+        [{"action": "evaluate", "script": "document.cookie"}],
+        [{"action": "screenshot"}],
+        [{"action": "snapshot"}],
+        [{"action": "text"}],
+        [{"action": "tabs"}],
+        [{"action": "navigate", "url": "file:///etc/passwd"}],
+        [{"action": "navigate", "url": "%66ile:///etc/passwd"}],
+        [{"action": "navigate", "url": "javascript:alert(1)"}],
+        [{"action": "navigate", "url": "about:blank"}],
+        [{"action": "navigate", "url": "chrome://settings"}],
+        [{"action": "tab_new", "url": "file:///etc/passwd"}],
+        [{"action": "navigate", "url": "https://example.com", "unknown": 1}],
+        [{"action": "wait", "seconds": 1}],
+        [{"action": "wait", "min_s": 5, "max_s": 2}],
+        [{"action": "wait", "seconds": 1, "min_s": 1, "max_s": 2}],
+        [{"action": "wait", "seconds": True}],
+        [{"action": "wait", "seconds": float("nan")}],
+        [{"action": "wait", "seconds": float("inf")}],
+        [{"action": "click", "selector": "a", "timeout": 25_001}],
+        [{"action": "click", "selector": "a", "timeout": True}],
+        [{"action": "tab_select", "index": True}],
+        [{"action": "back"}] * 101,
+    ]
+    for bad in invalid_payloads:
+        with pytest.raises(ValueError):
+            normalize_warming_steps(bad)
+
+    store = tmp_path / "warming.json"
+    ws = WarmingSchedulerService(file_path=str(store))
+    assert (
+        ws.add_task("Mixed", ["p1"], preset="youtube_trust", script_steps=[{"action": "back"}])
+        is None
+    )
+    assert (
+        ws.add_task(
+            "BadScript",
+            ["p1"],
+            preset="script",
+            script_steps=[{"action": "evaluate", "script": "1"}],
+        )
+        is None
+    )
+
+    # Corrupt/tampered store on disk fails closed
+    store.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "tampered",
+                    "name": "Tampered",
+                    "profile_names": ["p1"],
+                    "preset": "script",
+                    "script_steps": [{"action": "evaluate", "script": "alert(1)"}],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    reloaded = WarmingSchedulerService(file_path=str(store))
+    assert reloaded.list_tasks() == []
+
+    # Mixed non-script preset with script_steps on disk also fails closed
+    store.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "mixed",
+                    "name": "Mixed",
+                    "profile_names": ["p1"],
+                    "preset": "youtube_trust",
+                    "script_steps": [{"action": "back"}],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert WarmingSchedulerService(file_path=str(store)).list_tasks() == []
+
+
+def test_warming_script_execution_cancellation_budget_and_persistence(tmp_path, monkeypatch):
+    from src.services.warming import scheduler as sched_mod
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    store = tmp_path / "warming.json"
+    ws = WarmingSchedulerService(file_path=str(store))
+    pm = pm_mod.ProfileManager(warming_scheduler=ws)
+    pm.add_profile("warm-launch", "", "macos")
+    pm.add_profile("warm-open", "", "macos")
+    secret_payload = "SuperSecretToken_9988"
+    task = ws.add_task(
+        name="Script Flow",
+        profile_names=["warm-launch", "warm-open"],
+        preset="script",
+        script_steps=[
+            {"action": "navigate", "url": "https://example.com"},
+            {"action": "wait", "min_s": 2, "max_s": 4},
+            {"action": "click", "selector": "#missing-cookie-banner", "optional": True},
+            {"action": "type", "selector": "input[name=q]", "text": secret_payload, "submit": True},
+            {"action": "scroll", "delta_y": 500, "humanize": True},
+        ],
+    )
+    assert task is not None and task.resolved_urls() == []
+
+    # Persistence + profile rename retargeting preserves script_steps
+    assert pm.patch_profile("warm-open", name="warm-open-renamed")
+    reloaded = WarmingSchedulerService(file_path=str(store))
+    reloaded_task = reloaded.get_task(task.id)
+    assert reloaded_task is not None
+    assert reloaded_task.profile_names == ["warm-launch", "warm-open-renamed"]
+    assert reloaded_task.script_steps == task.script_steps
+
+    calls = []
+    stopped = []
+
+    class ScriptLauncher:
+        def __init__(self):
+            self.running = {"warm-open-renamed"}
+
+        def is_running(self, name):
+            return name in self.running
+
+        def start_thread(self, prof, log):
+            self.running.add(prof.name)
+            return True
+
+        def wait_for_launch(self, name, timeout):
+            return True, None
+
+        def control(self, name, action, params=None, timeout=60):
+            if action == "click" and params.get("selector") == "#missing-cookie-banner":
+                raise RuntimeError("Element not found")
+            calls.append((name, action, params))
+            return {"ok": True}
+
+        def stop_profile(self, name, timeout=2):
+            self.running.discard(name)
+            stopped.append(name)
+            return True
+
+    logs = []
+    bl = ScriptLauncher()
+    assert reloaded.execute_task_sync(task.id, pm, bl, log_fn=logs.append, step_dwell_seconds=0.0)
+    assert reloaded.get_task(task.id).status == "completed"
+    assert stopped == ["warm-launch"]
+    assert "warm-open-renamed" in bl.running
+    assert [c[1] for c in calls] == [
+        "navigate",
+        "type",
+        "scroll",
+        "navigate",
+        "type",
+        "scroll",
+    ]
+    assert all(secret_payload not in line for line in logs)
+
+    # Required step failure aborts current profile, releases lease, and still warms next profile
+    fail_task = ws.add_task(
+        name="Required Fail",
+        profile_names=["warm-launch", "warm-open-renamed"],
+        preset="script",
+        script_steps=[
+            {"action": "click", "selector": "#must-exist"},
+            {"action": "scroll", "delta_y": 100},
+        ],
+    )
+
+    class FailFirstLauncher(ScriptLauncher):
+        def control(self, name, action, params=None, timeout=60):
+            if name == "warm-launch" and action == "click":
+                raise RuntimeError("boom")
+            calls.append((name, action, params))
+            return {"ok": True}
+
+    calls.clear()
+    fail_bl = FailFirstLauncher()
+    assert ws.execute_task_sync(fail_task.id, pm, fail_bl, step_dwell_seconds=0.0)
+    assert fail_task.last_result == "OK (1/2 profiles)"
+    assert ws._profile_active_users == {}
+    assert [c[0] for c in calls] == ["warm-open-renamed", "warm-open-renamed"]
+
+    # stop_task cancels a long wait immediately (< 1s) without executing subsequent steps
+    wait_entered = threading.Event()
+    long_task = ws.add_task(
+        name="Long Wait",
+        profile_names=["warm-open-renamed"],
+        preset="script",
+        script_steps=[
+            {"action": "navigate", "url": "https://example.com"},
+            {"action": "wait", "seconds": 60},
+            {"action": "scroll", "delta_y": 200},
+        ],
+    )
+
+    class LongWaitLauncher(ScriptLauncher):
+        def control(self, name, action, params=None, timeout=60):
+            calls.append((name, action, params))
+            if action == "navigate":
+                wait_entered.set()
+            return {}
+
+    calls.clear()
+    assert ws.run_task_async(long_task.id, pm, LongWaitLauncher())
+    assert wait_entered.wait(3)
+    t0 = sched_mod.time.monotonic()
+    assert ws.stop_task(long_task.id)
+    assert sched_mod.time.monotonic() - t0 < 1.5
+    assert [c[1] for c in calls] == ["navigate"]
+
+    # #5: duration_minutes budget caps wait and flags timed-out incomplete scripts as failed
+    budget_task = ws.add_task(
+        name="Budget Cap",
+        profile_names=["warm-open-renamed"],
+        preset="script",
+        duration_minutes=1,
+        script_steps=[
+            {"action": "back"},
+            {"action": "wait", "seconds": 90},
+            {"action": "click", "selector": "#must-run"},
+        ],
+    )
+    waits = []
+    fake_clock = [100.0]
+
+    class FakeEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, sec):
+            waits.append(sec)
+            fake_clock[0] += sec
+            return False
+
+    orig_threading = sched_mod.threading
+    monkeypatch.setattr(sched_mod.time, "monotonic", lambda: fake_clock[0])
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=FakeEvent, Thread=orig_threading.Thread)
+    )
+    calls.clear()
+    assert ws.execute_task_sync(budget_task.id, pm, ScriptLauncher()) is False
+    monkeypatch.setattr(sched_mod, "threading", orig_threading)
+    assert waits == [60.0]
+    assert [c[1] for c in calls] == ["back"]
+    assert budget_task.status == "failed"
+    assert budget_task.last_result == "Timed out (0/1 profiles)"
+
+    # Trailing wait truncated by budget also ends Timed out rather than OK
+    trailing_wait_task = ws.add_task(
+        name="Trailing Wait Truncated",
+        profile_names=["warm-open-renamed"],
+        preset="script",
+        duration_minutes=1,
+        script_steps=[
+            {"action": "navigate", "url": "https://example.com"},
+            {"action": "wait", "seconds": 90},
+        ],
+    )
+    fake_clock[0] = 200.0
+    waits.clear()
+    monkeypatch.setattr(sched_mod.time, "monotonic", lambda: fake_clock[0])
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=FakeEvent, Thread=orig_threading.Thread)
+    )
+    assert ws.execute_task_sync(trailing_wait_task.id, pm, ScriptLauncher()) is False
+    monkeypatch.setattr(sched_mod, "threading", orig_threading)
+    assert trailing_wait_task.status == "failed"
+    assert trailing_wait_task.last_result == "Timed out (0/1 profiles)"
+
+    # Remaining 1-second budget clamps step control timeout and maps 504 -> Timed out
+    one_sec_task = ws.add_task(
+        name="One Second Left",
+        profile_names=["warm-open-renamed"],
+        preset="script",
+        duration_minutes=1,
+        script_steps=[
+            {"action": "wait", "seconds": 59},
+            {"action": "navigate", "url": "https://example.com"},
+        ],
+    )
+    observed_timeouts = []
+
+    class ClampTimeoutLauncher(ScriptLauncher):
+        def control(self, name, action, params=None, timeout=60):
+            from src.services.browser.launcher import BrowserControlError
+
+            observed_timeouts.append(timeout)
+            fake_clock[0] += 1.0
+            raise BrowserControlError("timed out", status=504)
+
+    fake_clock[0] = 300.0
+    monkeypatch.setattr(sched_mod.time, "monotonic", lambda: fake_clock[0])
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=FakeEvent, Thread=orig_threading.Thread)
+    )
+    assert ws.execute_task_sync(one_sec_task.id, pm, ClampTimeoutLauncher()) is False
+    monkeypatch.setattr(sched_mod, "threading", orig_threading)
+    assert observed_timeouts == [1.0]
+    assert one_sec_task.status == "failed"
+    assert one_sec_task.last_result == "Timed out (0/1 profiles)"
+
+
+def test_warming_script_api_and_ui_flow(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+
+    container = Container()
+    container.profile_manager.add_profile("script-prof", "", "macos")
+    monkeypatch.setattr(
+        container.browser_launcher,
+        "is_running",
+        lambda name: name == "script-prof",
+    )
+    api_calls = []
+    monkeypatch.setattr(
+        container.browser_launcher,
+        "control",
+        lambda name, action, params=None, timeout=60: (
+            api_calls.append((name, action, params)) or {}
+        ),
+    )
+
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        bad_res = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "Bad Script",
+                "profile_names": ["script-prof"],
+                "preset": "script",
+                "script_steps": [{"action": "evaluate", "script": "1"}],
+            },
+        )
+        assert bad_res.status_code == 400
+        assert "Invalid warming script" in bad_res.json()["detail"]
+
+        mixed_res = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "Mixed",
+                "profile_names": ["script-prof"],
+                "preset": "youtube_trust",
+                "script_steps": [{"action": "back"}],
+            },
+        )
+        assert mixed_res.status_code == 400
+
+        ok_res = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "Good Script",
+                "profile_names": ["script-prof"],
+                "preset": "script",
+                "script_steps": [
+                    {"action": "navigate", "url": "https://example.com"},
+                    {"action": "scroll", "delta_y": 300},
+                ],
+            },
+        )
+        assert ok_res.status_code == 201
+        created = ok_res.json()
+        assert created["preset"] == "script"
+        assert len(created["script_steps"]) == 2
+
+        list_res = client.get("/api/v1/warming/tasks").json()
+        assert "script" in list_res["presets"]
+        assert list_res["tasks"][0]["script_steps"] == created["script_steps"]
+
+        done = threading.Event()
+        container.event_bus.subscribe(
+            lambda: (
+                done.set()
+                if container.warming_scheduler.get_task(created["id"]).status == "completed"
+                else None
+            )
+        )
+        run_res = client.post(f"/api/v1/warming/tasks/{created['id']}/run")
+        assert run_res.status_code == 200 and run_res.json()["started"] is True
+        assert done.wait(5)
+        assert [c[1] for c in api_calls] == ["navigate", "scroll"]
+
+    # Desktop UI dialog: switch preset -> insert sample -> invalid error -> valid save
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "ui_warming.json"))
+    page = _DummyPage()
+    open_warming_dialog(
+        page,
+        ws,
+        SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name="script-prof")]),
+        SimpleNamespace(),
+    )
+    controls = list(_walk_controls(page.dialog))
+    dropdown = next(c for c in controls if isinstance(c, ft.Dropdown))
+    payload_field = [c for c in controls if isinstance(c, ft.TextField)][1]
+    sample_btn = next(
+        c for c in controls if isinstance(c, ft.TextButton) and c.icon == ft.Icons.CODE_ROUNDED
+    )
+    feedback = next(
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    )
+    save_btn = next(
+        c
+        for c in controls
+        if getattr(c, "content", None) == get_string("warming_save_schedule_btn")
+    )
+
+    dropdown.value = "script"
+    dropdown.on_select(None)
+    assert sample_btn.visible is True
+
+    payload_field.value = '[{"action": "evaluate", "script": "1"}]'
+    save_btn.on_click(None)
+    assert feedback.visible is True and feedback.color == COLORS["error"]
+    assert ws.list_tasks() == []
+
+    sample_btn.on_click(None)
+    save_btn.on_click(None)
+    assert feedback.color == COLORS["success"]
+    assert len(ws.list_tasks()) == 1
+    assert ws.list_tasks()[0].preset == "script"
+    assert any(
+        isinstance(c, ft.Text) and "script (4 steps)" in (c.value or "")
+        for c in _walk_controls(page.dialog)
+    )
+
+
+def test_codex_f1_script_profile_exclusivity_barriers(tmp_path, monkeypatch):
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("prof-a", "", "macos")
+    pm.add_profile("prof-b", "", "macos")
+
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+    s1 = ws.add_task(
+        "Script1",
+        ["prof-a"],
+        preset="script",
+        script_steps=[
+            {"action": "navigate", "url": "https://a.test"},
+            {"action": "type", "selector": "input", "text": "A draft"},
+        ],
+    )
+    s2 = ws.add_task(
+        "Script2",
+        ["prof-a"],
+        preset="script",
+        script_steps=[{"action": "navigate", "url": "https://b.test"}],
+    )
+    s_other = ws.add_task(
+        "ScriptOther",
+        ["prof-b"],
+        preset="script",
+        script_steps=[{"action": "navigate", "url": "https://other.test"}],
+    )
+    url_task = ws.add_task(
+        "URLTask",
+        ["prof-a"],
+        preset="custom",
+        custom_urls=["https://url.test"],
+    )
+
+    entered = threading.Event()
+    release = threading.Event()
+    events: list[tuple[str, str]] = []
+
+    class BarrierLauncher:
+        def __init__(self):
+            self.running = {"prof-a", "prof-b"}
+
+        def is_running(self, name):
+            return name in self.running
+
+        def control(self, name, action, params=None, timeout=60):
+            events.append((name, action))
+            if name == "prof-a" and action == "navigate" and params.get("url") == "https://a.test":
+                entered.set()
+                release.wait(3)
+            return {}
+
+    bl = BarrierLauncher()
+    t1 = threading.Thread(
+        target=ws.execute_task_sync,
+        args=(s1.id, pm, bl),
+        kwargs={"step_dwell_seconds": 0.0},
+        daemon=True,
+    )
+    t1.start()
+    assert entered.wait(3)
+
+    # Same-profile Script2 and URLTask are rejected as Busy while Script1 is active
+    assert ws.execute_task_sync(s2.id, pm, bl, step_dwell_seconds=0.0) is False
+    assert s2.status == "failed" and s2.last_result == "Busy (0/1 profiles)"
+    assert ws.execute_task_sync(url_task.id, pm, bl, step_dwell_seconds=0.0) is False
+    assert url_task.status == "failed" and url_task.last_result == "Busy (0/1 profiles)"
+
+    # Different profile runs concurrently without blocking
+    assert ws.execute_task_sync(s_other.id, pm, bl, step_dwell_seconds=0.0) is True
+    assert s_other.status == "completed"
+
+    release.set()
+    t1.join(3)
+    assert s1.status == "completed"
+    assert ("prof-a", "type") in events
+    assert ws._profile_active_users == {}
+    assert ws._profile_script_owners == {}
+
+    # Reverse order: URL preset active on prof-a -> script task on prof-a is rejected as Busy
+    url_entered = threading.Event()
+    url_release = threading.Event()
+
+    class UrlBarrierLauncher(BarrierLauncher):
+        def control(self, name, action, params=None, timeout=60):
+            if action == "navigate" and params.get("url") == "https://url.test":
+                url_entered.set()
+                url_release.wait(3)
+            return {}
+
+    u_bl = UrlBarrierLauncher()
+    t_url = threading.Thread(
+        target=ws.execute_task_sync,
+        args=(url_task.id, pm, u_bl),
+        kwargs={"step_dwell_seconds": 0.0},
+        daemon=True,
+    )
+    t_url.start()
+    assert url_entered.wait(3)
+    assert ws.execute_task_sync(s2.id, pm, u_bl, step_dwell_seconds=0.0) is False
+    assert s2.status == "failed" and s2.last_result == "Busy (0/1 profiles)"
+    url_release.set()
+    t_url.join(3)
+    assert url_task.status == "completed"
+    assert ws._profile_active_users == {}
+    assert ws._profile_script_owners == {}
+
+
+def test_codex_f2_f3_loopback_timeout_and_error_log_redaction(tmp_path, monkeypatch):
+    from src.services.browser import control
+    from src.services.browser.launcher import BrowserLauncher
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("loop-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+
+    class StubPage:
+        def __init__(self):
+            self.url = "https://initial.test/"
+            self.effects: list[str] = []
+            self.raise_token_err = False
+
+        def is_closed(self):
+            return False
+
+        async def title(self):
+            return "Stub"
+
+        async def goto(self, url, wait_until="load"):
+            self.effects.append("navigate-started")
+            await asyncio.sleep(2.0)
+            self.effects.append("navigate-late-effect")
+
+        async def go_back(self):
+            self.effects.append("back-effect")
+
+        class _Loc:
+            def __init__(self, first):
+                self.first = first
+
+        class _First:
+            def __init__(self, page):
+                self._page = page
+
+            async def click(self, timeout=10_000):
+                if self._page.raise_token_err:
+                    raise RuntimeError(
+                        "Failed on https://secret.test/?token=TOK_123 selector=#secret-sel text=SECRET_DRAFT"
+                    )
+
+        def locator(self, _selector):
+            return self._Loc(self._First(self))
+
+    page = StubPage()
+    ctx = SimpleNamespace(pages=[page])
+    ready = threading.Event()
+    stop_loop = threading.Event()
+    info: dict = {}
+
+    def _serve():
+        async def _run():
+            runner, port, token = await control.serve(ctx)
+            info["port"], info["token"] = port, token
+            ready.set()
+            while not stop_loop.is_set():
+                await asyncio.sleep(0.02)
+            await runner.cleanup()
+
+        asyncio.run(_run())
+
+    srv = threading.Thread(target=_serve, daemon=True)
+    srv.start()
+    assert ready.wait(3)
+
+    bl = BrowserLauncher()
+    bl._active_sessions["loop-prof"] = SimpleNamespace(poll=lambda: None)
+    bl._controls["loop-prof"] = (info["port"], info["token"])
+    stopped_called = []
+    monkeypatch.setattr(bl, "stop_profile", lambda name, **_: stopped_called.append(name) or True)
+
+    try:
+        # #2: Optional navigate times out -> back never runs, late effect never applies, task Interrupted
+        t_timeout = ws.add_task(
+            "Loop Timeout",
+            ["loop-prof"],
+            preset="script",
+            script_steps=[
+                {"action": "navigate", "url": "https://slow.test", "optional": True},
+                {"action": "back"},
+            ],
+        )
+        orig_control = bl.control
+        monkeypatch.setattr(
+            bl,
+            "control",
+            lambda name, action, params=None, timeout=60: orig_control(
+                name, action, params, timeout=0.2 if action == "navigate" else timeout
+            ),
+        )
+        logs: list[str] = []
+        assert ws.execute_task_sync(t_timeout.id, pm, bl, log_fn=logs.append) is False
+        assert t_timeout.status == "failed"
+        assert t_timeout.last_result == "Interrupted (0/1 profiles)"
+        assert page.effects == ["navigate-started"]
+        assert stopped_called == []
+        assert bl.is_running("loop-prof")
+
+        # #3: HTTP 422 error carrying URL token, selector, and draft text never leaks into logs
+        monkeypatch.setattr(bl, "control", orig_control)
+        page.raise_token_err = True
+        t_err = ws.add_task(
+            "Err Redact",
+            ["loop-prof"],
+            preset="script",
+            script_steps=[
+                {"action": "click", "selector": "#secret-sel", "optional": True},
+                {"action": "click", "selector": "#secret-sel"},
+            ],
+        )
+        err_logs: list[str] = []
+        assert ws.execute_task_sync(t_err.id, pm, bl, log_fn=err_logs.append) is False
+        joined = "\n".join(err_logs)
+        assert "TOK_123" not in joined
+        assert "https://secret.test" not in joined
+        assert "#secret-sel" not in joined
+        assert "SECRET_DRAFT" not in joined
+        assert "HTTP 422" in joined
+    finally:
+        bl._active_sessions.clear()
+        bl._controls.clear()
+        stop_loop.set()
+        srv.join(3)
+
+
+@pytest.mark.parametrize("bad_steps", ["__MISSING__", None, []])
+def test_codex_f4_corrupt_script_row_fails_closed_on_save(tmp_path, bad_steps):
+    store = tmp_path / "warming.json"
+    bad_row = {
+        "id": "bad_script",
+        "name": "Broken Script",
+        "profile_names": ["p1"],
+        "preset": "script",
+    }
+    if bad_steps != "__MISSING__":
+        bad_row["script_steps"] = bad_steps
+    legacy_row = {
+        "id": "legacy_ok",
+        "name": "Legacy",
+        "profile_names": ["p1"],
+        "preset": "youtube_trust",
+    }
+    store.write_text(json.dumps([bad_row, legacy_row]), encoding="utf-8")
+    raw_before = store.read_bytes()
+
+    ws = WarmingSchedulerService(file_path=str(store))
+    assert ws.list_tasks() == []
+    with pytest.raises(OSError, match="Invalid warming task store"):
+        ws.add_task("Unrelated", ["p1"], preset="youtube_trust")
+    assert store.read_bytes() == raw_before
+
+
+def test_codex_f6_f7_validation_parity_and_ui_preset_draft_isolation(tmp_path, monkeypatch):
+    from src.core import config as app_config
+    from src.services.warming.scheduler import MAX_SCRIPT_JSON_CHARS
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+
+    container = Container()
+    container.profile_manager.add_profile("p1", "", "macos")
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        # Huge integer in wait seconds returns 400 (not 500 OverflowError)
+        huge_res = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "Huge Int",
+                "profile_names": ["p1"],
+                "preset": "script",
+                "script_steps": [{"action": "back"}, {"action": "wait", "seconds": 10**400}],
+            },
+        )
+        assert huge_res.status_code == 400
+
+        # Oversized URL (65,024 chars) and oversized list payload return 400 (not 201)
+        long_url_res = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "Long URL",
+                "profile_names": ["p1"],
+                "preset": "script",
+                "script_steps": [{"action": "navigate", "url": "https://a.test/" + "x" * 65_000}],
+            },
+        )
+        assert long_url_res.status_code == 400
+
+        big_steps = [{"action": "type", "selector": "#q", "text": "a" * 1800} for _ in range(40)]
+        assert len(json.dumps(big_steps)) > MAX_SCRIPT_JSON_CHARS
+        big_list_res = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "Big List",
+                "profile_names": ["p1"],
+                "preset": "script",
+                "script_steps": big_steps,
+            },
+        )
+        assert big_list_res.status_code == 400
+
+    # #6 (deeply nested JSON) + #7 (preset switching isolates script vs URL drafts)
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "ui_drafts.json"))
+    page = _DummyPage()
+    open_warming_dialog(
+        page,
+        ws,
+        SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name="p1")]),
+        SimpleNamespace(),
+    )
+    controls = list(_walk_controls(page.dialog))
+    dropdown = next(c for c in controls if isinstance(c, ft.Dropdown))
+    payload_field = [c for c in controls if isinstance(c, ft.TextField)][1]
+    sample_btn = next(
+        c for c in controls if isinstance(c, ft.TextButton) and c.icon == ft.Icons.CODE_ROUNDED
+    )
+    feedback = next(
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    )
+    save_btn = next(
+        c
+        for c in controls
+        if getattr(c, "content", None) == get_string("warming_save_schedule_btn")
+    )
+
+    # Deeply nested JSON under char cap shows validation error instead of RecursionError
+    dropdown.value = "script"
+    dropdown.on_select(None)
+    payload_field.value = "[" * 2000 + "]" * 2000
+    save_btn.on_click(None)
+    assert feedback.visible is True and feedback.color == COLORS["error"]
+    assert ws.list_tasks() == []
+
+    # Script -> Insert Sample -> YouTube -> Save must NOT turn JSON tokens into custom_urls
+    sample_btn.on_click(None)
+    assert "news.google.com" in payload_field.value
+    dropdown.value = "youtube_trust"
+    dropdown.on_select(None)
+    assert payload_field.value == ""
+    save_btn.on_click(None)
+    assert len(ws.list_tasks()) == 1
+    yt_task = ws.list_tasks()[0]
+    assert yt_task.preset == "youtube_trust"
+    assert yt_task.custom_urls == []
+    assert "https://www.youtube.com" in yt_task.resolved_urls()
+
+    # URL text survives YouTube -> Custom -> Script -> YouTube, and Script draft survives round-trip
+    payload_field.value = "https://custom.example.org"
+    dropdown.value = "custom"
+    dropdown.on_select(None)
+    assert payload_field.value == "https://custom.example.org"
+    dropdown.value = "script"
+    dropdown.on_select(None)
+    assert "news.google.com" in payload_field.value
+    dropdown.value = "youtube_trust"
+    dropdown.on_select(None)
+    assert payload_field.value == "https://custom.example.org"
+
+
+def test_codex_s7_1_partial_timeout_and_readonly_wait_for(tmp_path, monkeypatch):
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    from src.services.browser import control
+    from src.services.browser.launcher import BrowserLauncher
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("s7-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+
+    class PartialPage:
+        def __init__(self):
+            self.url = "https://initial.test/"
+            self.events: list[str] = []
+            self.mode = "submit_timeout"
+
+        def is_closed(self):
+            return False
+
+        async def title(self):
+            return "Partial"
+
+        async def go_back(self):
+            self.events.append("back")
+
+        class _Loc:
+            def __init__(self, first):
+                self.first = first
+
+        class _First:
+            def __init__(self, page):
+                self._page = page
+
+            async def fill(self, text, timeout=10_000):
+                self._page.events.append(f"fill:{text}")
+
+            async def press(self, key):
+                self._page.events.append(f"press:{key}")
+                raise PlaywrightTimeoutError("SECRET_SUBMIT_ERR")
+
+            async def wait_for(self, timeout=15_000):
+                self._page.events.append("wait_for")
+                raise PlaywrightTimeoutError("banner not visible")
+
+        def locator(self, _selector):
+            return self._Loc(self._First(self))
+
+    page = PartialPage()
+    ctx = SimpleNamespace(pages=[page])
+    ready = threading.Event()
+    stop_loop = threading.Event()
+    info: dict = {}
+
+    def _serve():
+        async def _run():
+            runner, port, token = await control.serve(ctx)
+            info["port"], info["token"] = port, token
+            ready.set()
+            while not stop_loop.is_set():
+                await asyncio.sleep(0.02)
+            await runner.cleanup()
+
+        asyncio.run(_run())
+
+    srv = threading.Thread(target=_serve, daemon=True)
+    srv.start()
+    assert ready.wait(3)
+
+    bl = BrowserLauncher()
+    bl._active_sessions["s7-prof"] = SimpleNamespace(poll=lambda: None)
+    bl._controls["s7-prof"] = (info["port"], info["token"])
+    try:
+        # Case A: optional type(submit=True) fills then times out on Enter -> aborts Interrupted
+        t_partial = ws.add_task(
+            "Partial Type Submit",
+            ["s7-prof"],
+            preset="script",
+            script_steps=[
+                {
+                    "action": "type",
+                    "selector": "#q",
+                    "text": "draft",
+                    "submit": True,
+                    "optional": True,
+                },
+                {"action": "back"},
+            ],
+        )
+        logs: list[str] = []
+        assert ws.execute_task_sync(t_partial.id, pm, bl, log_fn=logs.append) is False
+        assert t_partial.status == "failed"
+        assert t_partial.last_result == "Interrupted (0/1 profiles)"
+        assert page.events == ["fill:draft", "press:Enter"]
+        assert "SECRET_SUBMIT_ERR" not in "\n".join(logs)
+
+        # Case B: optional read-only wait_for timeout remains skippable and completes OK
+        page.events.clear()
+        t_wait = ws.add_task(
+            "Optional WaitFor",
+            ["s7-prof"],
+            preset="script",
+            script_steps=[
+                {"action": "wait_for", "selector": "#banner", "optional": True},
+                {"action": "back"},
+            ],
+        )
+        assert ws.execute_task_sync(t_wait.id, pm, bl) is True
+        assert t_wait.status == "completed"
+        assert t_wait.last_result == "OK (1/1 profiles)"
+        assert page.events == ["wait_for", "back"]
+    finally:
+        bl._active_sessions.clear()
+        bl._controls.clear()
+        stop_loop.set()
+        srv.join(3)
+
+
+def test_codex_s7_2_late_final_step_past_budget_is_timed_out(tmp_path, monkeypatch):
+    from src.services.warming import scheduler as sched_mod
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("late-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+
+    task = ws.add_task(
+        "Late Final Step",
+        ["late-prof"],
+        preset="script",
+        duration_minutes=1,
+        script_steps=[
+            {"action": "wait", "seconds": 59},
+            {"action": "back"},
+        ],
+    )
+    fake_clock = [100.0]
+
+    class FakeEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, sec):
+            fake_clock[0] += sec
+            return False
+
+    class LateLauncher:
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, _action, _params=None, timeout=60):
+            fake_clock[0] += 2.0  # finishes at 161.0 > 160.0 deadline
+            return {}
+
+    orig_threading = sched_mod.threading
+    monkeypatch.setattr(sched_mod.time, "monotonic", lambda: fake_clock[0])
+    monkeypatch.setattr(
+        sched_mod, "threading", SimpleNamespace(Event=FakeEvent, Thread=orig_threading.Thread)
+    )
+    try:
+        assert ws.execute_task_sync(task.id, pm, LateLauncher()) is False
+    finally:
+        monkeypatch.setattr(sched_mod, "threading", orig_threading)
+    assert task.status == "failed"
+    assert task.last_result == "Timed out (0/1 profiles)"
+
+
+@pytest.mark.parametrize("bad_name", ["__MISSING__", "   "])
+def test_codex_s7_3_script_missing_or_blank_name_fails_closed_on_save(tmp_path, bad_name):
+    store = tmp_path / "warming.json"
+    bad_row = {
+        "id": "no_name_script",
+        "profile_names": ["p1"],
+        "preset": "script",
+        "script_steps": [{"action": "back"}],
+    }
+    if bad_name != "__MISSING__":
+        bad_row["name"] = bad_name
+    legacy_row = {
+        "id": "legacy_ok",
+        "name": "Legacy",
+        "profile_names": ["p1"],
+        "preset": "youtube_trust",
+    }
+    store.write_text(json.dumps([bad_row, legacy_row]), encoding="utf-8")
+    raw_before = store.read_bytes()
+
+    ws = WarmingSchedulerService(file_path=str(store))
+    assert ws.list_tasks() == []
+    with pytest.raises(OSError, match="Invalid warming task store"):
+        ws.add_task("Unrelated", ["p1"], preset="youtube_trust")
+    assert store.read_bytes() == raw_before
+
+
+def test_codex_s7_4_unicode_surrogate_rejection_and_valid_emoji_preserved(tmp_path, monkeypatch):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+
+    container = Container()
+    container.profile_manager.add_profile("u1", "", "macos")
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        surrogate_res = client.post(
+            "/api/v1/warming/tasks",
+            content=json.dumps(
+                {
+                    "name": "Surrogate",
+                    "profile_names": ["u1"],
+                    "preset": "script",
+                    "script_steps": [{"action": "type", "selector": "#q", "text": "\ud800"}],
+                }
+            ),
+            headers={"Content-Type": "application/json"},
+        )
+        assert surrogate_res.status_code == 400
+        assert "Invalid warming script" in surrogate_res.json()["detail"]
+        assert "\\ud800" not in surrogate_res.json()["detail"]
+        assert not (tmp_path / "warming.json").exists()
+
+        valid_res = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "Valid Emoji",
+                "profile_names": ["u1"],
+                "preset": "script",
+                "script_steps": [{"action": "type", "selector": "#q", "text": "  Xin chào 🚀  "}],
+            },
+        )
+        assert valid_res.status_code == 201
+        assert valid_res.json()["script_steps"][0]["text"] == "  Xin chào 🚀  "
+
+    # Desktop UI Save callback rejects lone surrogate cleanly without raising UnicodeEncodeError
+    ui_store = tmp_path / "ui_surrogate.json"
+    ws = WarmingSchedulerService(file_path=str(ui_store))
+    page = _DummyPage()
+    open_warming_dialog(
+        page,
+        ws,
+        SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name="u1")]),
+        SimpleNamespace(),
+    )
+    controls = list(_walk_controls(page.dialog))
+    dropdown = next(c for c in controls if isinstance(c, ft.Dropdown))
+    payload_field = [c for c in controls if isinstance(c, ft.TextField)][1]
+    feedback = next(
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    )
+    save_btn = next(
+        c
+        for c in controls
+        if getattr(c, "content", None) == get_string("warming_save_schedule_btn")
+    )
+
+    dropdown.value = "script"
+    dropdown.on_select(None)
+    payload_field.value = '[{"action":"type","selector":"#q","text":"\\ud800"}]'
+    save_btn.on_click(None)
+    assert feedback.visible is True and feedback.color == COLORS["error"]
+    assert ws.list_tasks() == []
+    assert not ui_store.exists()
+
+    payload_field.value = '[{"action":"type","selector":"#q","text":"  Xin chào 🚀  "}]'
+    save_btn.on_click(None)
+    assert feedback.color == COLORS["success"]
+    assert ws.list_tasks()[0].script_steps[0]["text"] == "  Xin chào 🚀  "
+
+
+def test_codex_s9_1_optional_click_closing_popup_aborts_without_typing_into_base_tab(
+    tmp_path, monkeypatch
+):
+    from playwright._impl._errors import TargetClosedError as PlaywrightTargetClosedError
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    from src.services.browser import control
+    from src.services.browser.launcher import BrowserLauncher
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("s9-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+
+    class StubPage:
+        def __init__(self, url: str, name: str, *, closes_on_click: bool = False):
+            self.url = url
+            self._name = name
+            self.closed = False
+            self.closes_on_click = closes_on_click
+            self.events: list[str] = []
+
+        def is_closed(self):
+            return self.closed
+
+        async def title(self):
+            if self.closed:
+                raise PlaywrightTargetClosedError("Target page, context or browser has been closed")
+            return self._name
+
+        async def go_back(self):
+            self.events.append("back")
+
+        class _Loc:
+            def __init__(self, first):
+                self.first = first
+
+        class _First:
+            def __init__(self, page, selector):
+                self._page = page
+                self._selector = selector
+
+            async def click(self, timeout=10_000):
+                self._page.events.append(f"click:{self._selector}")
+                if self._page.closes_on_click:
+                    self._page.closed = True
+
+            async def fill(self, text, timeout=10_000):
+                self._page.events.append(f"fill:{text}")
+
+            async def wait_for(self, timeout=15_000):
+                self._page.events.append("wait_for")
+                raise PlaywrightTimeoutError("banner not visible")
+
+        def locator(self, selector):
+            return self._Loc(self._First(self, selector))
+
+    base = StubPage("https://base.test/", "Base")
+    popup = StubPage("https://popup.test/", "Popup", closes_on_click=True)
+    ctx = SimpleNamespace(pages=[base, popup])
+    ready = threading.Event()
+    stop_loop = threading.Event()
+    info: dict = {}
+
+    def _serve():
+        async def _run():
+            runner, port, token = await control.serve(ctx)
+            info["port"], info["token"] = port, token
+            ready.set()
+            while not stop_loop.is_set():
+                await asyncio.sleep(0.02)
+            await runner.cleanup()
+
+        asyncio.run(_run())
+
+    srv = threading.Thread(target=_serve, daemon=True)
+    srv.start()
+    assert ready.wait(3)
+
+    bl = BrowserLauncher()
+    bl._active_sessions["s9-prof"] = SimpleNamespace(poll=lambda: None)
+    bl._controls["s9-prof"] = (info["port"], info["token"])
+    try:
+        # Case A: optional click closes popup then title() raises TargetClosedError -> abort Interrupted
+        task_popup = ws.add_task(
+            "Popup Close Optional",
+            ["s9-prof"],
+            preset="script",
+            script_steps=[
+                {"action": "click", "selector": "#close-popup", "optional": True},
+                {"action": "type", "selector": "#secret-input", "text": "SECRET_DATA"},
+            ],
+        )
+        logs: list[str] = []
+        assert ws.execute_task_sync(task_popup.id, pm, bl, log_fn=logs.append) is False
+        assert task_popup.status == "failed"
+        assert task_popup.last_result == "Interrupted (0/1 profiles)"
+        assert popup.events == ["click:#close-popup"]
+        assert base.events == []
+        joined_logs = "\n".join(logs)
+        assert "SECRET_DATA" not in joined_logs
+        assert "Target page, context" not in joined_logs
+
+        # Case B: optional read-only wait_for on open base tab still skips and completes OK
+        task_open = ws.add_task(
+            "Open Tab Optional WaitFor",
+            ["s9-prof"],
+            preset="script",
+            script_steps=[
+                {"action": "wait_for", "selector": "#banner", "optional": True},
+                {"action": "back"},
+            ],
+        )
+        assert ws.execute_task_sync(task_open.id, pm, bl) is True
+        assert task_open.status == "completed"
+        assert task_open.last_result == "OK (1/1 profiles)"
+        assert base.events == ["wait_for", "back"]
+    finally:
+        bl._active_sessions.clear()
+        bl._controls.clear()
+        stop_loop.set()
+        srv.join(3)
+
+
+def test_codex_s9_2_budget_finalization_across_optional_timeout_late_wait_and_cancel_priority(
+    tmp_path, monkeypatch
+):
+    from src.services.browser.launcher import BrowserControlError
+    from src.services.warming import scheduler as sched_mod
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("budget-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+
+    fake_clock = [100.0]
+    cancel_state = [False]
+
+    class FakeEvent:
+        def __init__(self, *, wait_overshoot: float = 0.0, cancel_on_back: bool = False):
+            self.wait_overshoot = wait_overshoot
+            self.cancel_on_back = cancel_on_back
+
+        def is_set(self):
+            return cancel_state[0]
+
+        def set(self):
+            cancel_state[0] = True
+
+        def wait(self, sec):
+            fake_clock[0] += sec + self.wait_overshoot
+            return cancel_state[0]
+
+    orig_threading = sched_mod.threading
+
+    def _run_with_fake(task_id: str, launcher, *, wait_overshoot: float = 0.0) -> bool:
+        cancel_state[0] = False
+        monkeypatch.setattr(sched_mod.time, "monotonic", lambda: fake_clock[0])
+        monkeypatch.setattr(
+            sched_mod,
+            "threading",
+            SimpleNamespace(
+                Event=lambda: FakeEvent(wait_overshoot=wait_overshoot),
+                Thread=orig_threading.Thread,
+            ),
+        )
+        try:
+            return ws.execute_task_sync(task_id, pm, launcher)
+        finally:
+            monkeypatch.setattr(sched_mod, "threading", orig_threading)
+
+    # Case (a): optional read-only wait_for returns 422 action_timeout AFTER 60s deadline -> Timed out
+    class OptionalTimeoutPastBudgetLauncher:
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, _params=None, timeout=60):
+            if action == "back":
+                fake_clock[0] += 55.0
+                return {}
+            fake_clock[0] += 5.1  # now at 60.1s > 60s budget
+            raise BrowserControlError(
+                "TimeoutError: waiting",
+                status=422,
+                error_code="action_timeout",
+                unknown_state=False,
+            )
+
+    t_opt_past = ws.add_task(
+        "Optional Timeout Past Budget",
+        ["budget-prof"],
+        preset="script",
+        duration_minutes=1,
+        script_steps=[
+            {"action": "back"},
+            {"action": "wait_for", "selector": "#opt", "optional": True},
+        ],
+    )
+    fake_clock[0] = 100.0
+    assert _run_with_fake(t_opt_past.id, OptionalTimeoutPastBudgetLauncher()) is False
+    assert t_opt_past.status == "failed"
+    assert t_opt_past.last_result == "Timed out (0/1 profiles)"
+
+    # Case (b): wait exactly at budget when starting, but scheduler wakes 0.1s late -> Timed out
+    class InstantBackLauncher:
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, _action, _params=None, timeout=60):
+            return {}
+
+    t_late_wait = ws.add_task(
+        "Late Wait Overshoot",
+        ["budget-prof"],
+        preset="script",
+        duration_minutes=1,
+        script_steps=[
+            {"action": "back"},
+            {"action": "wait", "seconds": 60},
+        ],
+    )
+    fake_clock[0] = 200.0
+    assert _run_with_fake(t_late_wait.id, InstantBackLauncher(), wait_overshoot=0.1) is False
+    assert t_late_wait.status == "failed"
+    assert t_late_wait.last_result == "Timed out (0/1 profiles)"
+
+    # Case (c): optional read-only wait_for times out BEFORE deadline -> skipped and completes OK
+    class OptionalTimeoutWithinBudgetLauncher:
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, _params=None, timeout=60):
+            if action == "back":
+                fake_clock[0] += 5.0
+                return {}
+            fake_clock[0] += 10.0  # 15.0s <= 60.0s budget
+            raise BrowserControlError(
+                "TimeoutError: waiting",
+                status=422,
+                error_code="action_timeout",
+                unknown_state=False,
+            )
+
+    t_opt_within = ws.add_task(
+        "Optional Timeout Within Budget",
+        ["budget-prof"],
+        preset="script",
+        duration_minutes=1,
+        script_steps=[
+            {"action": "back"},
+            {"action": "wait_for", "selector": "#opt", "optional": True},
+        ],
+    )
+    fake_clock[0] = 300.0
+    assert _run_with_fake(t_opt_within.id, OptionalTimeoutWithinBudgetLauncher()) is True
+    assert t_opt_within.status == "completed"
+    assert t_opt_within.last_result == "OK (1/1 profiles)"
+
+    # Case (d): Stop priority when cancelled while a step overruns budget
+    class CancelOnControlLauncher:
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, _action, _params=None, timeout=60):
+            fake_clock[0] += 61.0
+            cancel_state[0] = True
+            return {}
+
+    t_cancel_prio = ws.add_task(
+        "Cancel Priority Over Budget",
+        ["budget-prof"],
+        preset="script",
+        duration_minutes=1,
+        script_steps=[{"action": "back"}],
+    )
+    fake_clock[0] = 400.0
+    assert _run_with_fake(t_cancel_prio.id, CancelOnControlLauncher()) is False
+    assert t_cancel_prio.status == "idle"
+    assert t_cancel_prio.last_result == "Stopped (0/1)"
+
+
+def test_codex_s9_3_surrogate_in_extra_field_name_returns_400_and_safe_ui_feedback(
+    tmp_path, monkeypatch
+):
+    from src.core import config as app_config
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    warming_file = tmp_path / "warming.json"
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(warming_file))
+
+    container = Container()
+    container.profile_manager.add_profile("u1", "", "macos")
+    baseline = container.warming_scheduler.add_task("Baseline", ["u1"], preset="youtube_trust")
+    assert baseline is not None
+    raw_before = warming_file.read_bytes()
+
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        for bad_step in (
+            {"action": "back", "\ud800": 1},
+            {"action": "\ud800"},
+        ):
+            res = client.post(
+                "/api/v1/warming/tasks",
+                content=json.dumps(
+                    {
+                        "name": "Surrogate Key",
+                        "profile_names": ["u1"],
+                        "preset": "script",
+                        "script_steps": [bad_step],
+                    }
+                ),
+                headers={"Content-Type": "application/json"},
+            )
+            assert res.status_code == 400
+            detail = res.json()["detail"]
+            assert "Invalid warming script" in detail
+            detail.encode("utf-8")
+            assert "\\ud800" in detail  # ASCII-escaped representation, not raw surrogate
+            assert warming_file.read_bytes() == raw_before
+
+    # Desktop UI Save callback shows UTF-8 safe error feedback and preserves store bytes
+    ws = WarmingSchedulerService(file_path=str(warming_file))
+    page = _DummyPage()
+    open_warming_dialog(
+        page,
+        ws,
+        SimpleNamespace(list_profiles=lambda: [SimpleNamespace(name="u1")]),
+        SimpleNamespace(),
+    )
+    controls = list(_walk_controls(page.dialog))
+    dropdown = next(c for c in controls if isinstance(c, ft.Dropdown))
+    payload_field = [c for c in controls if isinstance(c, ft.TextField)][1]
+    feedback = next(
+        c for c in controls if isinstance(c, ft.Text) and c.size == 12 and not c.visible
+    )
+    save_btn = next(
+        c
+        for c in controls
+        if getattr(c, "content", None) == get_string("warming_save_schedule_btn")
+    )
+
+    dropdown.value = "script"
+    dropdown.on_select(None)
+    payload_field.value = '[{"action":"back","\\ud800":1}]'
+    save_btn.on_click(None)
+    assert feedback.visible is True
+    assert feedback.color == COLORS["error"]
+    feedback.value.encode("utf-8")
+    assert warming_file.read_bytes() == raw_before
+
+
+def test_codex_s11_1_tab_select_and_between_step_popup_close_never_types_into_base_tab(
+    tmp_path, monkeypatch
+):
+    from src.services.browser import control
+    from src.services.browser.launcher import BrowserLauncher
+    from src.services.warming import scheduler as sched_mod
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("s11-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+
+    class TabPageStub:
+        def __init__(self, url: str, label: str, *, close_on_front: bool = False):
+            self.url = url
+            self._label = label
+            self.closed = False
+            self.close_on_front = close_on_front
+            self.events: list[str] = []
+
+        def is_closed(self):
+            return self.closed
+
+        async def title(self):
+            return self._label
+
+        async def bring_to_front(self):
+            self.events.append("bring_to_front")
+            if self.close_on_front:
+                self.closed = True
+
+        async def close(self):
+            self.events.append("close")
+            self.closed = True
+
+        class _Loc:
+            def __init__(self, first):
+                self.first = first
+
+        class _First:
+            def __init__(self, page):
+                self._page = page
+
+            async def fill(self, text, timeout=10_000):
+                self._page.events.append(f"fill:{text}")
+
+        def locator(self, _selector):
+            return self._Loc(self._First(self))
+
+    base = TabPageStub("https://base.test/", "Base")
+    popup_close_select = TabPageStub("https://popup-a.test/", "PopupA", close_on_front=True)
+    ctx = SimpleNamespace(pages=[base, popup_close_select])
+    ready = threading.Event()
+    stop_loop = threading.Event()
+    info: dict = {}
+
+    def _serve():
+        async def _run():
+            runner, port, token = await control.serve(ctx)
+            info["port"], info["token"] = port, token
+            ready.set()
+            while not stop_loop.is_set():
+                await asyncio.sleep(0.02)
+            await runner.cleanup()
+
+        asyncio.run(_run())
+
+    srv = threading.Thread(target=_serve, daemon=True)
+    srv.start()
+    assert ready.wait(3)
+
+    bl = BrowserLauncher()
+    bl._active_sessions["s11-prof"] = SimpleNamespace(poll=lambda: None)
+    bl._controls["s11-prof"] = (info["port"], info["token"])
+    try:
+        # Case (a): tab_select silently closes popup -> aborts Interrupted, base untouched
+        t_sel = ws.add_task(
+            "Popup Closes On Select",
+            ["s11-prof"],
+            preset="script",
+            script_steps=[
+                {"action": "tab_select", "index": 1},
+                {"action": "type", "selector": "#q", "text": "SECRET_A"},
+            ],
+        )
+        assert ws.execute_task_sync(t_sel.id, pm, bl) is False
+        assert t_sel.status == "failed"
+        assert t_sel.last_result == "Interrupted (0/1 profiles)"
+        assert popup_close_select.events == ["bring_to_front"]
+        assert base.events == []
+
+        # Case (b): tab_select succeeds, popup closes during wait -> type aborts before touching base
+        popup_wait_close = TabPageStub("https://popup-b.test/", "PopupB")
+        ctx.pages = [base, popup_wait_close]
+        t_wait = ws.add_task(
+            "Popup Closes During Wait",
+            ["s11-prof"],
+            preset="script",
+            script_steps=[
+                {"action": "tab_select", "index": 1},
+                {"action": "wait", "seconds": 1},
+                {"action": "type", "selector": "#q", "text": "SECRET_B"},
+            ],
+        )
+        orig_threading = sched_mod.threading
+
+        class ClosingWaitEvent:
+            def __init__(self):
+                self._set = False
+
+            def is_set(self):
+                return self._set
+
+            def set(self):
+                self._set = True
+
+            def wait(self, _sec):
+                popup_wait_close.closed = True
+                return False
+
+        monkeypatch.setattr(
+            sched_mod,
+            "threading",
+            SimpleNamespace(Event=ClosingWaitEvent, Thread=orig_threading.Thread),
+        )
+        try:
+            assert ws.execute_task_sync(t_wait.id, pm, bl) is False
+        finally:
+            monkeypatch.setattr(sched_mod, "threading", orig_threading)
+        assert t_wait.status == "failed"
+        assert t_wait.last_result == "Interrupted (0/1 profiles)"
+        assert popup_wait_close.events == ["bring_to_front"]
+        assert base.events == []
+
+        # Case (c): valid tabs + intentional tab switching completes OK on each chosen tab
+        popup_open = TabPageStub("https://popup-c.test/", "PopupC")
+        ctx.pages = [base, popup_open]
+        t_switch = ws.add_task(
+            "Intentional Tab Switch",
+            ["s11-prof"],
+            preset="script",
+            script_steps=[
+                {"action": "tab_select", "index": 1},
+                {"action": "type", "selector": "#q", "text": "on_popup"},
+                {"action": "tab_select", "index": 0},
+                {"action": "type", "selector": "#q", "text": "on_base"},
+            ],
+        )
+        assert ws.execute_task_sync(t_switch.id, pm, bl) is True
+        assert t_switch.status == "completed"
+        assert t_switch.last_result == "OK (1/1 profiles)"
+        assert popup_open.events == ["bring_to_front", "fill:on_popup"]
+        assert base.events == ["bring_to_front", "fill:on_base"]
+
+        # Case (d): intentional tab_close allows subsequent step to type into remaining base tab
+        base.events.clear()
+        popup_open.events.clear()
+        t_close = ws.add_task(
+            "Intentional Tab Close",
+            ["s11-prof"],
+            preset="script",
+            script_steps=[
+                {"action": "tab_select", "index": 1},
+                {"action": "tab_close", "index": 1},
+                {"action": "type", "selector": "#q", "text": "after_close"},
+            ],
+        )
+        assert ws.execute_task_sync(t_close.id, pm, bl) is True
+        assert t_close.status == "completed"
+        assert t_close.last_result == "OK (1/1 profiles)"
+        assert popup_open.events == ["bring_to_front", "close"]
+        assert base.events == ["fill:after_close"]
+    finally:
+        bl._active_sessions.clear()
+        bl._controls.clear()
+        stop_loop.set()
+        srv.join(3)
+
+
+def test_codex_s13_1_popup_close_between_request_and_dispatch_never_types_into_base_tab(
+    tmp_path, monkeypatch
+):
+    from src.services.browser import control
+    from src.services.browser.launcher import BrowserLauncher
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    pm = pm_mod.ProfileManager()
+    pm.add_profile("s13-prof", "", "macos")
+    ws = WarmingSchedulerService(file_path=str(tmp_path / "warming.json"))
+
+    arm_close = [False]
+
+    class RacePageStub:
+        def __init__(self, url: str, label: str, *, arm_on_front: bool = False):
+            self.url = url
+            self._label = label
+            self.closed = False
+            self.arm_on_front = arm_on_front
+            self.events: list[str] = []
+
+        def is_closed(self):
+            return self.closed
+
+        async def title(self):
+            return self._label
+
+        async def bring_to_front(self):
+            self.events.append("bring_to_front")
+            if self.arm_on_front:
+                arm_close[0] = True
+
+        class _Loc:
+            def __init__(self, first):
+                self.first = first
+
+        class _First:
+            def __init__(self, page):
+                self._page = page
+
+            async def fill(self, text, timeout=10_000):
+                self._page.events.append(f"fill:{text}")
+
+        def locator(self, _selector):
+            return self._Loc(self._First(self))
+
+    base = RacePageStub("https://base.test/", "Base")
+    popup_race = RacePageStub("https://popup-race.test/", "PopupRace", arm_on_front=True)
+    ctx = SimpleNamespace(pages=[base, popup_race])
+    ready = threading.Event()
+    stop_loop = threading.Event()
+    info: dict = {}
+
+    orig_create_task = control.asyncio.create_task
+
+    def _close_popup():
+        popup_race.closed = True
+        popup_race.events.append("closed_before_dispatch")
+
+    def _racing_create_task(coro, *args, **kwargs):
+        if arm_close[0] and getattr(getattr(coro, "cr_code", None), "co_name", "") == "dispatch":
+            arm_close[0] = False
+            asyncio.get_running_loop().call_soon(_close_popup)
+        return orig_create_task(coro, *args, **kwargs)
+
+    monkeypatch.setattr(control.asyncio, "create_task", _racing_create_task)
+
+    def _serve():
+        async def _run():
+            runner, port, token = await control.serve(ctx)
+            info["port"], info["token"] = port, token
+            ready.set()
+            while not stop_loop.is_set():
+                await asyncio.sleep(0.02)
+            await runner.cleanup()
+
+        asyncio.run(_run())
+
+    srv = threading.Thread(target=_serve, daemon=True)
+    srv.start()
+    assert ready.wait(3)
+
+    bl = BrowserLauncher()
+    bl._active_sessions["s13-prof"] = SimpleNamespace(poll=lambda: None)
+    bl._controls["s13-prof"] = (info["port"], info["token"])
+    try:
+        task = ws.add_task(
+            "Popup Closes Between Check And Dispatch",
+            ["s13-prof"],
+            preset="script",
+            script_steps=[
+                {"action": "tab_select", "index": 1},
+                {"action": "type", "selector": "#q", "text": "SECRET_RACE"},
+            ],
+        )
+        assert ws.execute_task_sync(task.id, pm, bl) is False
+        assert task.status == "failed"
+        assert task.last_result == "Interrupted (0/1 profiles)"
+        assert popup_race.events == ["bring_to_front", "closed_before_dispatch"]
+        assert base.events == []
+    finally:
+        bl._active_sessions.clear()
+        bl._controls.clear()
+        monkeypatch.setattr(control.asyncio, "create_task", orig_create_task)
+        stop_loop.set()
+        srv.join(3)
