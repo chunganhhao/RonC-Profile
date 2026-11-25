@@ -160,15 +160,15 @@ def test_escape_release_only_closes_the_dialog_that_received_it(flet_unmounts):
     _press_key(settings_dialog.content, escape)
     assert not settings_dialog.open
     assert settings_dialog in page._dialogs.controls
-    settings_dialog.content.on_key_up(escape)
+    _press_key(settings_dialog.content, escape)
     assert extensions_dialog.open
-    settings_dialog.content.on_key_up(escape)
+    extensions_dialog.content.on_key_up(escape)
     assert extensions_dialog.open
 
     if flet_unmounts:
         asyncio.run(settings_dialog.on_dismiss(SimpleNamespace(data=False)))
         assert page._dialogs.controls == [extensions_dialog]
-        settings_dialog.content.on_key_up(escape)
+        _press_key(settings_dialog.content, escape)
         assert extensions_dialog.open
     _press_key(extensions_dialog.content, escape)
     assert not extensions_dialog.open
