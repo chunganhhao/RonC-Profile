@@ -65,21 +65,36 @@ def show_modal_dialog(
             dismiss(event)
         return True
 
-    def on_key(event: ft.KeyboardEvent | ft.KeyDownEvent | ft.KeyUpEvent) -> None:
+    def on_key(event: ft.KeyboardEvent | ft.KeyDownEvent) -> None:
         if event.key == "Escape" and not dismissed:
             close()
 
     keyboard_handler = on_key
     if escape_on_release:
         keyboard_handler = None
-        dialog.content = ft.KeyboardListener(
-            content=dialog.content, autofocus=True, on_key_up=on_key
-        )
+        escape_pressed = False
+
+        def on_key_down(event: ft.KeyDownEvent) -> None:
+            nonlocal escape_pressed
+            if event.key == "Escape":
+                escape_pressed = not dismissed and is_topmost()
+
+        def on_key_up(event: ft.KeyUpEvent) -> None:
+            nonlocal escape_pressed
+            if event.key == "Escape" and escape_pressed:
+                escape_pressed = False
+                if not dismissed:
+                    close()
+
+        def listen(content: ft.Control, *, autofocus: bool = False) -> ft.KeyboardListener:
+            return ft.KeyboardListener(
+                content=content, autofocus=autofocus, on_key_down=on_key_down, on_key_up=on_key_up
+            )
+
+        dialog.content = listen(dialog.content, autofocus=True)
         if dialog.title is not None:
-            dialog.title = ft.KeyboardListener(content=dialog.title, on_key_up=on_key)
-        dialog.actions = [
-            ft.KeyboardListener(content=action, on_key_up=on_key) for action in dialog.actions
-        ]
+            dialog.title = listen(dialog.title)
+        dialog.actions = [listen(action) for action in dialog.actions]
     elif local_keyboard:
         body = ft.KeyboardListener(content=dialog.content, autofocus=True, on_key_down=on_key)
         dialog.content = body

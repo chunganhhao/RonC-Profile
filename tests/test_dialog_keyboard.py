@@ -46,12 +46,17 @@ class DialogPage:
 
 def _send_key(page, key):
     (dialog,) = page.dialogs
-    handler = (
-        dialog.content.on_key_up or dialog.content.on_key_down
-        if isinstance(dialog.content, ft.KeyboardListener)
-        else page.on_keyboard_event
-    )
-    handler(SimpleNamespace(key=key))
+    event = SimpleNamespace(key=key)
+    if isinstance(dialog.content, ft.KeyboardListener):
+        _press_key(dialog.content, event)
+    else:
+        page.on_keyboard_event(event)
+
+
+def _press_key(listener, event):
+    listener.on_key_down(event)
+    if listener.on_key_up:
+        listener.on_key_up(event)
 
 
 def _click_action(dialog, index):
@@ -59,6 +64,22 @@ def _click_action(dialog, index):
     if isinstance(action, ft.KeyboardListener):
         action = action.content
     action.on_click(None)
+
+
+def test_parent_ignores_escape_release_without_its_own_key_down():
+    page = DialogPage()
+    parent, child = (ft.AlertDialog(content=ft.Text(title)) for title in ("Parent", "Child"))
+    show_modal_dialog(page, parent, escape_on_release=True)
+    show_modal_dialog(page, child, escape_on_release=True)
+    escape = SimpleNamespace(key="Escape")
+
+    _press_key(child.content, escape)
+    assert page.dialogs == [parent]
+    parent.content.on_key_up(escape)
+    assert page.dialogs == [parent]
+
+    _press_key(parent.content, escape)
+    assert not page.dialogs
 
 
 @pytest.mark.parametrize(
@@ -136,7 +157,7 @@ def test_escape_release_only_closes_the_dialog_that_received_it(flet_unmounts):
     show_modal_dialog(page, settings_dialog, escape_on_release=True)
     escape = SimpleNamespace(key="Escape")
 
-    settings_dialog.content.on_key_up(escape)
+    _press_key(settings_dialog.content, escape)
     assert not settings_dialog.open
     assert settings_dialog in page._dialogs.controls
     settings_dialog.content.on_key_up(escape)
@@ -149,7 +170,7 @@ def test_escape_release_only_closes_the_dialog_that_received_it(flet_unmounts):
         assert page._dialogs.controls == [extensions_dialog]
         settings_dialog.content.on_key_up(escape)
         assert extensions_dialog.open
-    extensions_dialog.content.on_key_up(escape)
+    _press_key(extensions_dialog.content, escape)
     assert not extensions_dialog.open
     if not flet_unmounts:
         asyncio.run(settings_dialog.on_dismiss(SimpleNamespace(data=False)))
@@ -245,10 +266,10 @@ def test_extensions_can_close_after_settings_escape(parent_action):
 
     # The parent must not subscribe to Flet's page-wide key-down event stream.
     assert page.on_keyboard_event is original_keyboard
-    child.content.on_key_up(escape)
+    _press_key(child.content, escape)
     assert page.dialogs == [parent]
     if parent_action == "escape":
-        parent.content.on_key_up(escape)
+        _press_key(parent.content, escape)
     else:
         _click_action(parent, 0)
     assert not page.dialogs
