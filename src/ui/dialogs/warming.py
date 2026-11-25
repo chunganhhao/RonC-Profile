@@ -136,7 +136,7 @@ def open_warming_dialog(
         value=True,
     )
     feedback_text = ft.Text("", size=12, color=COLORS["success"], visible=False)
-    tasks_col = ft.Column(spacing=5, scroll=ft.ScrollMode.AUTO, expand=True)
+    tasks_col = ft.Column(spacing=5, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
 
     def _status_badge(task: WarmingTask) -> ft.Container:
         if task.status == "running":
@@ -394,10 +394,11 @@ def open_warming_dialog(
     body_container = ft.Container(
         width=860,
         height=550,
-        content=ft.Column(
+        content=ft.ListView(
             spacing=8,
-            expand=True,
-            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            scroll=ft.ScrollMode.ALWAYS,
+            padding=ft.Padding.only(right=12),
+            build_controls_on_demand=False,
             controls=[
                 ft.Row(
                     spacing=10,
