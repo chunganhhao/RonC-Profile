@@ -42,7 +42,7 @@ def open_warming_dialog(
     log = log_fn or (lambda _: None)
 
     task_name_field = ft.TextField(
-        value=f"Warm {len(targets)} profile(s)",
+        value=get_string("warming_default_task_name", count=len(targets)),
         **DLG_FIELD_KWARGS,
     )
     preset_dropdown = ft.Dropdown(
@@ -77,7 +77,7 @@ def open_warming_dialog(
     schedule_field = ft.TextField(
         value="",
         hint_text=get_string("warming_schedule_hint"),
-        width=180,
+        width=260,
         text_style=_DATA,
         **DLG_FIELD_KWARGS,
     )

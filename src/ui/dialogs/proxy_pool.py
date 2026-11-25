@@ -51,7 +51,7 @@ def open_proxy_pool_dialog(
     )
     tag_input = ft.TextField(
         hint_text=get_string("proxy_pool_tag_hint"),
-        width=220,
+        expand=True,
         **DLG_FIELD_KWARGS,
     )
     feedback_text = ft.Text("", size=12, color=COLORS["success"], visible=False)
@@ -363,34 +363,31 @@ def open_proxy_pool_dialog(
                 bulk_input,
                 ft.Row(
                     spacing=8,
-                    run_spacing=8,
-                    wrap=True,
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
-                        ft.Row(
-                            spacing=8,
-                            run_spacing=8,
-                            wrap=True,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            controls=[
-                                tag_input,
-                                ft.Button(
-                                    get_string("proxy_pool_import_btn"),
-                                    icon=ft.Icons.ADD,
-                                    height=38,
-                                    style=ACCENT_STYLE,
-                                    on_click=_on_import,
-                                ),
-                                check_all_btn,
-                                ft.OutlinedButton(
-                                    get_string("proxy_pool_clear_dead_btn"),
-                                    icon=ft.Icons.CLEANING_SERVICES_OUTLINED,
-                                    height=36,
-                                    style=OUTLINE_STYLE,
-                                    on_click=_on_clear_dead,
-                                ),
-                            ],
+                        tag_input,
+                        ft.Button(
+                            get_string("proxy_pool_import_btn"),
+                            icon=ft.Icons.ADD,
+                            height=38,
+                            style=ACCENT_STYLE,
+                            on_click=_on_import,
+                        ),
+                    ],
+                ),
+                ft.Row(
+                    spacing=8,
+                    run_spacing=8,
+                    wrap=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        check_all_btn,
+                        ft.OutlinedButton(
+                            get_string("proxy_pool_clear_dead_btn"),
+                            icon=ft.Icons.CLEANING_SERVICES_OUTLINED,
+                            height=36,
+                            style=OUTLINE_STYLE,
+                            on_click=_on_clear_dead,
                         ),
                         ft.OutlinedButton(
                             get_string("proxy_pool_assign_btn", count=len(targets)),
