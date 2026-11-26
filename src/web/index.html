@@ -433,11 +433,16 @@ input.ext-switch:checked::after { transform: translateX(16px); background: var(-
 .warm-sched-inputs { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
 .warm-tasks { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 220px; overflow-y: auto; }
 .warm-task-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); color: var(--ink); }
+.warm-task-name { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
 .warm-task-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-family: var(--data); font-size: 11.5px; color: var(--ink-2); margin-top: 4px; }
 .warm-task-acts { display: flex; align-items: center; gap: 8px; flex: none; }
 @media (max-width: 780px) {
   .warm-scenarios { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .warm-add-bar { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) {
+  .warm-task-row { flex-direction: column; align-items: stretch; gap: 8px; }
+  .warm-task-acts { flex-wrap: wrap; }
 }
 
 @keyframes fade { from { opacity: 0; } }
@@ -2436,7 +2441,12 @@ function openWarmingModal() {
     const scenariosGrid = h("div", { class: "warm-scenarios" });
     const targetsBox = h("div", { class: "warm-targets" });
     const warnNote = h("div", { class: "note hidden" });
-    const nameInput = h("input", { id: "warm-name", type: "text", value: `Warm ${initialTargets.size} profile(s)` });
+    const defaultName = () => `Warm ${initialTargets.size} profile(s)`;
+    let nameEdited = false;
+    const nameInput = h("input", {
+      id: "warm-name", type: "text", value: defaultName(),
+      oninput: () => { nameEdited = nameInput.value !== defaultName(); },
+    });
     const stepsTitle = h("span", {}, t("warm_steps_url_title"));
     const stepsCountBadge = h("span", { class: "warm-badge" });
     const customizeBtn = h("button", { type: "button", id: "warm-customize-btn", class: "btn btn-line", style: "height:30px;padding:0 10px;font-size:12px", disabled: true }, t("warm_customize"));
@@ -2535,7 +2545,7 @@ function openWarmingModal() {
             checked: initialTargets.has(p.name),
             onchange: (e) => {
               e.target.checked ? initialTargets.add(p.name) : initialTargets.delete(p.name);
-              nameInput.value = `Warm ${initialTargets.size} profile(s)`;
+              if (!nameEdited) nameInput.value = defaultName();
               updateTargetsWarn();
             },
           });
@@ -2680,6 +2690,8 @@ function openWarmingModal() {
       );
     };
     const renderCards = () => {
+      const focused = document.activeElement;
+      const focusedScenario = scenariosGrid.contains(focused) ? focused.dataset.scenario : null;
       scenariosGrid.replaceChildren(
         ...scenarios.map((s) => {
           const isAct = s.id === currentPreset;
@@ -2700,6 +2712,13 @@ function openWarmingModal() {
           );
         })
       );
+      if (focusedScenario) {
+        const cards = [...scenariosGrid.children];
+        const nextFocus = cards.find((card) => card.dataset.scenario === focusedScenario)
+          ?? cards.find((card) => card.dataset.scenario === currentPreset)
+          ?? cards[0];
+        nextFocus?.focus({ preventScroll: true });
+      }
     };
     const selectScenario = (id, updateDur = false) => {
       currentPreset = id;
@@ -2819,7 +2838,7 @@ function openWarmingModal() {
           } }, icon("trash", true));
           return h("div", { class: "warm-task-row" },
             h("div", { style: "min-width:0;flex:1" },
-              h("div", { style: "font-weight:600;font-size:13.5px" }, tk.name),
+              h("div", { class: "warm-task-name" }, tk.name),
               h("div", { class: "warm-task-meta" },
                 h("span", {}, tk.preset === "script" ? `script (${(tk.script_steps || []).length} steps)` : tk.preset),
                 h("span", {}, `${(tk.profile_names || []).length} profiles`),
@@ -2835,7 +2854,7 @@ function openWarmingModal() {
               )
             ),
             h("div", { class: "warm-task-acts" },
-              h("span", { class: stCls, style: "min-width:74px" }, tk.last_result || tk.status),
+              h("span", { class: stCls, style: "min-width:74px" }, isRun ? t("stamp_live") : (tk.last_result || tk.status)),
               actBtn,
               delBtn
             )

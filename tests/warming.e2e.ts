@@ -559,6 +559,126 @@ test('Account Warming studio: recovers empty queue after 503, blocks stale GET o
   await expect(browser.locator('#warm-tasks')).toContainText('No warming tasks yet');
 });
 
+test('Warming keeps a custom campaign name when targets change', async ({ app, browser }) => {
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('#app')).toBeVisible();
+  await browser.locator('#warming-btn').click();
+
+  const name = browser.locator('#warm-name');
+  const secondTarget = browser.locator('.warm-prof-chip input:not(:checked)').first();
+  await expect(name).toHaveValue('Warm 1 profile(s)');
+  await secondTarget.click();
+  await expect(name).toHaveValue('Warm 2 profile(s)');
+  await name.fill('Weekend campaign');
+  await browser.locator('.warm-prof-chip input:checked').last().click();
+  await expect(name).toHaveValue('Weekend campaign');
+  await name.fill('Warm 1 profile(s)');
+  await secondTarget.click();
+  await expect(name).toHaveValue('Warm 2 profile(s)');
+  await name.fill('');
+  await browser.locator('.warm-prof-chip input:checked').last().click();
+  await expect(name).toHaveValue('');
+});
+
+test('Warming shows active status instead of the previous result during a rerun', async ({ app, browser }) => {
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('#app')).toBeVisible();
+
+  await browser.evaluate(() => {
+    const originalFetch = window.fetch.bind(window);
+    let running = false;
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (url.endsWith('/warming/tasks/repeat-task/run')) {
+        running = true;
+        return Response.json({ started: true, task_id: 'repeat-task' });
+      }
+      const response = await originalFetch(input, init);
+      if (!url.endsWith('/warming/tasks') || !response.ok) return response;
+      const catalog = await response.json();
+      return Response.json({
+        ...catalog,
+        tasks: [{
+          id: 'repeat-task', name: 'Repeat campaign', profile_names: ['Studio Gmail'],
+          preset: 'custom', duration_minutes: 3, schedule_time: '',
+          status: running ? 'running' : 'completed', last_result: 'OK (1/1 profiles)',
+        }],
+      });
+    };
+  });
+  await browser.locator('#warming-btn').click();
+  const task = '.warm-task-row:has-text("Repeat campaign")';
+  const stamp = browser.locator(`${task} .stamp`);
+  await expect(stamp).toContainText('OK (1/1 profiles)');
+  await browser.locator(`${task} button:has-text("Launch")`).click();
+  await expect(browser.locator(`${task} button:has-text("Stop")`)).toBeVisible();
+  await expect(stamp).toContainText('Running');
+});
+
+test('Warming keeps keyboard focus after a scenario is activated', async ({ app, browser }) => {
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await browser.evaluate(() => {
+    const originalFetch = window.fetch.bind(window);
+    const resume = new Promise<void>((resolve) => {
+      window.addEventListener('test-warming-catalog-ready', () => resolve(), { once: true });
+    });
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await originalFetch(input, init);
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (!url.endsWith('/warming/tasks') || !response.ok) return response;
+      await resume;
+      const catalog = await response.json();
+      return Response.json({
+        ...catalog,
+        scenarios: catalog.scenarios.filter((scenario: { id: string }) => scenario.id !== 'custom'),
+      });
+    };
+  });
+  await browser.locator('#warming-btn').click();
+  await browser.evaluate(() => {
+    document.querySelector<HTMLElement>('[data-scenario="custom"]')?.focus();
+    window.dispatchEvent(new Event('test-warming-catalog-ready'));
+  });
+  await expect(browser.locator('#warm-customize-btn')).toBeEnabled();
+  expect(await browser.evaluate(() => (document.activeElement as HTMLElement).dataset.scenario)).toBe('youtube_trust');
+
+  await browser.evaluate(() => document.querySelector<HTMLElement>('[data-scenario="social_news"]')?.focus());
+  await browser.keyboard.press('Enter');
+  await expect(browser.locator('[data-scenario="social_news"]')).toHaveAttribute('class', /active/);
+  await browser.keyboard.press('Tab');
+  expect(await browser.evaluate(() => (document.activeElement as HTMLElement).dataset.scenario)).toBe('ecommerce_cookie');
+});
+
+test('Warming keeps long campaign names inside the queue at mobile and desktop widths', async ({ app, browser }) => {
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await browser.locator('#warming-btn').click();
+  const longName = 'LongCampaignName'.repeat(5);
+  await browser.locator('#warm-name').fill(longName);
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-tasks')).toContainText(longName);
+
+  for (const width of [375, 1000]) {
+    await browser.setViewport({ width, height: 700 });
+    const fits = await browser.evaluate(() => {
+      const queue = document.querySelector('#warm-tasks')!;
+      const name = queue.querySelector('.warm-task-name')!;
+      return queue.scrollWidth === queue.clientWidth && name.scrollWidth === name.clientWidth;
+    });
+    expect(fits).toBe(true);
+    await expect(browser.locator(`[aria-label="Delete: ${longName}"]`)).toBeVisible();
+  }
+  await browser.locator(`[aria-label="Delete: ${longName}"]`).click();
+  await expect(browser.locator('#warm-tasks')).not.toContainText(longName);
+});
+
 test('Account Warming studio: background GET timeout and recovery preserve failed DELETE error and task row', async ({ app, browser }) => {
   await browser.setViewport({ width: 1440, height: 900 });
   await app.open('/');
