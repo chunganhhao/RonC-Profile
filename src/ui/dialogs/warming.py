@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import flet as ft
 
 from ...core.strings import get_string
+from ...services.browser.process import host_supports_headed
 from ...services.warming.scheduler import (
     SAMPLE_WARMING_SCRIPT,
     WARMING_PRESETS,
@@ -48,6 +49,12 @@ _SCENARIO_CARDS: tuple[tuple[str, Any, str, str], ...] = (
         ft.Icons.FORUM_OUTLINED,
         "warming_card_social_title",
         "warming_card_social_desc",
+    ),
+    (
+        "gmail_trust",
+        ft.Icons.MARK_EMAIL_READ_OUTLINED,
+        "warming_card_gmail_title",
+        "warming_card_gmail_desc",
     ),
     (
         "ecommerce_cookie",
@@ -103,6 +110,7 @@ def open_warming_dialog(
         options=[
             ft.dropdown.Option("youtube_trust", get_string("warming_preset_youtube")),
             ft.dropdown.Option("social_news", get_string("warming_preset_social")),
+            ft.dropdown.Option("gmail_trust", get_string("warming_preset_gmail")),
             ft.dropdown.Option("ecommerce_cookie", get_string("warming_preset_ecommerce")),
             ft.dropdown.Option("custom", get_string("warming_preset_custom")),
             ft.dropdown.Option("script", get_string("warming_preset_script")),
@@ -177,6 +185,15 @@ def open_warming_dialog(
     repeat_checkbox = ft.Checkbox(
         label=get_string("warming_repeat_daily"),
         value=True,
+    )
+    headed_supported = host_supports_headed()
+    headless_checkbox = ft.Checkbox(
+        label=get_string(
+            "warming_hide_browser" if headed_supported else "warming_hide_browser_forced"
+        ),
+        value=not headed_supported,
+        disabled=not headed_supported,
+        tooltip=get_string("warming_headless_hint"),
     )
     # Keep feedback_text as the only hidden size=12 ft.Text in this dialog.
     feedback_text = ft.Text("", size=12, color=COLORS["success"], visible=False)
@@ -256,6 +273,15 @@ def open_warming_dialog(
                     else "warming_steps_url_title"
                 )
                 steps_mode_note.visible = False
+            elif not using_override and preset in WARMING_SCENARIO_PLAYBOOKS:
+                steps = list(WARMING_SCENARIO_PLAYBOOKS[preset])
+                steps_header_title.value = get_string("warming_steps_preview_title")
+                steps_mode_note.value = get_string(
+                    "warming_url_mode_template_note",
+                    count=len(steps),
+                )
+                steps_mode_note.color = COLORS["text_dim"]
+                steps_mode_note.visible = True
             else:
                 effective_urls = valid_urls if valid_urls else list(WARMING_PRESETS.get(preset, []))
                 steps = []
@@ -275,13 +301,6 @@ def open_warming_dialog(
                         "warming_urls_ignored_warn", count=dropped_count
                     )
                     steps_mode_note.color = COLORS["warn_text"]
-                    steps_mode_note.visible = True
-                elif preset in WARMING_SCENARIO_PLAYBOOKS:
-                    steps_mode_note.value = get_string(
-                        "warming_url_mode_template_note",
-                        count=len(WARMING_SCENARIO_PLAYBOOKS[preset]),
-                    )
-                    steps_mode_note.color = COLORS["text_dim"]
                     steps_mode_note.visible = True
                 else:
                     steps_mode_note.visible = False
@@ -513,6 +532,12 @@ def open_warming_dialog(
                 on_click=lambda _: _load_template("social_news"),
             ),
             ft.OutlinedButton(
+                "Gmail",
+                height=28,
+                style=OUTLINE_STYLE,
+                on_click=lambda _: _load_template("gmail_trust"),
+            ),
+            ft.OutlinedButton(
                 "E-Commerce",
                 height=28,
                 style=OUTLINE_STYLE,
@@ -689,7 +714,7 @@ def open_warming_dialog(
         icon_ctrl = ft.Icon(ico, size=18, color=COLORS["text_sub"])
         card_icons[sid] = icon_ctrl
         badge_str = (
-            get_string("warming_sites_count_badge", count=len(WARMING_PRESETS[sid]))
+            get_string("warming_steps_count_badge", count=len(WARMING_SCENARIO_PLAYBOOKS[sid]))
             if sid in WARMING_SCENARIO_PLAYBOOKS
             else ("URL" if sid == "custom" else "JSON")
         )
@@ -810,6 +835,7 @@ def open_warming_dialog(
 
     def _rebuild_tasks(notify: bool = False) -> None:
         tasks = warming_service.list_tasks()
+        headed_now = host_supports_headed()
         if not tasks:
             tasks_col.controls = [
                 ft.Container(
@@ -908,6 +934,28 @@ def open_warming_dialog(
                                                         font_family=FONT_DATA,
                                                         color=COLORS["text_dim"],
                                                     ),
+                                                    *(
+                                                        [
+                                                            ft.Text(
+                                                                get_string(
+                                                                    "warming_headless_badge"
+                                                                    if t.headless
+                                                                    else (
+                                                                        "warming_visible_badge"
+                                                                        if headed_now
+                                                                        else "warming_headless_no_display_badge"
+                                                                    )
+                                                                ),
+                                                                size=11,
+                                                                font_family=FONT_DATA,
+                                                                color=COLORS["accent"]
+                                                                if (t.headless or not headed_now)
+                                                                else COLORS["text_dim"],
+                                                            )
+                                                        ]
+                                                        if t.headless is not None
+                                                        else []
+                                                    ),
                                                 ],
                                             ),
                                         ],
@@ -1001,6 +1049,7 @@ def open_warming_dialog(
                 schedule_time=sched,
                 repeat_daily=bool(repeat_checkbox.value),
                 enabled=True,
+                headless=True if not host_supports_headed() else bool(headless_checkbox.value),
                 **(
                     {"script_steps": parsed_steps}
                     if preset == "script" and parsed_steps is not None
@@ -1118,7 +1167,14 @@ def open_warming_dialog(
             build_controls_on_demand=False,
             controls=[
                 preset_dropdown,
-                ft.Row(spacing=8, controls=scenario_strip_controls),
+                ft.Column(
+                    spacing=8,
+                    tight=True,
+                    controls=[
+                        ft.Row(spacing=8, controls=scenario_strip_controls[:3]),
+                        ft.Row(spacing=8, controls=scenario_strip_controls[3:]),
+                    ],
+                ),
                 ft.Column(
                     spacing=4,
                     tight=True,
@@ -1174,6 +1230,7 @@ def open_warming_dialog(
                                     ],
                                 ),
                                 repeat_checkbox,
+                                headless_checkbox,
                             ],
                         ),
                         ft.Row(

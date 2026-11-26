@@ -63,6 +63,7 @@ class BrowserControlError(Exception):
         error_code: str | None = None,
         unknown_state: bool | None = None,
         page_id: str | None = None,
+        settled: bool | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -71,6 +72,7 @@ class BrowserControlError(Exception):
             bool(unknown_state) if unknown_state is not None else status in (409, 503, 504)
         )
         self.page_id = page_id
+        self.settled = settled
 
 
 class BrowserLauncher:
@@ -133,6 +135,8 @@ class BrowserLauncher:
         on_start: Callable[[], None] | None = None,
         on_ready: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
+        *,
+        headless: bool | None = None,
     ) -> bool:
         """Launch a profile's browser in the background.
 
@@ -181,7 +185,11 @@ class BrowserLauncher:
                 on_start()
 
             try:
-                proc = spawn_browser(profile)
+                proc = (
+                    spawn_browser(profile, headless=headless)
+                    if headless is not None
+                    else spawn_browser(profile)
+                )
                 with self._lock:
                     self._active_sessions[profile.name] = proc
                     self._stop_notifiers[profile.name] = stop_event
@@ -277,6 +285,7 @@ class BrowserLauncher:
                 error_code=body.get("error_code"),
                 unknown_state=body.get("unknown_state"),
                 page_id=body.get("page_id"),
+                settled=body.get("settled"),
             ) from e
         except (urllib.error.URLError, TimeoutError) as e:
             raise BrowserControlError(

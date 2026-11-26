@@ -11,21 +11,31 @@ test('Account Warming studio: scenario cards, visual step builder, and task pers
   await browser.locator('#warming-btn').click();
   await expect(browser.locator('[role=dialog]')).toBeVisible();
 
-  // 1. All 5 separated scenario cards render visually; built-in cards advertise URL site count
-  for (const id of ['youtube_trust', 'social_news', 'ecommerce_cookie', 'custom', 'script']) {
+  // 1. All 6 separated scenario cards render visually; built-in cards advertise interactive step count
+  for (const id of ['youtube_trust', 'social_news', 'gmail_trust', 'ecommerce_cookie', 'custom', 'script']) {
     await expect(browser.locator(`[data-scenario="${id}"]`)).toBeVisible();
   }
-  await expect(browser.locator('[data-scenario="social_news"]')).toContainText('3 sites');
+  await expect(browser.locator('[data-scenario="social_news"]')).toContainText('steps');
+  await expect(browser.locator('[data-scenario="gmail_trust"]')).toContainText('steps');
 
-  // 2. Built-in Social & News shows truthful active URL mode sites & optional URL override
+  // 2. Built-in Social & News shows truthful interactive playbook (Google hot news + Wikipedia + HN, no Reddit)
   await browser.locator('[data-scenario="social_news"]').click();
   await expect(browser.locator('[data-scenario="social_news"]')).toHaveAttribute('class', /active/);
+  await expect(browser.locator('#warm-steps')).toContainText('www.google.com');
   await expect(browser.locator('#warm-steps')).toContainText('www.wikipedia.org');
-  await expect(browser.locator('#warm-steps')).not.toContainText('#searchInput');
+  await expect(browser.locator('#warm-steps')).toContainText('#searchInput');
+  await expect(browser.locator('#warm-steps')).not.toContainText('reddit.com');
 
+  // Gmail Trust card displays Gmail inbox scroll & email click playbook
+  await browser.locator('[data-scenario="gmail_trust"]').click();
+  await expect(browser.locator('#warm-steps')).toContainText('mail.google.com');
+  await expect(browser.locator('#warm-steps')).toContainText('tr.zA');
+
+  await browser.locator('[data-scenario="social_news"]').click();
   await browser.locator('#warm-payload').fill('https://example.test/override');
   await expect(browser.locator('#warm-steps')).toContainText('example.test/override');
   await expect(browser.locator('#warm-steps')).not.toContainText('www.wikipedia.org');
+  await expect(browser.locator('#warm-steps')).not.toContainText('#searchInput');
   await browser.locator('#warm-payload').fill('');
 
   // 3. Customize as Script (empty draft -> no prompt) copies full playbook into editable visual builder
@@ -65,16 +75,21 @@ test('Account Warming studio: scenario cards, visual step builder, and task pers
   await browser.locator('#warm-save-btn').click();
   await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /err/);
 
-  // 6. Load Social template (confirm overwrite), save schedule, verify persistence across reload, then delete
+  // 6. Load Social template (confirm overwrite), toggle Hide Browser, save schedule, verify persistence across reload, then delete
   await browser.locator('[data-warm-tpl="social_news"]').click();
   await browser.locator('.modal:has-text("Replace your unsaved") .btn-act').click();
   await browser.locator('#warm-name').fill('E2E Social Flow');
+  await expect(browser.locator('#warm-headless')).not.toBeChecked();
+  await browser.locator('#warm-headless').check();
+  await expect(browser.locator('#warm-headless')).toBeChecked();
   await browser.locator('#warm-save-btn').click();
   await expect(browser.locator('#warm-tasks')).toContainText('E2E Social Flow');
+  await expect(browser.locator('#warm-tasks')).toContainText('Hidden');
 
   await browser.reload();
   await browser.locator('#warming-btn').click();
   await expect(browser.locator('#warm-tasks')).toContainText('E2E Social Flow');
+  await expect(browser.locator('#warm-tasks')).toContainText('Hidden');
 
   await browser.locator('[data-warm-del]').first().click();
   await expect(browser.locator('#warm-tasks')).not.toContainText('E2E Social Flow');
@@ -98,7 +113,8 @@ test('Account Warming studio: redacts malformed URLs, gates delayed catalog, gua
     }));
     const catalogPayload = [
       { id: 'youtube_trust', recommended_minutes: 4, default_urls: ['https://www.youtube.com'], sample_steps: fullSteps },
-      { id: 'social_news', recommended_minutes: 4, default_urls: ['https://www.wikipedia.org'], sample_steps: fullSteps },
+      { id: 'social_news', recommended_minutes: 5, default_urls: ['https://www.google.com', 'https://www.wikipedia.org'], sample_steps: fullSteps },
+      { id: 'gmail_trust', recommended_minutes: 4, default_urls: ['https://mail.google.com/mail/u/0/#inbox'], sample_steps: fullSteps },
       { id: 'ecommerce_cookie', recommended_minutes: 4, default_urls: ['https://www.amazon.com'], sample_steps: fullSteps },
       { id: 'custom', recommended_minutes: 3, default_urls: [], sample_steps: [] },
       { id: 'script', recommended_minutes: 3, default_urls: [], sample_steps: [{ action: 'navigate', url: 'https://news.google.com' }] },
@@ -215,7 +231,8 @@ test('Account Warming studio: slow >2s GETs are not self-aborted and unsupported
     }));
     const catalogPayload = [
       { id: 'youtube_trust', recommended_minutes: 4, default_urls: ['https://www.youtube.com'], sample_steps: fullSteps },
-      { id: 'social_news', recommended_minutes: 4, default_urls: ['https://www.wikipedia.org'], sample_steps: fullSteps },
+      { id: 'social_news', recommended_minutes: 5, default_urls: ['https://www.google.com', 'https://www.wikipedia.org'], sample_steps: fullSteps },
+      { id: 'gmail_trust', recommended_minutes: 4, default_urls: ['https://mail.google.com/mail/u/0/#inbox'], sample_steps: fullSteps },
       { id: 'ecommerce_cookie', recommended_minutes: 4, default_urls: ['https://www.amazon.com'], sample_steps: fullSteps },
       { id: 'custom', recommended_minutes: 3, default_urls: [], sample_steps: [] },
       { id: 'script', recommended_minutes: 3, default_urls: [], sample_steps: [{ action: 'navigate', url: 'https://news.google.com' }] },
@@ -651,4 +668,139 @@ test('Account Warming studio: background GET timeout and recovery preserve faile
   await browser.evaluate(() => { (window as unknown as Record<string, unknown>).__s15FailDelete = false; });
   await browser.locator('[data-warm-del]').first().click();
   await expect(browser.locator('#warm-tasks')).toContainText('No warming tasks yet');
+});
+
+test('Account Warming studio: gates blank built-ins while catalog is loading/503 and reflects server display capability', async ({ app, browser }) => {
+  await browser.setViewport({ width: 1440, height: 900 });
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('#app')).toBeVisible();
+
+  await browser.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    const origFetch = window.fetch.bind(window);
+    w.__s7Mode = 'pending';
+    w.__s7Posts = [];
+    let releasePending: (() => void) | null = null;
+    w.__s7ReleasePending = () => { if (releasePending) { const fn = releasePending; releasePending = null; fn(); } };
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.endsWith('/api/v1/warming/tasks') && method === 'GET') {
+        if (w.__s7Mode === 'pending') {
+          await new Promise<void>((resolve, reject) => {
+            releasePending = resolve;
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+          });
+          return new Response(JSON.stringify({ detail: 'Catalog 503' }), {
+            status: 503,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (w.__s7Mode === 'fail503') {
+          return new Response(JSON.stringify({ detail: 'Catalog 503' }), {
+            status: 503,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        const realRes = await origFetch(input, init);
+        const data = await realRes.json();
+        if (w.__s7Mode === 'no_display') {
+          data.host_supports_headed = false;
+          data.tasks = [
+            {
+              id: 't-api-false',
+              name: 'API Headless False',
+              profile_names: ['Studio Profile'],
+              preset: 'custom',
+              custom_urls: ['https://good.example/a'],
+              duration_minutes: 3,
+              schedule_time: '',
+              headless: false,
+              status: 'idle',
+              last_result: '',
+            },
+            {
+              id: 't-api-null',
+              name: 'Legacy Inherit Task',
+              profile_names: ['Studio Profile'],
+              preset: 'custom',
+              custom_urls: ['https://good.example/b'],
+              duration_minutes: 3,
+              schedule_time: '',
+              headless: null,
+              status: 'idle',
+              last_result: '',
+            },
+          ];
+        }
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('/api/v1/warming/tasks') && method === 'POST') {
+        const parsedBody = init?.body ? JSON.parse(String(init.body)) : null;
+        (w.__s7Posts as unknown[]).push({ url, body: parsedBody });
+        return new Response(JSON.stringify({ id: 't-s7', name: 'Override Task', profile_names: ['Studio Profile'], preset: 'gmail_trust', custom_urls: ['https://good.example/ovr'], duration_minutes: 4, headless: parsedBody ? parsedBody.headless : false, status: 'idle', last_result: '' }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return origFetch(input, init);
+    };
+  });
+
+  await browser.locator('#warming-btn').click();
+  await expect(browser.locator('[role=dialog]')).toBeVisible();
+
+  // While catalog GET is pending on blank Gmail built-in: no URL fallback rows, Save & Run disabled
+  await browser.locator('[data-scenario="gmail_trust"]').click();
+  await expect(browser.locator('#warm-steps .warm-step-row')).toHaveCount(0);
+  await expect(browser.locator('#warm-steps')).not.toContainText('navigate');
+  await expect(browser.locator('#warm-save-btn')).toBeDisabled();
+  await expect(browser.locator('#warm-run-btn')).toBeDisabled();
+
+  // Release pending GET as 503: still no URL fallback rows, Save & Run disabled, zero POSTs
+  await browser.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__s7Mode = 'fail503';
+    (w.__s7ReleasePending as () => void)();
+  });
+  await expect(browser.locator('#warm-retry-btn')).toBeVisible();
+  await expect(browser.locator('#warm-steps .warm-step-row')).toHaveCount(0);
+  await expect(browser.locator('#warm-steps')).not.toContainText('navigate');
+  await expect(browser.locator('#warm-save-btn')).toBeDisabled();
+  await expect(browser.locator('#warm-run-btn')).toBeDisabled();
+
+  // Typing an explicit valid URL override while catalog is 503 unblocks Save cleanly without promising Visible
+  await browser.locator('#warm-payload').fill('https://good.example/ovr');
+  await expect(browser.locator('#warm-steps')).toContainText('good.example/ovr');
+  await expect(browser.locator('#warm-save-btn')).toBeEnabled();
+  await expect(browser.locator('#warm-headless')).not.toBeDisabled();
+  await browser.locator('#warm-save-btn').click();
+  await expect(browser.locator('#warm-msg')).toHaveAttribute('class', /ok/);
+  await expect(browser.locator('#warm-tasks')).toContainText('Visible requested (new)');
+  const postsAfterOvr = await browser.evaluate(() => (window as unknown as { __s7Posts: Array<{ body: { custom_urls: string[]; headless: boolean } }> }).__s7Posts);
+  expect(postsAfterOvr.length).toBe(1);
+  expect(postsAfterOvr[0].body.custom_urls).toEqual(['https://good.example/ovr']);
+  expect(postsAfterOvr[0].body.headless).toBe(false);
+
+  // Clearing override re-blocks blank built-in until Retry succeeds; host_supports_headed=false forces checked & disabled #warm-headless and labels saved headless=false row as Hidden (no display), never Visible
+  await browser.locator('#warm-payload').fill('');
+  await expect(browser.locator('#warm-save-btn')).toBeDisabled();
+  await browser.evaluate(() => { (window as unknown as Record<string, unknown>).__s7Mode = 'no_display'; });
+  await browser.locator('#warm-retry-btn').click();
+  await expect(browser.locator('#warm-steps')).toContainText('mail.google.com');
+  await expect(browser.locator('#warm-steps')).toContainText('tr.zA');
+  await expect(browser.locator('#warm-save-btn')).toBeEnabled();
+  await expect(browser.locator('#warm-headless')).toBeChecked();
+  await expect(browser.locator('#warm-headless')).toBeDisabled();
+  const apiFalseRow = browser.locator('.warm-task-row:has-text("API Headless False")');
+  await expect(apiFalseRow).toContainText('Hidden (no display)');
+  await expect(apiFalseRow).not.toContainText('Visible');
+  const legacyNullRow = browser.locator('.warm-task-row:has-text("Legacy Inherit Task")');
+  await expect(legacyNullRow).not.toContainText('Hidden');
+  await expect(legacyNullRow).not.toContainText('Visible');
 });

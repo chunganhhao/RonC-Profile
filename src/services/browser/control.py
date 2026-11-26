@@ -54,6 +54,10 @@ class PartialActionError(Exception):
     """Raised when a multi-step action fails after an earlier sub-step mutated page state."""
 
 
+class PreActionTimeoutError(Exception):
+    """Raised when waiting for a target locator times out before any page mutation occurs."""
+
+
 _SCHEME = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):(.*)$", re.S)
 
 
@@ -203,9 +207,27 @@ class PageController:
         content, truncated = _truncate(content, max_chars)
         return {"text": content, "truncated": truncated}
 
+    async def _wait_locator_visible(self, locator: Any, timeout: int) -> int:
+        """Wait for `locator` to become visible before mutating; return remaining ms."""
+        wait_fn = getattr(locator, "wait_for", None)
+        if not callable(wait_fn):
+            return timeout
+        t0 = _monotonic()
+        try:
+            await wait_fn(state="visible", timeout=timeout)
+        except TypeError:
+            # Minimal test doubles may define wait_for(timeout=...) without `state`.
+            return timeout
+        except (TimeoutError, PlaywrightTimeoutError) as exc:
+            raise PreActionTimeoutError(str(exc)) from exc
+        elapsed_ms = int((_monotonic() - t0) * 1000)
+        return max(min(100, max(1, timeout)), timeout - elapsed_ms)
+
     async def click(self, selector: str, timeout: int = 10_000) -> dict[str, Any]:
         page = await self._page()
-        await page.locator(selector).first.click(timeout=timeout)
+        target = page.locator(selector).first
+        remaining_ms = await self._wait_locator_visible(target, timeout)
+        await target.click(timeout=remaining_ms)
         return await self._describe_after_mutation(page)
 
     async def type(
@@ -218,10 +240,11 @@ class PageController:
     ) -> dict[str, Any]:
         page = await self._page()
         field = page.locator(selector).first
+        remaining_ms = await self._wait_locator_visible(field, timeout)
         if clear:
-            await field.fill(text, timeout=timeout)
+            await field.fill(text, timeout=remaining_ms)
         else:
-            await field.press_sequentially(text, timeout=timeout)
+            await field.press_sequentially(text, timeout=remaining_ms)
         if submit:
             try:
                 await field.press("Enter")
@@ -537,12 +560,17 @@ def build_app(controller: PageController, token: str) -> web.Application:
                 and current.is_closed()
             )
             is_partial = isinstance(e, PartialActionError)
-            is_timeout = isinstance(e, (TimeoutError, PlaywrightTimeoutError))
+            is_pre_timeout = isinstance(e, PreActionTimeoutError)
+            is_timeout = is_pre_timeout or isinstance(e, (TimeoutError, PlaywrightTimeoutError))
             is_target_closed = isinstance(e, PlaywrightTargetClosedError) or page_closed
             unknown_state = (
                 is_partial
                 or is_target_closed
-                or (is_timeout and action not in _NON_MUTATING_TIMEOUT_ACTIONS)
+                or (
+                    is_timeout
+                    and not is_pre_timeout
+                    and action not in _NON_MUTATING_TIMEOUT_ACTIONS
+                )
             )
             error_code = (
                 "state_uncertain"

@@ -3703,13 +3703,26 @@ def test_warming_playbooks_catalog_api_and_natural_url_browsing(tmp_path, monkey
     # Every built-in scenario playbook validates cleanly and uses realistic human interactions
     scenarios = list_warming_scenarios()
     by_id = {s["id"]: s for s in scenarios}
-    assert {"youtube_trust", "social_news", "ecommerce_cookie", "custom", "script"} <= set(by_id)
+    assert {
+        "youtube_trust",
+        "social_news",
+        "gmail_trust",
+        "ecommerce_cookie",
+        "custom",
+        "script",
+    } <= set(by_id)
     assert "type" in by_id["social_news"]["interactive_actions"]
+    assert "click" in by_id["social_news"]["interactive_actions"]
     assert "press" in by_id["social_news"]["interactive_actions"]
+    assert "click" in by_id["gmail_trust"]["interactive_actions"]
+    assert "wait_for" in by_id["gmail_trust"]["interactive_actions"]
+    assert "back" not in by_id["gmail_trust"]["interactive_actions"]
+    assert "back" not in by_id["social_news"]["interactive_actions"]
     assert "scroll" in by_id["youtube_trust"]["interactive_actions"]
     for pid, steps in WARMING_SCENARIO_PLAYBOOKS.items():
         assert len(steps) >= 10, pid
         assert normalize_warming_steps(steps) == steps
+        assert not any("reddit.com" in str(st.get("url") or "") for st in steps), pid
 
     lbl, det = describe_warming_step(
         {
@@ -3722,6 +3735,15 @@ def test_warming_playbooks_catalog_api_and_natural_url_browsing(tmp_path, monkey
     assert "SECRET_PW" not in det
     assert "SECRET_SHOULD_NOT_APPEAR" not in det
 
+    assert describe_warming_step(
+        {
+            "action": "type",
+            "selector": "textarea[name='q']",
+            "texts": ["giá vàng hôm nay", "giá bạc hôm nay", "drama hôm nay"],
+            "submit": True,
+        }
+    ) == ("type", "textarea[name='q'] \"giá vàng hôm nay\" (+2) + Enter")
+
     # REST GET /warming/tasks exposes scenario catalog alongside tasks/presets
     monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
     monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
@@ -3731,7 +3753,7 @@ def test_warming_playbooks_catalog_api_and_natural_url_browsing(tmp_path, monkey
     container.profile_manager.add_profile("nat-prof", "", "macos")
     with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
         res = client.get("/api/v1/warming/tasks").json()
-        assert len(res["scenarios"]) == 5
+        assert len(res["scenarios"]) == 6
 
     # Natural multi-phase URL browsing calls scroll + press/re-scroll while preserving dwell sum
     from src.services.warming import scheduler as sched_mod
@@ -3800,7 +3822,7 @@ def test_warming_dialog_hallmark_scenario_cards_step_preview_and_visual_builder(
         for c in controls
     )
 
-    # All 5 scenario cards are clickable; built-in Social & News shows active URL mode sites first
+    # All 6 scenario cards are clickable; built-in Social & News shows active interactive playbook
     social_title = get_string("warming_card_social_title")
     social_card = next(
         c
@@ -3812,16 +3834,35 @@ def test_warming_dialog_hallmark_scenario_cards_step_preview_and_visual_builder(
     social_card.on_click(None)
     assert dropdowns[0].value == "social_news"
     preview_texts = [c.value or "" for c in _walk_controls(page.dialog) if isinstance(c, ft.Text)]
+    assert any("www.google.com" in t for t in preview_texts)
     assert any("www.wikipedia.org" in t for t in preview_texts)
-    assert not any("#searchInput" in t for t in preview_texts)
+    assert any("#searchInput" in t for t in preview_texts)
+    assert not any("reddit.com" in t for t in preview_texts)
 
-    # Override URL in built-in mode updates active preview without showing template #searchInput
+    # Gmail Trust card is clickable and displays interactive Gmail inbox/mail-read steps
+    gmail_title = get_string("warming_card_gmail_title")
+    gmail_card = next(
+        c
+        for c in controls
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and any(isinstance(t, ft.Text) and t.value == gmail_title for t in _walk_controls(c))
+    )
+    gmail_card.on_click(None)
+    assert dropdowns[0].value == "gmail_trust"
+    gmail_texts = [c.value or "" for c in _walk_controls(page.dialog) if isinstance(c, ft.Text)]
+    assert any("mail.google.com" in t for t in gmail_texts)
+    assert any("tr.zA" in t for t in gmail_texts)
+    social_card.on_click(None)
+
+    # Override URL in built-in mode switches preview cleanly to URL override without #searchInput
     payload_field = text_fields[1]
     payload_field.value = "https://example.test/override"
     payload_field.on_change(None)
     override_texts = [c.value or "" for c in _walk_controls(page.dialog) if isinstance(c, ft.Text)]
     assert any("example.test/override" in t for t in override_texts)
     assert not any("www.wikipedia.org" in t for t in override_texts)
+    assert not any("#searchInput" in t for t in override_texts)
     payload_field.value = ""
     payload_field.on_change(None)
 
@@ -4176,9 +4217,17 @@ def test_codex_r2_6_7_flet_draft_overwrite_guard_and_truthful_preview(tmp_path):
     payload_field = text_fields[1]
     duration_field = text_fields[4]
 
-    # Built-in cards display site counts (3 sites), not 15 steps
+    # Built-in cards display interactive step counts matching actual execution
+    from src.services.warming.scheduler import WARMING_SCENARIO_PLAYBOOKS
+
     card_texts = [c.value or "" for c in controls if isinstance(c, ft.Text)]
-    assert any(get_string("warming_sites_count_badge", count=3) == t for t in card_texts)
+    assert any(
+        get_string(
+            "warming_steps_count_badge", count=len(WARMING_SCENARIO_PLAYBOOKS["social_news"])
+        )
+        == t
+        for t in card_texts
+    )
 
     # Create unsaved script draft, switch to Social & News, then try Customize -> Cancel keeps draft
     dropdown.value = "script"
@@ -4197,7 +4246,7 @@ def test_codex_r2_6_7_flet_draft_overwrite_guard_and_truthful_preview(tmp_path):
     )
     social_card.on_click(None)
     assert dropdown.value == "social_news"
-    assert duration_field.value == "4"
+    assert duration_field.value == "5"
     duration_field.value = "9"
 
     # Attempt Customize -> Cancel keeps preset, duration, and /unsaved script draft intact
@@ -4934,3 +4983,1367 @@ def test_codex_s13_3_port_validation_parity_across_scheduler_rest_and_flet(tmp_p
     assert legacy_task.status == "failed"
     assert "Invalid URLs" in legacy_task.last_result
     assert launches == []
+
+
+def test_warming_interactive_social_gmail_texts_headless_and_pre_action_timeout(
+    tmp_path, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    from src.api.app import create_app
+    from src.core import config as app_config
+    from src.core.container import Container
+    from src.core.strings import get_string
+    from src.models.profile import Profile
+    from src.services.browser import control, process
+    from src.services.browser import launcher as launcher_mod
+    from src.services.warming.scheduler import (
+        _SOCIAL_GOOGLE_QUERIES,
+        _WIKI_SEARCH_TOPICS,
+        normalize_warming_steps,
+    )
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    warming_file = tmp_path / "warming.json"
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(warming_file))
+
+    # 1. `type` texts validation
+    for bad in (
+        [{"action": "type", "selector": "input"}],
+        [{"action": "type", "selector": "input", "text": "a", "texts": ["b"]}],
+        [{"action": "type", "selector": "input", "texts": []}],
+        [{"action": "type", "selector": "input", "texts": ["   "]}],
+        [{"action": "type", "selector": "input", "texts": [f"q{i}" for i in range(31)]}],
+    ):
+        with pytest.raises(ValueError):
+            normalize_warming_steps(bad)
+
+    valid_type = normalize_warming_steps(
+        [{"action": "type", "selector": "input", "texts": ["giá vàng hôm nay", "drama hôm nay"]}]
+    )
+    assert valid_type[0]["texts"] == ["giá vàng hôm nay", "drama hôm nay"]
+
+    # 2. Built-in social_news & gmail_trust execute interactive playbooks directly + headless flag
+    container = Container()
+    container.profile_manager.add_profile("warm-p", "", "macos", engine="chrome")
+    ws = container.warming_scheduler
+
+    social = ws.add_task("Social Interactive", ["warm-p"], preset="social_news", headless=True)
+    gmail = ws.add_task("Gmail Trust Run", ["warm-p"], preset="gmail_trust", headless=True)
+    assert social is not None and social.headless is True
+    assert gmail is not None and gmail.headless is True
+
+    # Persisted across reload
+    reloaded = WarmingSchedulerService(file_path=str(warming_file))
+    assert reloaded.get_task(social.id).headless is True
+    assert reloaded.get_task(gmail.id).headless is True
+
+    launches: list[tuple[str, bool | None]] = []
+    controls: list[tuple[str, dict]] = []
+    logs: list[str] = []
+
+    class RecordingLauncher:
+        def __init__(self, initially_running: set[str] | None = None):
+            self.running = set(initially_running or ())
+            self.url = "about:blank"
+            self._click_n = 0
+
+        def is_running(self, name: str) -> bool:
+            return name in self.running
+
+        def start_thread(self, profile, _log, *, headless=None) -> bool:
+            launches.append((profile.name, headless))
+            self.running.add(profile.name)
+            return True
+
+        def wait_for_launch(self, _name: str, timeout: float = 45.0):
+            return True, None
+
+        def control(self, _name: str, action: str, params=None, timeout: float = 60.0):
+            p = dict(params or {})
+            controls.append((action, p))
+            if action == "navigate" and p.get("url"):
+                self.url = str(p["url"])
+            elif action == "click":
+                self._click_n += 1
+                self.url = f"{self.url}/msg-{self._click_n}"
+            return {"ok": True, "url": self.url}
+
+        def stop_profile(self, name: str, timeout: int = 2) -> bool:
+            self.running.discard(name)
+            return True
+
+    bl = RecordingLauncher()
+    assert (
+        ws.execute_task_sync(
+            social.id,
+            container.profile_manager,
+            bl,
+            log_fn=logs.append,
+            step_dwell_seconds=0.0,
+        )
+        is True
+    )
+    assert launches == [("warm-p", True)]
+    assert "warm-p" not in bl.running
+    nav_urls = [p.get("url", "") for act, p in controls if act == "navigate"]
+    assert "https://www.google.com" in nav_urls
+    assert "https://www.wikipedia.org" in nav_urls
+    assert "https://news.ycombinator.com" in nav_urls
+    assert not any("reddit.com" in u for u in nav_urls)
+    typed_texts = [p.get("text", "") for act, p in controls if act == "type"]
+    assert any(t in _SOCIAL_GOOGLE_QUERIES for t in typed_texts)
+    assert any(t in _WIKI_SEARCH_TOPICS for t in typed_texts)
+    assert any(act == "click" and "h3" in p.get("selector", "") for act, p in controls)
+    assert any(act == "click" and "/wiki/" in p.get("selector", "") for act, p in controls)
+    # Typed queries are never leaked into logs
+    joined_logs = "\n".join(logs)
+    assert not any(q in joined_logs for q in _SOCIAL_GOOGLE_QUERIES)
+
+    # Gmail trust playbook runs inbox scroll + email clicks + inbox navigate (zero back), and logs reuse if already open
+    controls.clear()
+    launches.clear()
+    logs.clear()
+    bl_open = RecordingLauncher(initially_running={"warm-p"})
+    assert (
+        ws.execute_task_sync(
+            gmail.id,
+            container.profile_manager,
+            bl_open,
+            log_fn=logs.append,
+            step_dwell_seconds=0.0,
+        )
+        is True
+    )
+    assert launches == []
+    assert any("already running" in line for line in logs)
+    assert (
+        sum(1 for act, p in controls if act == "navigate" and "mail.google.com" in p.get("url", ""))
+        == 3
+    )
+    assert sum(1 for act, p in controls if act == "click" and "tr.zA" in p.get("selector", "")) == 2
+    assert sum(1 for act, _ in controls if act == "back") == 0
+    assert sum(1 for act, _ in controls if act == "scroll") >= 6
+
+    # 3. spawn_browser & BrowserLauncher forward headless flag to FOXPROFILE_HEADLESS cleanly
+    captured_envs: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        process.subprocess,
+        "Popen",
+        lambda _cmd, **kw: captured_envs.append(kw["env"]) or SimpleNamespace(poll=lambda: None),
+    )
+    process.spawn_browser(Profile("p-hid", engine="chrome"), headless=True)
+    assert captured_envs[-1]["FOXPROFILE_HEADLESS"] == "true"
+    process.spawn_browser(Profile("p-vis", engine="chrome"), headless=False)
+    assert captured_envs[-1]["FOXPROFILE_HEADLESS"] == "false"
+
+    spawn_calls: list[tuple[str, bool | None]] = []
+    monkeypatch.setattr(
+        launcher_mod,
+        "spawn_browser",
+        lambda prof, *, headless=None: (
+            spawn_calls.append((prof.name, headless)) or SimpleNamespace(poll=lambda: None)
+        ),
+    )
+    monkeypatch.setattr(launcher_mod, "wait_for_exit", lambda *a: None)
+    real_bl = launcher_mod.BrowserLauncher()
+    monkeypatch.setattr(real_bl, "_monitor_process", lambda *a: None)
+    try:
+        assert real_bl.start_thread(Profile("p-h"), lambda _: None, headless=True) is True
+        assert spawn_calls == [("p-h", True)]
+    finally:
+        real_bl._active_sessions.clear()
+
+    # 4. REST API + Flet UI persist headless checkbox (unchecked by default) and show badge
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        r = client.post(
+            "/api/v1/warming/tasks",
+            json={
+                "name": "REST Gmail Hidden",
+                "profile_names": ["warm-p"],
+                "preset": "gmail_trust",
+                "duration_minutes": 4,
+                "headless": True,
+            },
+        )
+        assert r.status_code == 201
+        assert r.json()["headless"] is True
+
+    page = _DummyPage()
+    open_warming_dialog(page, ws, container.profile_manager, SimpleNamespace())
+    dlg_controls = list(_walk_controls(page.dialog))
+    hide_cb = next(
+        c
+        for c in dlg_controls
+        if isinstance(c, ft.Checkbox) and c.label == get_string("warming_hide_browser")
+    )
+    assert hide_cb.value is False
+    hide_cb.value = True
+    save_btn = next(
+        c
+        for c in dlg_controls
+        if getattr(c, "content", None) == get_string("warming_save_schedule_btn")
+    )
+    save_btn.on_click(None)
+    assert ws.list_tasks()[-1].headless is True
+    assert any(
+        isinstance(c, ft.Text) and c.value == get_string("warming_headless_badge")
+        for c in _walk_controls(page.dialog)
+    )
+
+    # 5. PreActionTimeoutError lets optional missing click/type skip without state_uncertain abort
+    class _StubLocator:
+        def __init__(self, mode: str):
+            self._mode = mode
+            self.first = self
+
+        async def wait_for(self, *, state: str = "visible", timeout: int = 10_000):
+            if self._mode == "missing":
+                raise TimeoutError("Locator timed out waiting for visible")
+
+        async def click(self, timeout: int = 10_000):
+            if self._mode == "post_click_timeout":
+                raise TimeoutError("Click timed out after dispatch")
+
+        async def fill(self, text: str, timeout: int = 10_000):
+            return None
+
+    class _StubPage:
+        def __init__(self):
+            self.url = "https://example.test/"
+            self.closed = False
+            self.events: list[str] = []
+
+        def is_closed(self):
+            return self.closed
+
+        async def title(self):
+            return "Stub"
+
+        async def goto(self, url: str, wait_until: str = "load"):
+            self.url = url
+            self.events.append(f"goto:{url}")
+
+        def locator(self, selector: str):
+            if selector == ".missing-banner":
+                return _StubLocator("missing")
+            if selector == ".stuck-button":
+                return _StubLocator("post_click_timeout")
+            return _StubLocator("ok")
+
+    stub_page = _StubPage()
+    ctx = SimpleNamespace(pages=[stub_page])
+    ready = threading.Event()
+    stop_loop = threading.Event()
+    info: dict = {}
+
+    def _serve():
+        async def _run():
+            runner, port, token = await control.serve(ctx)
+            info["port"], info["token"] = port, token
+            ready.set()
+            while not stop_loop.is_set():
+                await asyncio.sleep(0.02)
+            await runner.cleanup()
+
+        asyncio.run(_run())
+
+    srv = threading.Thread(target=_serve, daemon=True)
+    srv.start()
+    assert ready.wait(3)
+    ctrl_bl = launcher_mod.BrowserLauncher()
+    ctrl_bl._active_sessions["warm-p"] = SimpleNamespace(poll=lambda: None)
+    ctrl_bl._controls["warm-p"] = (info["port"], info["token"])
+    try:
+        opt_ok = ws.add_task(
+            "Optional Missing Banner",
+            ["warm-p"],
+            preset="script",
+            script_steps=[
+                {"action": "navigate", "url": "https://example.test/start"},
+                {
+                    "action": "click",
+                    "selector": ".missing-banner",
+                    "timeout": 500,
+                    "optional": True,
+                },
+                {"action": "navigate", "url": "https://example.test/after"},
+            ],
+        )
+        assert ws.execute_task_sync(opt_ok.id, container.profile_manager, ctrl_bl) is True
+        assert opt_ok.status == "completed"
+        assert stub_page.events == [
+            "goto:https://example.test/start",
+            "goto:https://example.test/after",
+        ]
+
+        # Post-visibility click timeout STILL aborts as Interrupted (unknown_state=True)
+        stub_page.events.clear()
+        post_abort = ws.add_task(
+            "Post Click Timeout Aborts",
+            ["warm-p"],
+            preset="script",
+            script_steps=[
+                {"action": "navigate", "url": "https://example.test/start"},
+                {"action": "click", "selector": ".stuck-button", "timeout": 500, "optional": True},
+                {"action": "navigate", "url": "https://example.test/never"},
+            ],
+        )
+        assert ws.execute_task_sync(post_abort.id, container.profile_manager, ctrl_bl) is False
+        assert post_abort.status == "failed"
+        assert "Interrupted" in post_abort.last_result
+        assert stub_page.events == ["goto:https://example.test/start"]
+    finally:
+        ctrl_bl._active_sessions.clear()
+        ctrl_bl._controls.clear()
+        stop_loop.set()
+        srv.join(3)
+
+    # 6. Codex §7 #1/#2/#4 regressions: Gmail guards, safe budget cutoff vs transport/unsettled 504, explicit headless/headed/legacy env
+    import urllib.error
+
+    from src.services.browser.launcher import BrowserControlError
+    from src.services.warming import scheduler as sched_mod
+
+    orig_threading = sched_mod.threading
+
+    class InstantBudgetEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, _sec):
+            return False
+
+    # 6a. Codex §7 #1, §9 #1/#2 & §11 #1/#2: positive Gmail inbox/message/return verification,
+    # session loss stop, empty vs unverified vs cut-short separation, and return-owed budget cutoffs
+    signed_out_task = ws.add_task("Gmail Signed Out", ["warm-p"], preset="gmail_trust")
+    signed_out_table_task = ws.add_task("Gmail Signed Out Table", ["warm-p"], preset="gmail_trust")
+    session_expire_click_task = ws.add_task(
+        "Gmail Session Expire On Click", ["warm-p"], preset="gmail_trust"
+    )
+    session_expire_return_task = ws.add_task(
+        "Gmail Session Expire On Return", ["warm-p"], preset="gmail_trust"
+    )
+    empty_inbox_task = ws.add_task("Gmail Empty Inbox", ["warm-p"], preset="gmail_trust")
+    unverified_empty_task = ws.add_task(
+        "Gmail Click Miss No Marker", ["warm-p"], preset="gmail_trust"
+    )
+    noop_click_task = ws.add_task("Gmail Noop Click", ["warm-p"], preset="gmail_trust")
+    absent_url_task = ws.add_task("Gmail Absent URL Evidence", ["warm-p"], preset="gmail_trust")
+    cutoff_before_click_task = ws.add_task(
+        "Gmail Populated Cutoff Before Click", ["warm-p"], preset="gmail_trust", duration_minutes=1
+    )
+    cutoff_before_return_task = ws.add_task(
+        "Gmail Cutoff Before Return", ["warm-p"], preset="gmail_trust", duration_minutes=1
+    )
+    cutoff_before_return_verify_task = ws.add_task(
+        "Gmail Cutoff Before Return Verify", ["warm-p"], preset="gmail_trust", duration_minutes=1
+    )
+    cutoff_after_return_task = ws.add_task(
+        "Gmail Cutoff After Verified Return", ["warm-p"], preset="gmail_trust", duration_minutes=1
+    )
+    one_mail_task = ws.add_task("Gmail One Mail", ["warm-p"], preset="gmail_trust")
+
+    class GmailStateLauncher:
+        def __init__(self, mode: str):
+            self.mode = mode
+            self.actions: list[str] = []
+            self.click_count = 0
+            self.nav_count = 0
+            self.url = "https://prior.test/previous"
+
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, params=None, timeout=60):
+            self.actions.append(action)
+            p = dict(params or {})
+            if action == "navigate":
+                self.nav_count += 1
+                if self.mode in ("signed_out", "signed_out_table"):
+                    self.url = "https://accounts.google.com/signed-out"
+                elif self.mode in ("session_expire_click", "session_expire_return") and (
+                    self.nav_count >= 2
+                ):
+                    self.url = "https://mail.google.com/signed-out"
+                else:
+                    self.url = "https://mail.google.com/mail/u/0/#inbox"
+                return {} if self.mode == "absent_url" else {"url": self.url, "title": "Entry"}
+            if action == "wait_for":
+                sel = str(p.get("selector", ""))
+                is_msg_probe = "h2.hP" in sel or "data-message-id" in sel
+                if self.mode == "signed_out":
+                    raise BrowserControlError(
+                        "TimeoutError: waiting for inbox",
+                        status=422,
+                        error_code="action_timeout",
+                        unknown_state=False,
+                    )
+                if self.mode == "signed_out_table" and ("tr.zA" in sel or "td.TC" in sel):
+                    # Generic div[role='main'] table has neither tr.zA nor td.TC -> must fail
+                    raise BrowserControlError(
+                        "TimeoutError: generic table is not Gmail inbox",
+                        status=422,
+                        error_code="action_timeout",
+                        unknown_state=False,
+                    )
+                if self.mode == "unverified_empty" and "td.TC" in sel and "tr.zA" not in sel:
+                    raise BrowserControlError(
+                        "TimeoutError: empty inbox marker absent",
+                        status=422,
+                        error_code="action_timeout",
+                        unknown_state=False,
+                    )
+                if is_msg_probe and (
+                    self.mode in ("noop_click", "session_expire_click")
+                    or not self.url.endswith(f"/msg{self.click_count}")
+                ):
+                    raise BrowserControlError(
+                        "TimeoutError: open message view not found",
+                        status=422,
+                        error_code="action_timeout",
+                        unknown_state=False,
+                    )
+                if (
+                    not is_msg_probe
+                    and self.url.endswith("/signed-out")
+                    and ("tr.zA" in sel or "td.TC" in sel)
+                ):
+                    raise BrowserControlError(
+                        "TimeoutError: signed-out page is not Gmail inbox",
+                        status=422,
+                        error_code="action_timeout",
+                        unknown_state=False,
+                    )
+                return {} if self.mode == "absent_url" else {"url": self.url, "title": "Inbox"}
+            if action == "click":
+                self.click_count += 1
+                if self.mode in ("empty", "unverified_empty"):
+                    raise BrowserControlError(
+                        "TimeoutError: no message row",
+                        status=422,
+                        error_code="action_timeout",
+                        unknown_state=False,
+                    )
+                if self.mode == "absent_url":
+                    return {}
+                if self.mode == "noop_click":
+                    return {"url": self.url, "title": "Inbox"}
+                if self.mode == "session_expire_click":
+                    self.url = "https://mail.google.com/signed-out"
+                    return {"url": self.url, "title": "Signed out"}
+                if self.mode in ("populated", "session_expire_return"):
+                    self.url = f"https://mail.google.com/mail/u/0/#inbox/msg{self.click_count}"
+                    return {"url": self.url, "title": f"Mail {self.click_count}"}
+                if self.mode == "one_mail":
+                    if self.click_count == 1:
+                        self.url = "https://mail.google.com/mail/u/0/#inbox/msg1"
+                        return {"url": self.url, "title": "Mail 1"}
+                    raise BrowserControlError(
+                        "TimeoutError: no 2nd message",
+                        status=422,
+                        error_code="action_timeout",
+                        unknown_state=False,
+                    )
+            return {} if self.mode == "absent_url" else {"url": self.url, "title": "Page"}
+
+    bl_signed_out = GmailStateLauncher("signed_out")
+    assert (
+        ws.execute_task_sync(
+            signed_out_task.id, container.profile_manager, bl_signed_out, step_dwell_seconds=0.0
+        )
+        is False
+    )
+    assert signed_out_task.status == "failed"
+    assert "No messages" not in signed_out_task.last_result
+    assert "back" not in bl_signed_out.actions
+
+    bl_signed_out_table = GmailStateLauncher("signed_out_table")
+    assert (
+        ws.execute_task_sync(
+            signed_out_table_task.id,
+            container.profile_manager,
+            bl_signed_out_table,
+            step_dwell_seconds=0.0,
+        )
+        is False
+    )
+    assert signed_out_table_task.status == "failed"
+    assert "No messages" not in signed_out_table_task.last_result
+    assert "back" not in bl_signed_out_table.actions
+
+    bl_session_exp_click = GmailStateLauncher("session_expire_click")
+    assert (
+        ws.execute_task_sync(
+            session_expire_click_task.id,
+            container.profile_manager,
+            bl_session_exp_click,
+            step_dwell_seconds=0.0,
+        )
+        is False
+    )
+    assert session_expire_click_task.status == "failed"
+    assert "OK" not in session_expire_click_task.last_result
+    assert "No messages" not in session_expire_click_task.last_result
+    # Stops immediately after Click 1 message-view verification fails: zero return navigates or 2nd clicks
+    assert bl_session_exp_click.actions == [
+        "navigate",
+        "wait_for",
+        "scroll",
+        "scroll",
+        "click",
+        "wait_for",
+    ]
+
+    bl_session_exp_ret = GmailStateLauncher("session_expire_return")
+    assert (
+        ws.execute_task_sync(
+            session_expire_return_task.id,
+            container.profile_manager,
+            bl_session_exp_ret,
+            step_dwell_seconds=0.0,
+        )
+        is False
+    )
+    assert session_expire_return_task.status == "failed"
+    assert "OK" not in session_expire_return_task.last_result
+    assert bl_session_exp_ret.click_count == 1
+    assert bl_session_exp_ret.nav_count == 2
+
+    bl_empty = GmailStateLauncher("empty")
+    assert (
+        ws.execute_task_sync(
+            empty_inbox_task.id, container.profile_manager, bl_empty, step_dwell_seconds=0.0
+        )
+        is True
+    )
+    assert empty_inbox_task.status == "completed"
+    assert empty_inbox_task.last_result == "No messages (1/1 profiles)"
+    assert "back" not in bl_empty.actions
+    assert bl_empty.actions.count("wait_for") == 2
+
+    bl_unverified_empty = GmailStateLauncher("unverified_empty")
+    assert (
+        ws.execute_task_sync(
+            unverified_empty_task.id,
+            container.profile_manager,
+            bl_unverified_empty,
+            step_dwell_seconds=0.0,
+        )
+        is False
+    )
+    assert unverified_empty_task.status == "failed"
+    assert "No messages" not in unverified_empty_task.last_result
+    assert bl_unverified_empty.nav_count == 1
+    assert bl_unverified_empty.click_count == 1
+
+    bl_noop = GmailStateLauncher("noop_click")
+    assert (
+        ws.execute_task_sync(
+            noop_click_task.id, container.profile_manager, bl_noop, step_dwell_seconds=0.0
+        )
+        is False
+    )
+    assert noop_click_task.status == "failed"
+    assert "No messages" not in noop_click_task.last_result
+    assert "back" not in bl_noop.actions
+    assert bl_noop.nav_count == 1
+
+    bl_absent = GmailStateLauncher("absent_url")
+    assert (
+        ws.execute_task_sync(
+            absent_url_task.id, container.profile_manager, bl_absent, step_dwell_seconds=0.0
+        )
+        is False
+    )
+    assert absent_url_task.status == "failed"
+    assert "No messages" not in absent_url_task.last_result
+
+    # Populated inbox cut off before the 1st message click (60s budget): must NOT report No messages or OK
+    orig_mono_gmail = sched_mod.time.monotonic
+    orig_uniform_gmail = sched_mod.random.uniform
+    gmail_clock = [1000.0]
+
+    class _ClockAdvanceEvent:
+        def __init__(self):
+            self._set = False
+
+        def set(self):
+            self._set = True
+
+        def is_set(self):
+            return self._set
+
+        def wait(self, timeout=None):
+            if timeout:
+                gmail_clock[0] += float(timeout)
+            return self._set
+
+    bl_cutoff = GmailStateLauncher("populated")
+    monkeypatch.setattr(sched_mod.time, "monotonic", lambda: gmail_clock[0])
+    monkeypatch.setattr(
+        sched_mod,
+        "threading",
+        SimpleNamespace(Event=_ClockAdvanceEvent, Thread=orig_threading.Thread),
+    )
+    monkeypatch.setattr(sched_mod.random, "uniform", lambda _lo, hi: float(hi))
+    # Advance clock slightly on each control call so steps 1..7 consume ~50s, triggering safe cutoff before Click 1
+    orig_cutoff_ctrl = bl_cutoff.control
+
+    def _slow_cutoff_ctrl(name, action, params=None, timeout=60):
+        gmail_clock[0] += 6.5
+        return orig_cutoff_ctrl(name, action, params=params, timeout=timeout)
+
+    bl_cutoff.control = _slow_cutoff_ctrl
+    try:
+        assert (
+            ws.execute_task_sync(cutoff_before_click_task.id, container.profile_manager, bl_cutoff)
+            is False
+        )
+        assert cutoff_before_click_task.status == "failed"
+        assert "Timed out" in cutoff_before_click_task.last_result
+        assert "No messages" not in cutoff_before_click_task.last_result
+        assert bl_cutoff.actions == ["navigate", "wait_for", "scroll", "scroll"]
+
+        # Codex §11 #2: 60s budget, first nav 13s, min dwells -> opens /mail/1, 22s left (< 25s) before Return 1 navigate.
+        # Safe cutoff must NOT dispatch Return 1 navigate and must report Timed out (not OK) while tab stays on /mail/1.
+        gmail_clock[0] = 2000.0
+        bl_ret_cutoff = GmailStateLauncher("populated")
+        monkeypatch.setattr(sched_mod.random, "uniform", lambda lo, _hi: float(lo))
+        orig_ret_ctrl = bl_ret_cutoff.control
+
+        def _nav13_ctrl(name, action, params=None, timeout=60):
+            if action == "navigate" and bl_ret_cutoff.nav_count == 0:
+                gmail_clock[0] += 13.0
+            return orig_ret_ctrl(name, action, params=params, timeout=timeout)
+
+        bl_ret_cutoff.control = _nav13_ctrl
+        assert (
+            ws.execute_task_sync(
+                cutoff_before_return_task.id, container.profile_manager, bl_ret_cutoff
+            )
+            is False
+        )
+        assert cutoff_before_return_task.status == "failed"
+        assert "Timed out" in cutoff_before_return_task.last_result
+        assert "OK" not in cutoff_before_return_task.last_result
+        assert bl_ret_cutoff.nav_count == 1
+        assert bl_ret_cutoff.url.endswith("/msg1")
+        assert bl_ret_cutoff.actions == [
+            "navigate",
+            "wait_for",
+            "scroll",
+            "scroll",
+            "click",
+            "wait_for",
+            "scroll",
+            "scroll",
+            "scroll",
+        ]
+
+        # Codex §11 #2 edge: Return 1 navigate runs (leaving 17s < 20s) before Return 1 inbox wait_for -> still Timed out
+        gmail_clock[0] = 3000.0
+        bl_ret_ver_cutoff = GmailStateLauncher("populated")
+        orig_ret_ver_ctrl = bl_ret_ver_cutoff.control
+
+        def _nav_split_ctrl(name, action, params=None, timeout=60):
+            if action == "navigate":
+                gmail_clock[0] += 8.0 if bl_ret_ver_cutoff.nav_count == 0 else 10.0
+            return orig_ret_ver_ctrl(name, action, params=params, timeout=timeout)
+
+        bl_ret_ver_cutoff.control = _nav_split_ctrl
+        assert (
+            ws.execute_task_sync(
+                cutoff_before_return_verify_task.id,
+                container.profile_manager,
+                bl_ret_ver_cutoff,
+            )
+            is False
+        )
+        assert cutoff_before_return_verify_task.status == "failed"
+        assert "Timed out" in cutoff_before_return_verify_task.last_result
+        assert bl_ret_ver_cutoff.nav_count == 2
+        assert bl_ret_ver_cutoff.actions[-1] == "navigate"
+
+        # Positive counterpart: budget runs out safely AFTER Return 1 inbox wait_for verified -> OK!
+        gmail_clock[0] = 4000.0
+        bl_after_ret = GmailStateLauncher("populated")
+        orig_after_ret_ctrl = bl_after_ret.control
+
+        def _after_ret_ctrl(name, action, params=None, timeout=60):
+            # 12s pre-click + 13s msg1 + 8s nav1 + 5s post-return dwells = 38s; add 12s on return wait_for -> 10s left (< 13s before Click 2)
+            if action == "navigate" and bl_after_ret.nav_count == 0:
+                gmail_clock[0] += 8.0
+            elif action == "wait_for" and bl_after_ret.nav_count == 2:
+                gmail_clock[0] += 12.0
+            return orig_after_ret_ctrl(name, action, params=params, timeout=timeout)
+
+        bl_after_ret.control = _after_ret_ctrl
+        assert (
+            ws.execute_task_sync(
+                cutoff_after_return_task.id, container.profile_manager, bl_after_ret
+            )
+            is True
+        )
+        assert cutoff_after_return_task.status == "completed"
+        assert cutoff_after_return_task.last_result == "OK (1/1 profiles)"
+        assert bl_after_ret.click_count == 1
+        assert bl_after_ret.url.endswith("#inbox")
+
+        # Gatekeeper P2 #1A: Click 2 action_timeout -> inbox-intact probe hits budget_cutoff -> Timed out (not OK)
+        cutoff_click2_probe_task = ws.add_task(
+            "Gmail Click2 Probe Cutoff", ["warm-p"], preset="gmail_trust", duration_minutes=1
+        )
+        gmail_clock[0] = 5000.0
+        bl_c2_probe = GmailStateLauncher("one_mail")
+        orig_c2_ctrl = bl_c2_probe.control
+
+        def _c2_probe_ctrl(name, action, params=None, timeout=60):
+            # 12s + 13s = 25s before Return 1 (35s left >= 25s/20s). Return 1 wait_for adds 16.5s,
+            # plus 5s post-return dwells -> 13.5s left before Click 2 (>= 13s).
+            # Click 2 times out after 8s -> 5.5s left (< 13s Step 23 inbox-reverify) -> budget_cutoff without probing.
+            if action == "wait_for" and bl_c2_probe.nav_count == 2:
+                gmail_clock[0] += 16.5
+            elif action == "click" and bl_c2_probe.click_count == 1:
+                gmail_clock[0] += 8.0
+            return orig_c2_ctrl(name, action, params=params, timeout=timeout)
+
+        bl_c2_probe.control = _c2_probe_ctrl
+        assert (
+            ws.execute_task_sync(
+                cutoff_click2_probe_task.id, container.profile_manager, bl_c2_probe
+            )
+            is False
+        )
+        assert cutoff_click2_probe_task.status == "failed"
+        assert "Timed out" in cutoff_click2_probe_task.last_result
+        assert "OK" not in cutoff_click2_probe_task.last_result
+        assert bl_c2_probe.actions[-1] == "click"
+    finally:
+        monkeypatch.setattr(sched_mod.time, "monotonic", orig_mono_gmail)
+        monkeypatch.setattr(sched_mod.random, "uniform", orig_uniform_gmail)
+        monkeypatch.setattr(sched_mod, "threading", orig_threading)
+
+    # Gatekeeper P2 #1B: Cross-origin redirect observed on non-click step (scroll after Return 1) fails immediately
+    scroll_drift_task = ws.add_task("Gmail Scroll Origin Drift", ["warm-p"], preset="gmail_trust")
+    bl_drift = GmailStateLauncher("populated")
+    orig_drift_ctrl = bl_drift.control
+
+    def _drift_ctrl(name, action, params=None, timeout=60):
+        res = orig_drift_ctrl(name, action, params=params, timeout=timeout)
+        if action == "scroll" and bl_drift.nav_count == 2:
+            return {"url": "https://accounts.google.com/v3/signin", "title": "Sign in"}
+        return res
+
+    bl_drift.control = _drift_ctrl
+    assert (
+        ws.execute_task_sync(
+            scroll_drift_task.id, container.profile_manager, bl_drift, step_dwell_seconds=0.0
+        )
+        is False
+    )
+    assert scroll_drift_task.status == "failed"
+    assert "OK" not in scroll_drift_task.last_result
+    assert bl_drift.click_count == 1
+
+    # Codex §13 #2: Same-origin route change observed on final scroll after Return 2 fails immediately (never OK)
+    final_scroll_drift_task = ws.add_task(
+        "Gmail Final Scroll Same-Origin Drift", ["warm-p"], preset="gmail_trust"
+    )
+    bl_final_drift = GmailStateLauncher("populated")
+    orig_final_drift_ctrl = bl_final_drift.control
+
+    def _final_drift_ctrl(name, action, params=None, timeout=60):
+        res = orig_final_drift_ctrl(name, action, params=params, timeout=timeout)
+        if action == "scroll" and bl_final_drift.nav_count == 3:
+            return {"url": "https://mail.google.com/mail/u/0/#inbox/other-msg", "title": "Other"}
+        return res
+
+    bl_final_drift.control = _final_drift_ctrl
+    assert (
+        ws.execute_task_sync(
+            final_scroll_drift_task.id,
+            container.profile_manager,
+            bl_final_drift,
+            step_dwell_seconds=0.0,
+        )
+        is False
+    )
+    assert final_scroll_drift_task.status == "failed"
+    assert "OK" not in final_scroll_drift_task.last_result
+    assert bl_final_drift.nav_count == 3
+    assert bl_final_drift.actions[-1] == "scroll"
+
+    # Codex §13 #1: Exported Gmail catalog template copied to preset="script" includes post-click message verification
+    exported_gmail = next(
+        s["sample_steps"] for s in sched_mod.list_warming_scenarios() if s["id"] == "gmail_trust"
+    )
+    copied_script_redir_task = ws.add_task(
+        "Copied Gmail Script Auth Redirect",
+        ["warm-p"],
+        preset="script",
+        script_steps=exported_gmail,
+    )
+    bl_copied_redir = GmailStateLauncher("session_expire_click")
+    assert (
+        ws.execute_task_sync(
+            copied_script_redir_task.id,
+            container.profile_manager,
+            bl_copied_redir,
+            step_dwell_seconds=0.0,
+        )
+        is False
+    )
+    assert copied_script_redir_task.status == "failed"
+    assert "OK" not in copied_script_redir_task.last_result
+    assert bl_copied_redir.nav_count == 1
+    assert bl_copied_redir.actions == [
+        "navigate",
+        "wait_for",
+        "scroll",
+        "scroll",
+        "click",
+        "wait_for",
+    ]
+
+    # Codex §15 #1: Copied Gmail catalog script where Click 2 executes without opening a message (stays on /inbox)
+    # must tighten Step 23 strictly to _GMAIL_MESSAGE_VIEW_SELECTOR (never accepting stale tr.zA) with zero follow-up scrolls.
+    copied_c2_pending_task = ws.add_task(
+        "Copied Gmail Script Click2 Pending",
+        ["warm-p"],
+        preset="script",
+        script_steps=exported_gmail,
+    )
+    bl_copied_c2_pending = GmailStateLauncher("populated")
+    orig_c2_pending_ctrl = bl_copied_c2_pending.control
+    c2_verify_selectors: list[str] = []
+
+    def _c2_pending_ctrl(name, action, params=None, timeout=60):
+        p = dict(params or {})
+        if action == "click" and bl_copied_c2_pending.click_count == 1:
+            bl_copied_c2_pending.actions.append(action)
+            bl_copied_c2_pending.click_count += 1
+            # Click 2 executes but leaves tab on #inbox without opening msg2
+            return {"url": bl_copied_c2_pending.url, "title": "Inbox"}
+        if action == "wait_for" and bl_copied_c2_pending.click_count == 2:
+            c2_verify_selectors.append(str(p.get("selector", "")))
+        return orig_c2_pending_ctrl(name, action, params=params, timeout=timeout)
+
+    bl_copied_c2_pending.control = _c2_pending_ctrl
+    assert (
+        ws.execute_task_sync(
+            copied_c2_pending_task.id,
+            container.profile_manager,
+            bl_copied_c2_pending,
+            step_dwell_seconds=0.0,
+        )
+        is False
+    )
+    assert copied_c2_pending_task.status == "failed"
+    assert "OK" not in copied_c2_pending_task.last_result
+    assert bl_copied_c2_pending.nav_count == 2
+    assert bl_copied_c2_pending.actions[-2:] == ["click", "wait_for"]
+    assert len(c2_verify_selectors) == 1 and "tr.zA" not in c2_verify_selectors[0]
+
+    # Codex §15 #1: Copied Gmail catalog script on 1-email inbox (Click 2 confirmed not dispatched via action_timeout)
+    # accepts inbox fallback cleanly, whereas action_error on Click 2 does NOT fall back to stale inbox.
+    copied_one_mail_task = ws.add_task(
+        "Copied Gmail Script One Mail",
+        ["warm-p"],
+        preset="script",
+        script_steps=exported_gmail,
+    )
+    bl_copied_one = GmailStateLauncher("one_mail")
+    assert (
+        ws.execute_task_sync(
+            copied_one_mail_task.id,
+            container.profile_manager,
+            bl_copied_one,
+            step_dwell_seconds=0.0,
+        )
+        is True
+    )
+    assert copied_one_mail_task.status == "completed"
+    assert copied_one_mail_task.last_result == "OK (1/1 profiles)"
+
+    copied_c2_err_task = ws.add_task(
+        "Copied Gmail Script Click2 ActionError",
+        ["warm-p"],
+        preset="script",
+        script_steps=exported_gmail,
+    )
+    bl_copied_c2_err = GmailStateLauncher("populated")
+    orig_c2_err_ctrl = bl_copied_c2_err.control
+
+    def _c2_err_ctrl(name, action, params=None, timeout=60):
+        if action == "click" and bl_copied_c2_err.click_count == 1:
+            bl_copied_c2_err.actions.append(action)
+            bl_copied_c2_err.click_count += 1
+            raise BrowserControlError(
+                "Error: detached node",
+                status=422,
+                error_code="action_error",
+                unknown_state=False,
+            )
+        return orig_c2_err_ctrl(name, action, params=params, timeout=timeout)
+
+    bl_copied_c2_err.control = _c2_err_ctrl
+    assert (
+        ws.execute_task_sync(
+            copied_c2_err_task.id,
+            container.profile_manager,
+            bl_copied_c2_err,
+            step_dwell_seconds=0.0,
+        )
+        is False
+    )
+    assert copied_c2_err_task.status == "failed"
+    assert bl_copied_c2_err.nav_count == 2
+
+    # Codex §17 #1: Intervening no-dispatch wait between Click 2 and its verifier preserves confirmed missing-row
+    # fallback on 1-email inbox (including real deadline path step_dwell_seconds=None), keeps executed/uncertain
+    # Click 2 fail-closed, and still invalidates pending state if a real browser action runs in between.
+    exported_gmail_wait_zero = []
+    for st in exported_gmail:
+        s = {"action": "wait", "seconds": 0} if st["action"] == "wait" else dict(st)
+        if (
+            s["action"] == "wait_for"
+            and s.get("selector") == sched_mod._GMAIL_CLICK2_VERIFY_SELECTOR
+        ):
+            exported_gmail_wait_zero.append({"action": "wait", "seconds": 0})
+        exported_gmail_wait_zero.append(s)
+    copied_one_mail_wait_task = ws.add_task(
+        "Copied Gmail Script One Mail With Wait",
+        ["warm-p"],
+        preset="script",
+        script_steps=exported_gmail_wait_zero,
+    )
+    bl_copied_one_wait = GmailStateLauncher("one_mail")
+    assert (
+        ws.execute_task_sync(
+            copied_one_mail_wait_task.id,
+            container.profile_manager,
+            bl_copied_one_wait,
+        )
+        is True
+    )
+    assert copied_one_mail_wait_task.status == "completed"
+    assert copied_one_mail_wait_task.last_result == "OK (1/1 profiles)"
+
+    copied_c2_pending_wait_task = ws.add_task(
+        "Copied Gmail Script Click2 Pending With Wait",
+        ["warm-p"],
+        preset="script",
+        script_steps=exported_gmail_wait_zero,
+    )
+    bl_copied_c2_pending_wait = GmailStateLauncher("populated")
+    orig_c2_pending_wait_ctrl = bl_copied_c2_pending_wait.control
+    c2_wait_verify_selectors: list[str] = []
+
+    def _c2_pending_wait_ctrl(name, action, params=None, timeout=60):
+        p = dict(params or {})
+        if action == "click" and bl_copied_c2_pending_wait.click_count == 1:
+            bl_copied_c2_pending_wait.actions.append(action)
+            bl_copied_c2_pending_wait.click_count += 1
+            return {"url": bl_copied_c2_pending_wait.url, "title": "Inbox"}
+        if action == "wait_for" and bl_copied_c2_pending_wait.click_count == 2:
+            c2_wait_verify_selectors.append(str(p.get("selector", "")))
+        return orig_c2_pending_wait_ctrl(name, action, params=params, timeout=timeout)
+
+    bl_copied_c2_pending_wait.control = _c2_pending_wait_ctrl
+    assert (
+        ws.execute_task_sync(
+            copied_c2_pending_wait_task.id,
+            container.profile_manager,
+            bl_copied_c2_pending_wait,
+        )
+        is False
+    )
+    assert copied_c2_pending_wait_task.status == "failed"
+    assert "OK" not in copied_c2_pending_wait_task.last_result
+    assert bl_copied_c2_pending_wait.nav_count == 2
+    assert bl_copied_c2_pending_wait.actions[-2:] == ["click", "wait_for"]
+    assert len(c2_wait_verify_selectors) == 1 and "tr.zA" not in c2_wait_verify_selectors[0]
+
+    # Uncertain click (action_error) + intervening wait must also fail closed even if a stale message selector appears on same URL.
+    copied_c2_err_wait_task = ws.add_task(
+        "Copied Gmail Script Click2 ActionError With Wait",
+        ["warm-p"],
+        preset="script",
+        script_steps=exported_gmail_wait_zero,
+    )
+    bl_copied_c2_err_wait = GmailStateLauncher("populated")
+    orig_c2_err_wait_ctrl = bl_copied_c2_err_wait.control
+
+    def _c2_err_wait_ctrl(name, action, params=None, timeout=60):
+        if action == "click" and bl_copied_c2_err_wait.click_count == 1:
+            bl_copied_c2_err_wait.actions.append(action)
+            bl_copied_c2_err_wait.click_count += 1
+            raise BrowserControlError(
+                "Error: detached node",
+                status=422,
+                error_code="action_error",
+                unknown_state=False,
+            )
+        if action == "wait_for" and bl_copied_c2_err_wait.click_count == 2:
+            # Even if a message-view selector matched on the same inbox URL, URL-change check rejects it.
+            bl_copied_c2_err_wait.actions.append(action)
+            return {"url": bl_copied_c2_err_wait.url, "title": "Inbox"}
+        return orig_c2_err_wait_ctrl(name, action, params=params, timeout=timeout)
+
+    bl_copied_c2_err_wait.control = _c2_err_wait_ctrl
+    assert (
+        ws.execute_task_sync(
+            copied_c2_err_wait_task.id,
+            container.profile_manager,
+            bl_copied_c2_err_wait,
+        )
+        is False
+    )
+    assert copied_c2_err_wait_task.status == "failed"
+    assert bl_copied_c2_err_wait.nav_count == 2
+
+    # A real intervening browser action (scroll) between missed Click 2 and verifier clears pending_inbox_reverify.
+    exported_gmail_scroll_between = []
+    for st in exported_gmail:
+        s = {"action": "wait", "seconds": 0} if st["action"] == "wait" else dict(st)
+        if (
+            s["action"] == "wait_for"
+            and s.get("selector") == sched_mod._GMAIL_CLICK2_VERIFY_SELECTOR
+        ):
+            exported_gmail_scroll_between.append({"action": "scroll", "delta_y": 120})
+        exported_gmail_scroll_between.append(s)
+    copied_one_mail_scroll_task = ws.add_task(
+        "Copied Gmail Script One Mail With Intervening Scroll",
+        ["warm-p"],
+        preset="script",
+        script_steps=exported_gmail_scroll_between,
+    )
+    bl_copied_one_scroll = GmailStateLauncher("one_mail")
+    assert (
+        ws.execute_task_sync(
+            copied_one_mail_scroll_task.id,
+            container.profile_manager,
+            bl_copied_one_scroll,
+        )
+        is False
+    )
+    assert copied_one_mail_scroll_task.status == "failed"
+    assert bl_copied_one_scroll.nav_count == 2
+
+    # Gatekeeper P2 #2 (Engram #9501): Stop arriving during Click 1 dispatches ZERO post-Stop wait_for probe
+    stop_click_task = ws.add_task("Gmail Stop During Click", ["warm-p"], preset="gmail_trust")
+    bl_stop_click = GmailStateLauncher("populated")
+    orig_stop_ctrl = bl_stop_click.control
+
+    def _stop_on_click_ctrl(name, action, params=None, timeout=60):
+        res = orig_stop_ctrl(name, action, params=params, timeout=timeout)
+        if action == "click":
+            ws.stop_task(stop_click_task.id)
+        return res
+
+    bl_stop_click.control = _stop_on_click_ctrl
+    assert (
+        ws.execute_task_sync(
+            stop_click_task.id, container.profile_manager, bl_stop_click, step_dwell_seconds=0.0
+        )
+        is False
+    )
+    assert stop_click_task.status == "idle"
+    assert stop_click_task.last_result == "Stopped (0/1)"
+    assert bl_stop_click.actions == ["navigate", "wait_for", "scroll", "scroll", "click"]
+
+    bl_one = GmailStateLauncher("one_mail")
+    assert (
+        ws.execute_task_sync(
+            one_mail_task.id, container.profile_manager, bl_one, step_dwell_seconds=0.0
+        )
+        is True
+    )
+    assert one_mail_task.status == "completed"
+    assert one_mail_task.last_result == "OK (1/1 profiles)"
+    assert "back" not in bl_one.actions
+    assert bl_one.actions.count("navigate") == 3
+
+    # 6b. Codex §7 #2: Immediate URLError (504 transport_timeout) & unsettled 504 stay non-success; only safe boundary / deadline_expired reports OK
+    safe_stop_task = ws.add_task(
+        "Builtin Safe Stop", ["warm-p"], preset="youtube_trust", duration_minutes=1
+    )
+    conn_refused_task = ws.add_task(
+        "Builtin Immediate URLError", ["warm-p"], preset="youtube_trust", duration_minutes=1
+    )
+    unsettled_504_task = ws.add_task(
+        "Builtin Unsettled 504", ["warm-p"], preset="youtube_trust", duration_minutes=1
+    )
+    deadline_exp_early_task = ws.add_task(
+        "Builtin Deadline Expired Early", ["warm-p"], preset="youtube_trust", duration_minutes=1
+    )
+    deadline_exp_elapsed_task = ws.add_task(
+        "Builtin Deadline Expired Elapsed", ["warm-p"], preset="youtube_trust", duration_minutes=1
+    )
+    tab_close_task = ws.add_task(
+        "Builtin Tab Close 422", ["warm-p"], preset="youtube_trust", duration_minutes=1
+    )
+
+    class SafeStopLauncher:
+        def __init__(self):
+            self.timeouts: list[float] = []
+
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, params=None, timeout=60):
+            self.timeouts.append(timeout)
+            return {}
+
+    class Unsettled504Launcher:
+        def __init__(self):
+            self.calls = 0
+
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, params=None, timeout=60):
+            self.calls += 1
+            if self.calls == 2:
+                raise BrowserControlError(
+                    "TimeoutError: Action timed out",
+                    status=504,
+                    error_code="state_uncertain",
+                    unknown_state=True,
+                    settled=False,
+                )
+            return {}
+
+    class DeadlineExpiredLauncher:
+        def __init__(self, *, advance_clock=None):
+            self.calls = 0
+            self._advance_clock = advance_clock
+
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, params=None, timeout=60):
+            self.calls += 1
+            if self.calls == 2:
+                if self._advance_clock is not None:
+                    self._advance_clock()
+                raise BrowserControlError(
+                    "TimeoutError: Deadline expired before start",
+                    status=504,
+                    error_code="deadline_expired",
+                    unknown_state=False,
+                    settled=True,
+                )
+            return {}
+
+    class TabClose422Launcher:
+        def __init__(self):
+            self.calls = 0
+
+        def is_running(self, _name):
+            return True
+
+        def control(self, _name, action, params=None, timeout=60):
+            self.calls += 1
+            if self.calls == 2:
+                raise BrowserControlError(
+                    "TargetClosedError: page closed",
+                    status=422,
+                    error_code="state_uncertain",
+                    unknown_state=True,
+                )
+            return {}
+
+    # Real BrowserLauncher.control mapping immediate URLError(ConnectionRefusedError) -> 504 transport_timeout with budget remaining
+    refused_bl = launcher_mod.BrowserLauncher()
+    refused_bl._active_sessions["warm-p"] = SimpleNamespace(poll=lambda: None)
+    refused_bl._controls["warm-p"] = (1, "tok")
+    req_calls = [0]
+
+    class _FakeHttpResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return (
+                b'{"ok": true, "result": {"url": "https://news.google.com", "title": "N"}, '
+                b'"page_id": "p1"}'
+            )
+
+    def _fake_urlopen(req, timeout=None):
+        req_calls[0] += 1
+        if req_calls[0] == 1:
+            return _FakeHttpResp()
+        raise urllib.error.URLError(ConnectionRefusedError("connection refused"))
+
+    monkeypatch.setattr(launcher_mod.urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(
+        sched_mod,
+        "threading",
+        SimpleNamespace(Event=InstantBudgetEvent, Thread=orig_threading.Thread),
+    )
+    monkeypatch.setattr(sched_mod.random, "uniform", lambda lo, hi: float(hi))
+    try:
+        # True safe pre-action budget stop: never fires a clamped <base_ctrl_timeout call, finishes OK
+        s_bl = SafeStopLauncher()
+        assert ws.execute_task_sync(safe_stop_task.id, container.profile_manager, s_bl) is True
+        assert safe_stop_task.status == "completed"
+        assert "OK (1/1 profiles)" in safe_stop_task.last_result
+        assert all(t >= 10.0 for t in s_bl.timeouts)
+
+        # Immediate URLError via real BrowserLauncher.control with budget left -> Interrupted (NEVER OK)
+        assert (
+            ws.execute_task_sync(conn_refused_task.id, container.profile_manager, refused_bl)
+            is False
+        )
+        assert conn_refused_task.status == "failed"
+        assert "Interrupted" in conn_refused_task.last_result
+
+        # Ambiguous unsettled 504 mid-flight -> Interrupted (NEVER OK)
+        u_bl = Unsettled504Launcher()
+        assert ws.execute_task_sync(unsettled_504_task.id, container.profile_manager, u_bl) is False
+        assert unsettled_504_task.status == "failed"
+        assert "Interrupted" in unsettled_504_task.last_result
+        assert u_bl.calls == 2
+
+        # deadline_expired with budget STILL remaining -> fails as Timed out (NEVER OK)
+        d_early_bl = DeadlineExpiredLauncher()
+        assert (
+            ws.execute_task_sync(deadline_exp_early_task.id, container.profile_manager, d_early_bl)
+            is False
+        )
+        assert deadline_exp_early_task.status == "failed"
+        assert "Timed out" in deadline_exp_early_task.last_result
+
+        # Confirmed no-dispatch deadline_expired (unknown_state=False, settled=True) AFTER wall deadline elapsed -> safe OK
+        fake_now = [1000.0]
+        orig_mono = sched_mod.time.monotonic
+        monkeypatch.setattr(sched_mod.time, "monotonic", lambda: fake_now[0])
+        try:
+            d_elapsed_bl = DeadlineExpiredLauncher(
+                advance_clock=lambda: fake_now.__setitem__(0, 1061.0)
+            )
+            assert (
+                ws.execute_task_sync(
+                    deadline_exp_elapsed_task.id, container.profile_manager, d_elapsed_bl
+                )
+                is True
+            )
+            assert deadline_exp_elapsed_task.status == "completed"
+            assert "OK (1/1 profiles)" in deadline_exp_elapsed_task.last_result
+        finally:
+            monkeypatch.setattr(sched_mod.time, "monotonic", orig_mono)
+
+        # 422 tab close -> Interrupted
+        tc_bl = TabClose422Launcher()
+        assert ws.execute_task_sync(tab_close_task.id, container.profile_manager, tc_bl) is False
+        assert tab_close_task.status == "failed"
+        assert "Interrupted" in tab_close_task.last_result
+        assert tc_bl.calls == 2
+    finally:
+        refused_bl._active_sessions.clear()
+        refused_bl._controls.clear()
+        monkeypatch.setattr(sched_mod, "threading", orig_threading)
+
+    # 6c. Codex §7 #4: Scheduler -> BrowserLauncher -> spawn_browser child env for explicit True, explicit False (headed & display-less), legacy None, and already-running reuse
+    monkeypatch.setenv("FOXPROFILE_HEADLESS", "true")
+    popen_envs: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        process.subprocess,
+        "Popen",
+        lambda _cmd, **kw: popen_envs.append(kw["env"]) or SimpleNamespace(poll=lambda: None),
+    )
+    monkeypatch.setattr(launcher_mod, "spawn_browser", process.spawn_browser)
+    monkeypatch.setattr(launcher_mod, "wait_for_exit", lambda *a: None)
+
+    def _run_launch_case(task_obj, *, headed_host: bool, already_open: bool = False):
+        popen_envs.clear()
+        monkeypatch.setattr(sched_mod, "host_supports_headed", lambda: headed_host)
+        env_bl = launcher_mod.BrowserLauncher()
+        monkeypatch.setattr(env_bl, "_monitor_process", lambda *a: None)
+        monkeypatch.setattr(env_bl, "wait_for_launch", lambda _n, timeout=45: (True, None))
+        monkeypatch.setattr(env_bl, "control", lambda *a, **kw: ({"url": "https://a.test"}, "pid1"))
+        monkeypatch.setattr(env_bl, "stop_profile", lambda _n, timeout=2: True)
+        if already_open:
+            env_bl._active_sessions["warm-p"] = SimpleNamespace(poll=lambda: None)
+        case_logs: list[str] = []
+        try:
+            ws.execute_task_sync(
+                task_obj.id,
+                container.profile_manager,
+                env_bl,
+                log_fn=case_logs.append,
+                step_dwell_seconds=0.0,
+            )
+            return list(popen_envs), case_logs
+        finally:
+            env_bl._active_sessions.clear()
+
+    t_exp_true = ws.add_task(
+        "Env True", ["warm-p"], preset="custom", custom_urls=["https://a.test"], headless=True
+    )
+    t_exp_false = ws.add_task(
+        "Env False", ["warm-p"], preset="custom", custom_urls=["https://a.test"], headless=False
+    )
+    t_legacy = ws.add_task(
+        "Env Legacy", ["warm-p"], preset="custom", custom_urls=["https://a.test"]
+    )
+    assert t_legacy.headless is None
+
+    envs_true, _ = _run_launch_case(t_exp_true, headed_host=True)
+    assert envs_true[-1]["FOXPROFILE_HEADLESS"] == "true"
+
+    envs_false_headed, _ = _run_launch_case(t_exp_false, headed_host=True)
+    assert envs_false_headed[-1]["FOXPROFILE_HEADLESS"] == "false"
+
+    envs_false_nodisp, logs_nodisp = _run_launch_case(t_exp_false, headed_host=False)
+    assert envs_false_nodisp[-1]["FOXPROFILE_HEADLESS"] == "true"
+    assert any("no display" in line.lower() for line in logs_nodisp)
+
+    # Display-less host with parent FOXPROFILE_HEADLESS unset/false forces "true"; "virtual" is preserved
+    monkeypatch.delenv("FOXPROFILE_HEADLESS", raising=False)
+    envs_false_nodisp_unset, _ = _run_launch_case(t_exp_false, headed_host=False)
+    assert envs_false_nodisp_unset[-1]["FOXPROFILE_HEADLESS"] == "true"
+
+    monkeypatch.setenv("FOXPROFILE_HEADLESS", "false")
+    envs_false_nodisp_false, _ = _run_launch_case(t_exp_false, headed_host=False)
+    assert envs_false_nodisp_false[-1]["FOXPROFILE_HEADLESS"] == "true"
+
+    monkeypatch.setenv("FOXPROFILE_HEADLESS", "virtual")
+    envs_false_nodisp_virt, _ = _run_launch_case(t_exp_false, headed_host=False)
+    assert envs_false_nodisp_virt[-1]["FOXPROFILE_HEADLESS"] == "virtual"
+
+    monkeypatch.setenv("FOXPROFILE_HEADLESS", "true")
+    envs_legacy, _ = _run_launch_case(t_legacy, headed_host=True)
+    assert envs_legacy[-1]["FOXPROFILE_HEADLESS"] == "true"
+
+    envs_reuse, logs_reuse = _run_launch_case(t_exp_false, headed_host=True, already_open=True)
+    assert envs_reuse == []
+    assert any("already running" in line.lower() for line in logs_reuse)
+
+    with TestClient(create_app(container), base_url="http://127.0.0.1") as client:
+        info = client.get("/api/v1/warming/tasks").json()
+        assert isinstance(info["host_supports_headed"], bool)
+
+    # Codex §9 #3: Desktop dialog on display-less host locks Hide checkbox and never labels saved headless=False as Visible
+    from src.ui.dialogs import warming as warming_dlg_mod
+
+    monkeypatch.setattr(warming_dlg_mod, "host_supports_headed", lambda: False)
+    page_nodisp = _DummyPage()
+    open_warming_dialog(page_nodisp, ws, container.profile_manager, SimpleNamespace())
+    nodisp_ctrls = list(_walk_controls(page_nodisp.dialog))
+    forced_cb = next(
+        c
+        for c in nodisp_ctrls
+        if isinstance(c, ft.Checkbox) and c.label == get_string("warming_hide_browser_forced")
+    )
+    assert forced_cb.value is True and forced_cb.disabled is True
+    nodisp_texts = [c.value for c in nodisp_ctrls if isinstance(c, ft.Text)]
+    assert get_string("warming_headless_no_display_badge") in nodisp_texts
+    assert get_string("warming_visible_badge") not in nodisp_texts

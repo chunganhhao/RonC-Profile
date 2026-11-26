@@ -23,6 +23,7 @@ from ...core.logging import get_logger
 from ..browser.control import ControlError, PartialActionError, _check_url
 from ..browser.launcher import BrowserControlError
 from ..browser.lease import discard_lease, profile_lease, waiting_lease
+from ..browser.process import host_supports_headed
 
 if TYPE_CHECKING:
     from ...interfaces.protocols import IBrowserLauncher, IProfileManager
@@ -36,9 +37,12 @@ WARMING_PRESETS: dict[str, list[str]] = {
         "https://news.google.com",
     ],
     "social_news": [
+        "https://www.google.com",
         "https://www.wikipedia.org",
-        "https://www.reddit.com",
         "https://news.ycombinator.com",
+    ],
+    "gmail_trust": [
+        "https://mail.google.com/mail/u/0/#inbox",
     ],
     "ecommerce_cookie": [
         "https://www.amazon.com",
@@ -55,6 +59,7 @@ MAX_STEP_TIMEOUT_MS = 25_000
 MAX_WAIT_SECONDS = 120.0
 MAX_SELECTOR_CHARS = 500
 MAX_TYPE_TEXT_CHARS = 2_000
+MAX_TYPE_TEXT_CHOICES = 30
 MAX_KEY_CHARS = 64
 MAX_URL_CHARS = 2_048
 MAX_STEP_FIELDS = 16
@@ -84,6 +89,55 @@ SAMPLE_WARMING_SCRIPT: list[dict[str, Any]] = [
     {"action": "wait", "min_s": 2, "max_s": 5},
 ]
 
+_SOCIAL_GOOGLE_QUERIES: list[str] = [
+    "giá vàng hôm nay",
+    "giá bạc hôm nay",
+    "giá cổ phiếu hôm nay",
+    "giá nhà đất hôm nay",
+    "tin tức nóng hôm nay",
+    "drama hôm nay",
+    "tin tức hot hôm nay",
+    "tỷ giá usd hôm nay",
+    "giá xăng dầu hôm nay",
+    "thời tiết hôm nay",
+    "tin công nghệ mới nhất",
+    "tin tức thể thao hôm nay",
+]
+
+_WIKI_SEARCH_TOPICS: list[str] = [
+    "Vietnam",
+    "Gold",
+    "Stock market",
+    "Artificial intelligence",
+    "Coffee",
+    "World economy",
+    "Cinema",
+    "Football",
+]
+
+_GMAIL_EMPTY_INBOX_SELECTOR = "div[role='main'] td.TC:visible"
+_GMAIL_INBOX_SELECTOR = f"tr.zA:visible, {_GMAIL_EMPTY_INBOX_SELECTOR}"
+_GMAIL_MESSAGE_VIEW_SELECTOR = (
+    "div[role='main'] h2.hP:visible, "
+    "div[role='main'] div[data-message-id]:visible, "
+    "div[role='main'] .a3s:visible"
+)
+_GMAIL_CLICK1_VERIFY_SELECTOR = f"{_GMAIL_MESSAGE_VIEW_SELECTOR}, {_GMAIL_EMPTY_INBOX_SELECTOR}"
+_GMAIL_CLICK2_VERIFY_SELECTOR = f"{_GMAIL_MESSAGE_VIEW_SELECTOR}, {_GMAIL_INBOX_SELECTOR}"
+
+
+def _url_origin(url: str | None) -> tuple[str, str, int] | None:
+    if not isinstance(url, str) or not url:
+        return None
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    if scheme not in ("http", "https") or not host:
+        return None
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return (scheme, host, port)
+
+
 _RAW_SCENARIO_PLAYBOOKS: dict[str, list[dict[str, Any]]] = {
     "youtube_trust": [
         {"action": "navigate", "url": "https://news.google.com"},
@@ -102,29 +156,145 @@ _RAW_SCENARIO_PLAYBOOKS: dict[str, list[dict[str, Any]]] = {
         {"action": "wait", "min_s": 6, "max_s": 11},
     ],
     "social_news": [
-        {"action": "navigate", "url": "https://www.wikipedia.org"},
-        {"action": "wait", "min_s": 4, "max_s": 7},
+        {"action": "navigate", "url": "https://www.google.com"},
+        {"action": "wait", "min_s": 3, "max_s": 6},
+        {
+            "action": "click",
+            "selector": (
+                "button#L2AGLb:visible, button[aria-label*='Accept all']:visible, "
+                "button[aria-label*='Chấp nhận tất cả']:visible"
+            ),
+            "timeout": 2500,
+            "optional": True,
+        },
         {
             "action": "type",
-            "selector": "#searchInput",
-            "text": "Web browser",
+            "selector": "textarea[name='q']:visible, input[name='q']:visible",
+            "texts": _SOCIAL_GOOGLE_QUERIES,
             "submit": True,
-            "clear": True,
+            "clear": False,
+            "timeout": 8000,
+            "optional": True,
+        },
+        {"action": "wait", "min_s": 4, "max_s": 8},
+        {"action": "scroll", "delta_y": 420, "steps": 7, "humanize": True},
+        {"action": "wait", "min_s": 2, "max_s": 5},
+        {
+            "action": "click",
+            "selector": "#search a:has(h3):visible, #rso a[href^='http']:has(h3):visible",
             "timeout": 8000,
             "optional": True,
         },
         {"action": "wait", "min_s": 5, "max_s": 9},
-        {"action": "scroll", "delta_y": 560, "steps": 8, "humanize": True},
-        {"action": "wait", "min_s": 5, "max_s": 10},
-        {"action": "press", "key": "PageDown", "optional": True},
+        {"action": "scroll", "delta_y": 540, "steps": 8, "humanize": True},
         {"action": "wait", "min_s": 4, "max_s": 8},
+        {"action": "scroll", "delta_y": 480, "steps": 8, "humanize": True},
+        {"action": "wait", "min_s": 3, "max_s": 6},
+        {"action": "scroll", "delta_y": -220, "steps": 5, "humanize": True},
+        {"action": "navigate", "url": "https://www.wikipedia.org"},
+        {"action": "wait", "min_s": 3, "max_s": 6},
+        {
+            "action": "type",
+            "selector": "#searchInput",
+            "texts": _WIKI_SEARCH_TOPICS,
+            "submit": True,
+            "clear": False,
+            "timeout": 8000,
+            "optional": True,
+        },
+        {"action": "wait", "min_s": 4, "max_s": 7},
+        {"action": "scroll", "delta_y": 500, "steps": 8, "humanize": True},
+        {"action": "wait", "min_s": 3, "max_s": 6},
+        {
+            "action": "click",
+            "selector": (
+                "#mw-content-text .mw-search-result-heading a:visible, "
+                "#mw-content-text p a[href^='/wiki/']:not([href*=':']):visible"
+            ),
+            "timeout": 8000,
+            "optional": True,
+        },
+        {"action": "wait", "min_s": 4, "max_s": 8},
+        {"action": "scroll", "delta_y": 560, "steps": 8, "humanize": True},
+        {"action": "press", "key": "PageDown", "optional": True},
+        {"action": "wait", "min_s": 4, "max_s": 7},
         {"action": "scroll", "delta_y": -240, "steps": 6, "humanize": True},
-        {"action": "back", "optional": True},
         {"action": "navigate", "url": "https://news.ycombinator.com"},
+        {"action": "wait", "min_s": 3, "max_s": 6},
+        {"action": "scroll", "delta_y": 480, "steps": 7, "humanize": True},
+        {
+            "action": "click",
+            "selector": ".titleline > a:visible",
+            "timeout": 8000,
+            "optional": True,
+        },
         {"action": "wait", "min_s": 4, "max_s": 8},
         {"action": "scroll", "delta_y": 520, "steps": 8, "humanize": True},
-        {"action": "navigate", "url": "https://www.reddit.com"},
-        {"action": "wait", "min_s": 5, "max_s": 10},
+        {"action": "wait", "min_s": 3, "max_s": 6},
+    ],
+    "gmail_trust": [
+        {"action": "navigate", "url": "https://mail.google.com/mail/u/0/#inbox"},
+        {
+            "action": "wait_for",
+            "selector": _GMAIL_INBOX_SELECTOR,
+            "timeout": 15000,
+        },
+        {"action": "wait", "min_s": 7, "max_s": 13},
+        {"action": "scroll", "delta_y": 460, "steps": 8, "humanize": True},
+        {"action": "wait", "min_s": 3, "max_s": 6},
+        {"action": "scroll", "delta_y": -320, "steps": 6, "humanize": True},
+        {"action": "wait", "min_s": 2, "max_s": 5},
+        {
+            "action": "click",
+            "selector": "tr.zA td.a4W:visible, tr.zA span.bog:visible, tr.zA .y6:visible",
+            "timeout": 8000,
+            "optional": True,
+        },
+        {
+            "action": "wait_for",
+            "selector": _GMAIL_CLICK1_VERIFY_SELECTOR,
+            "timeout": 8000,
+        },
+        {"action": "wait", "min_s": 4, "max_s": 8},
+        {"action": "scroll", "delta_y": 480, "steps": 8, "humanize": True},
+        {"action": "wait", "min_s": 4, "max_s": 8},
+        {"action": "scroll", "delta_y": 380, "steps": 7, "humanize": True},
+        {"action": "wait", "min_s": 3, "max_s": 6},
+        {"action": "scroll", "delta_y": -260, "steps": 6, "humanize": True},
+        {"action": "wait", "min_s": 2, "max_s": 5},
+        {"action": "navigate", "url": "https://mail.google.com/mail/u/0/#inbox"},
+        {
+            "action": "wait_for",
+            "selector": _GMAIL_INBOX_SELECTOR,
+            "timeout": 15000,
+        },
+        {"action": "wait", "min_s": 3, "max_s": 6},
+        {"action": "scroll", "delta_y": 340, "steps": 7, "humanize": True},
+        {"action": "wait", "min_s": 2, "max_s": 5},
+        {
+            "action": "click",
+            "selector": "tr.zA:nth-of-type(2) td.a4W:visible, tr.zA:nth-of-type(3) td.a4W:visible",
+            "timeout": 8000,
+            "optional": True,
+        },
+        {
+            "action": "wait_for",
+            "selector": _GMAIL_CLICK2_VERIFY_SELECTOR,
+            "timeout": 8000,
+        },
+        {"action": "wait", "min_s": 4, "max_s": 8},
+        {"action": "scroll", "delta_y": 440, "steps": 8, "humanize": True},
+        {"action": "wait", "min_s": 4, "max_s": 7},
+        {"action": "scroll", "delta_y": -220, "steps": 5, "humanize": True},
+        {"action": "navigate", "url": "https://mail.google.com/mail/u/0/#inbox"},
+        {
+            "action": "wait_for",
+            "selector": _GMAIL_INBOX_SELECTOR,
+            "timeout": 15000,
+        },
+        {"action": "wait", "min_s": 2, "max_s": 5},
+        {"action": "scroll", "delta_y": -340, "steps": 6, "humanize": True},
+        {"action": "wait", "min_s": 2, "max_s": 4},
     ],
     "ecommerce_cookie": [
         {"action": "navigate", "url": "https://www.amazon.com"},
@@ -146,7 +316,8 @@ _RAW_SCENARIO_PLAYBOOKS: dict[str, list[dict[str, Any]]] = {
 
 WARMING_SCENARIO_META: dict[str, dict[str, Any]] = {
     "youtube_trust": {"recommended_minutes": 4},
-    "social_news": {"recommended_minutes": 4},
+    "social_news": {"recommended_minutes": 5},
+    "gmail_trust": {"recommended_minutes": 4},
     "ecommerce_cookie": {"recommended_minutes": 4},
     "custom": {"recommended_minutes": 3},
     "script": {"recommended_minutes": 3},
@@ -179,7 +350,9 @@ _SCRIPT_ALLOWED_KEYS: dict[str, frozenset[str]] = {
     "scroll": frozenset({"action", "delta_y", "delta_x", "steps", "humanize", "optional"}),
     "click": frozenset({"action", "selector", "timeout", "optional"}),
     "click_at": frozenset({"action", "x", "y", "humanize", "optional"}),
-    "type": frozenset({"action", "selector", "text", "submit", "clear", "timeout", "optional"}),
+    "type": frozenset(
+        {"action", "selector", "text", "texts", "submit", "clear", "timeout", "optional"}
+    ),
     "keyboard_type": frozenset({"action", "text", "humanize", "optional"}),
     "press": frozenset({"action", "key", "selector", "optional"}),
     "wait_for": frozenset({"action", "selector", "timeout", "optional"}),
@@ -314,9 +487,26 @@ def _normalize_step(idx: int, step: Any) -> dict[str, Any]:
         out["humanize"] = _require_bool(step.get("humanize", True), "humanize")
     elif action == "type":
         out["selector"] = _require_str(step.get("selector"), "selector", max_len=MAX_SELECTOR_CHARS)
-        out["text"] = _require_str(
-            step.get("text"), "text", max_len=MAX_TYPE_TEXT_CHARS, allow_empty=True
-        )
+        has_text = "text" in step
+        has_texts = "texts" in step
+        if has_text == has_texts:
+            raise ValueError(f"Step {idx} (type): specify either 'text' or 'texts'")
+        if has_texts:
+            raw_texts = step.get("texts")
+            if not isinstance(raw_texts, list) or not (
+                1 <= len(raw_texts) <= MAX_TYPE_TEXT_CHOICES
+            ):
+                raise ValueError(
+                    f"Step {idx} (type): texts must be a list of 1 to {MAX_TYPE_TEXT_CHOICES} strings"
+                )
+            out["texts"] = [
+                _require_str(item, "texts[]", max_len=MAX_TYPE_TEXT_CHARS, allow_empty=False)
+                for item in raw_texts
+            ]
+        else:
+            out["text"] = _require_str(
+                step.get("text"), "text", max_len=MAX_TYPE_TEXT_CHARS, allow_empty=True
+            )
         out["submit"] = _require_bool(step.get("submit", False), "submit")
         out["clear"] = _require_bool(step.get("clear", True), "clear")
         out["timeout"] = _require_int(
@@ -443,10 +633,18 @@ def describe_warming_step(step: Any) -> tuple[str, str]:
     if action == "type":
         raw_sel = step.get("selector")
         raw_txt = step.get("text")
+        raw_texts = step.get("texts")
         sel = raw_sel[:24] if isinstance(raw_sel, str) else ""
-        txt = raw_txt[:20] if isinstance(raw_txt, str) else ""
+        extra_pool = ""
+        if isinstance(raw_texts, list):
+            valid_choices = [x for x in raw_texts if isinstance(x, str) and x.strip()]
+            txt = valid_choices[0][:20] if valid_choices else ""
+            if len(valid_choices) > 1:
+                extra_pool = f" (+{len(valid_choices) - 1})"
+        else:
+            txt = raw_txt[:20] if isinstance(raw_txt, str) else ""
         suffix = " + Enter" if step.get("submit") is True else ""
-        return "type", f'{sel} "{txt}"{suffix}'.strip()
+        return "type", f'{sel} "{txt}"{extra_pool}{suffix}'.strip()
     if action == "keyboard_type":
         raw_txt = step.get("text")
         txt = raw_txt[:24] if isinstance(raw_txt, str) else ""
@@ -472,14 +670,18 @@ def describe_warming_step(step: Any) -> tuple[str, str]:
     return action, ""
 
 
+def _copy_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{k: list(v) if isinstance(v, list) else v for k, v in s.items()} for s in steps]
+
+
 def list_warming_scenarios() -> list[dict[str, Any]]:
     """Return metadata and human-like playbooks for every Warming scenario."""
     scenarios: list[dict[str, Any]] = []
     for scenario_id, meta in WARMING_SCENARIO_META.items():
         if scenario_id in WARMING_SCENARIO_PLAYBOOKS:
-            sample_steps = [dict(s) for s in WARMING_SCENARIO_PLAYBOOKS[scenario_id]]
+            sample_steps = _copy_steps(WARMING_SCENARIO_PLAYBOOKS[scenario_id])
         elif scenario_id == "script":
-            sample_steps = [dict(s) for s in SAMPLE_WARMING_SCRIPT]
+            sample_steps = _copy_steps(SAMPLE_WARMING_SCRIPT)
         else:
             sample_steps = []
         actions: list[str] = []
@@ -542,10 +744,19 @@ class WarmingTask:
     schedule_time: str = ""  # "HH:MM" or "" for manual
     repeat_daily: bool = True
     enabled: bool = True
+    headless: bool | None = None
     status: str = "idle"  # "idle" | "running" | "completed" | "failed"
     last_run: float = 0.0
     last_result: str = ""
     last_triggered_slot: str = ""
+
+    def resolved_playbook_steps(self) -> list[dict[str, Any]]:
+        """Return interactive playbook steps when executing a script or built-in scenario."""
+        if self.preset == "script":
+            return _copy_steps(self.script_steps)
+        if not self.custom_urls and self.preset in WARMING_SCENARIO_PLAYBOOKS:
+            return _copy_steps(WARMING_SCENARIO_PLAYBOOKS[self.preset])
+        return []
 
     def resolved_urls(self) -> list[str]:
         if self.preset == "script":
@@ -604,6 +815,11 @@ class WarmingTask:
             schedule_time=sched,
             repeat_daily=bool(data.get("repeat_daily", True)),
             enabled=bool(data.get("enabled", True)),
+            headless=(
+                bool(data["headless"])
+                if "headless" in data and data["headless"] is not None
+                else None
+            ),
             status=status,
             last_run=float(data.get("last_run") or 0.0),
             last_result=str(data.get("last_result") or ""),
@@ -787,6 +1003,7 @@ class WarmingSchedulerService:
         repeat_daily: bool = True,
         enabled: bool = True,
         script_steps: list[dict[str, Any]] | str | None = None,
+        headless: bool | None = None,
     ) -> WarmingTask | None:
         clean_name = (name or "").strip()
         clean_profiles = [p.strip() for p in profile_names if p and p.strip()]
@@ -830,6 +1047,7 @@ class WarmingSchedulerService:
                 schedule_time=sched,
                 repeat_daily=repeat_daily,
                 enabled=enabled,
+                headless=bool(headless) if headless is not None else None,
             )
             self._tasks[tid] = task
             try:
@@ -999,6 +1217,16 @@ class WarmingSchedulerService:
         ctrl_params = inspect.signature(bl.control).parameters
         return "target_page_id" in ctrl_params and "return_page_id" in ctrl_params
 
+    @staticmethod
+    def _supports_headless_launch(bl: IBrowserLauncher) -> bool:
+        start_fn = getattr(bl, "start_thread", None)
+        if not callable(start_fn):
+            return False
+        start_params = inspect.signature(start_fn).parameters
+        return "headless" in start_params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in start_params.values()
+        )
+
     def _run_script_steps(
         self,
         prof_name: str,
@@ -1008,126 +1236,498 @@ class WarmingSchedulerService:
         log: Callable[[str], None],
         total_budget_seconds: float,
         step_dwell_seconds: float | None,
+        *,
+        repeat_until_budget: bool = False,
+        require_opened_click: bool = False,
     ) -> str:
-        deadline = time.monotonic() + total_budget_seconds if step_dwell_seconds is None else None
+        single_pass = step_dwell_seconds is not None
+        deadline = time.monotonic() + total_budget_seconds if not single_pass else None
+        waited_samples: list[float] = []
         total_steps = len(steps)
         acted_any = False
         has_target = False
+        pinned_page_id: str | None = None
         supports_pin = self._supports_require_current(bl)
+        supports_page_pin = self._supports_page_pin(bl)
+        last_seen_url: str | None = None
+        verified_opens = 0
+        inbox_verified = False
+        pending_message_verify = False
+        pending_inbox_reverify = False
+        pending_click_origin_url: str | None = None
+        expected_inbox_origin: tuple[str, str, int] | None = None
+        verified_inbox_origin: tuple[str, str, int] | None = None
+        verified_inbox_url: str | None = None
 
-        for step_idx, step in enumerate(steps, 1):
-            if cancel_ev.is_set():
-                return "stopped"
-            if deadline is not None and time.monotonic() >= deadline:
-                log(
-                    f"[Warming] [{prof_name}] Script budget reached before step {step_idx}/{total_steps}"
-                )
-                return "timed_out"
+        def _finish_outcome(*, budget_cutoff: bool) -> str:
+            if require_opened_click and (verified_opens == 0 or not inbox_verified):
+                return "timed_out" if budget_cutoff else "failed"
+            return "ok"
 
-            action = step["action"]
-            if action not in WARMING_SCRIPT_ACTIONS:
-                log(f"[Warming] [{prof_name}] Rejected unsupported step action '{action}'")
-                return "failed"
-
-            if action == "wait":
-                if step_dwell_seconds is not None:
-                    requested_wait = max(0.0, float(step_dwell_seconds))
-                elif "seconds" in step:
-                    requested_wait = float(step["seconds"])
-                else:
-                    requested_wait = random.uniform(float(step["min_s"]), float(step["max_s"]))
-                if deadline is not None:
-                    remaining = max(0.0, deadline - time.monotonic())
-                    truncated = requested_wait > remaining
-                    wait_s = min(requested_wait, remaining)
-                else:
-                    truncated = False
-                    wait_s = requested_wait
-                log(f"[Warming] [{prof_name}] Step {step_idx}/{total_steps}: wait ({wait_s:.1f}s)")
-                if cancel_ev.wait(wait_s):
-                    return "stopped"
-                if truncated:
-                    log(
-                        f"[Warming] [{prof_name}] Script budget reached during wait step {step_idx}/{total_steps}"
+        def _dispatch(
+            act: str, act_params: dict[str, Any], timeout_s: float, pin_target: bool
+        ) -> tuple[bool, Any]:
+            nonlocal pinned_page_id
+            if supports_page_pin:
+                if not pin_target:
+                    res = bl.control(
+                        prof_name,
+                        act,
+                        act_params,
+                        timeout=timeout_s,
+                        return_page_id=True,
                     )
-                    return "timed_out"
-                continue
+                    pid = res[1] if isinstance(res, tuple) and len(res) == 2 else None
+                    if not isinstance(pid, str) or not pid:
+                        return False, None
+                    pinned_page_id = pid
+                    return True, res[0]
+                return True, bl.control(
+                    prof_name,
+                    act,
+                    act_params,
+                    timeout=timeout_s,
+                    require_current=True,
+                    target_page_id=pinned_page_id,
+                )
+            if pin_target and supports_pin:
+                return True, bl.control(
+                    prof_name, act, act_params, timeout=timeout_s, require_current=True
+                )
+            return True, bl.control(prof_name, act, act_params, timeout=timeout_s)
 
-            params = {k: v for k, v in step.items() if k not in ("action", "optional")}
-            step_timeout_clamped = False
+        def _run_gmail_probe(selector: str, timeout_ms: int) -> tuple[str, str | None]:
+            if cancel_ev.is_set():
+                return "stopped", None
+            probe_ctrl_timeout = min(30.0, max(5.0, timeout_ms / 1000.0 + 5.0))
+            if deadline is not None:
+                wall_rem = deadline - time.monotonic()
+                wait_rem = max(0.0, total_budget_seconds - math.fsum(waited_samples))
+                probe_rem = min(wait_rem, wall_rem) if repeat_until_budget else wall_rem
+                if probe_rem <= 0:
+                    return "budget_cutoff", None
+                if repeat_until_budget and acted_any and probe_rem < probe_ctrl_timeout:
+                    if cancel_ev.wait(probe_rem):
+                        return "stopped", None
+                    if not single_pass:
+                        waited_samples.append(probe_rem)
+                    return "budget_cutoff", None
+                ctrl_t = min(probe_ctrl_timeout, probe_rem)
+                req_ms = max(1, min(timeout_ms, int(probe_rem * 1000)))
+            else:
+                ctrl_t = probe_ctrl_timeout
+                req_ms = timeout_ms
             try:
-                if action in ("navigate", "tab_new") and params.get("url") is not None:
-                    params["url"] = _validate_script_url(params["url"])
-                if "timeout" in params:
-                    base_ctrl_timeout = min(30.0, max(5.0, params["timeout"] / 1000.0 + 5.0))
-                elif action in ("navigate", "tab_new"):
-                    base_ctrl_timeout = 25.0
-                else:
-                    base_ctrl_timeout = 10.0
+                probe_has_pid, probe_payload = _dispatch(
+                    "wait_for",
+                    {"selector": selector, "timeout": req_ms},
+                    ctrl_t,
+                    has_target,
+                )
+            except Exception as probe_err:
+                if cancel_ev.is_set():
+                    return "stopped", None
+                if (
+                    getattr(probe_err, "error_code", None) == "deadline_expired"
+                    and getattr(probe_err, "unknown_state", True) is False
+                    and getattr(probe_err, "settled", None) is True
+                ):
+                    return "timed_out", None
+                if self._is_unknown_state_error(probe_err):
+                    if deadline is not None and time.monotonic() >= deadline:
+                        return "timed_out", None
+                    return "interrupted", None
+                return "miss", None
+            if not probe_has_pid:
+                return "interrupted", None
+            probe_url = (
+                probe_payload.get("url")
+                if isinstance(probe_payload, dict) and isinstance(probe_payload.get("url"), str)
+                else None
+            )
+            return "ok", probe_url
 
+        while not cancel_ev.is_set():
+            pass_waited = 0.0
+            pass_acted = False
+            for step_idx, step in enumerate(steps, 1):
+                if cancel_ev.is_set():
+                    return "stopped"
+                effective_remaining: float | None = None
                 if deadline is not None:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
+                    wall_rem = max(0.0, deadline - time.monotonic())
+                    wait_rem = max(0.0, total_budget_seconds - math.fsum(waited_samples))
+                    effective_remaining = (
+                        min(wait_rem, wall_rem) if repeat_until_budget else wall_rem
+                    )
+                    if effective_remaining <= 0:
+                        if repeat_until_budget and acted_any:
+                            return _finish_outcome(budget_cutoff=True)
                         log(
                             f"[Warming] [{prof_name}] Script budget reached before step {step_idx}/{total_steps}"
                         )
                         return "timed_out"
-                    ctrl_timeout = min(base_ctrl_timeout, remaining)
-                    if "timeout" in params:
-                        clamped_ms = max(1, min(params["timeout"], int(remaining * 1000)))
-                        step_timeout_clamped = clamped_ms < params["timeout"]
-                        params["timeout"] = clamped_ms
-                else:
-                    ctrl_timeout = base_ctrl_timeout
 
-                pin_target = has_target and action not in _TAB_SWITCH_ACTIONS
-                if pin_target and supports_pin:
-                    bl.control(
-                        prof_name, action, params, timeout=ctrl_timeout, require_current=True
-                    )
-                else:
-                    bl.control(prof_name, action, params, timeout=ctrl_timeout)
-                acted_any = True
-                has_target = True
-                # Never log typed text or raw URLs/credentials in warming logs.
-                log(f"[Warming] [{prof_name}] Step {step_idx}/{total_steps}: {action}")
-            except Exception as step_err:
-                if cancel_ev.is_set():
-                    return "stopped"
-                err_label = self._safe_step_error(step_err)
-                if self._is_unknown_state_error(step_err):
+                action = step["action"]
+                if action not in WARMING_SCRIPT_ACTIONS:
+                    log(f"[Warming] [{prof_name}] Rejected unsupported step action '{action}'")
+                    return "failed"
+
+                if action == "wait":
+                    if step_dwell_seconds is not None:
+                        requested_wait = max(0.0, float(step_dwell_seconds))
+                    elif "seconds" in step:
+                        requested_wait = float(step["seconds"])
+                    else:
+                        requested_wait = random.uniform(float(step["min_s"]), float(step["max_s"]))
+                    if effective_remaining is not None:
+                        truncated = requested_wait > effective_remaining
+                        wait_s = min(requested_wait, effective_remaining)
+                    else:
+                        truncated = False
+                        wait_s = requested_wait
                     log(
-                        f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) interrupted: {err_label}"
+                        f"[Warming] [{prof_name}] Step {step_idx}/{total_steps}: wait ({wait_s:.1f}s)"
                     )
-                    if deadline is not None and time.monotonic() >= deadline:
-                        return "timed_out"
-                    return "interrupted"
-                if step.get("optional"):
-                    log(
-                        f"[Warming] [{prof_name}] Optional step {step_idx}/{total_steps} ({action}) warning: {err_label}"
-                    )
-                    if (
-                        step_timeout_clamped
-                        and getattr(step_err, "error_code", None) == "action_timeout"
+                    if cancel_ev.wait(wait_s):
+                        return "stopped"
+                    if not single_pass:
+                        waited_samples.append(wait_s)
+                    pass_waited += wait_s
+                    if truncated or (
+                        repeat_until_budget
+                        and not single_pass
+                        and math.fsum(waited_samples) >= total_budget_seconds
                     ):
+                        if repeat_until_budget and acted_any:
+                            return _finish_outcome(budget_cutoff=True)
                         log(
-                            f"[Warming] [{prof_name}] Script budget reached on optional step {step_idx}/{total_steps}"
+                            f"[Warming] [{prof_name}] Script budget reached during wait step {step_idx}/{total_steps}"
                         )
                         return "timed_out"
-                    if getattr(step_err, "error_code", None) in ("action_timeout", "action_error"):
-                        has_target = True
+                    # Preserve unconsumed click outcome across no-dispatch waits until verified or invalidated by a real action.
                     continue
-                log(
-                    f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) failed: {err_label}"
+
+                params = {k: v for k, v in step.items() if k not in ("action", "optional")}
+                step_timeout_clamped = False
+                is_gmail_verify_step = action == "wait_for" and step.get("selector") in (
+                    _GMAIL_CLICK1_VERIFY_SELECTOR,
+                    _GMAIL_CLICK2_VERIFY_SELECTOR,
                 )
-                return "failed"
+                is_gmail_inbox_reverify = is_gmail_verify_step and pending_inbox_reverify
+                is_gmail_msg_verify = is_gmail_verify_step and not pending_inbox_reverify
+                if is_gmail_msg_verify:
+                    params["selector"] = _GMAIL_MESSAGE_VIEW_SELECTOR
+                elif is_gmail_inbox_reverify:
+                    params["selector"] = (
+                        _GMAIL_EMPTY_INBOX_SELECTOR
+                        if (
+                            not require_opened_click
+                            and step.get("selector") == _GMAIL_CLICK1_VERIFY_SELECTOR
+                        )
+                        else _GMAIL_INBOX_SELECTOR
+                    )
+                try:
+                    if action == "type" and "texts" in params:
+                        choices = params.pop("texts")
+                        params["text"] = random.choice(choices)
+                    if action in ("navigate", "tab_new") and params.get("url") is not None:
+                        params["url"] = _validate_script_url(params["url"])
+                    if "timeout" in params:
+                        base_ctrl_timeout = min(30.0, max(5.0, params["timeout"] / 1000.0 + 5.0))
+                    elif action in ("navigate", "tab_new"):
+                        base_ctrl_timeout = 25.0
+                    else:
+                        base_ctrl_timeout = 10.0
+
+                    if deadline is not None:
+                        wall_rem = deadline - time.monotonic()
+                        wait_rem = max(0.0, total_budget_seconds - math.fsum(waited_samples))
+                        rem = min(wait_rem, wall_rem) if repeat_until_budget else wall_rem
+                        if rem <= 0:
+                            if repeat_until_budget and acted_any:
+                                return _finish_outcome(budget_cutoff=True)
+                            log(
+                                f"[Warming] [{prof_name}] Script budget reached before step {step_idx}/{total_steps}"
+                            )
+                            return "timed_out"
+                        if repeat_until_budget and acted_any and rem < base_ctrl_timeout:
+                            # Stop at a safe pre-action boundary rather than clamping a mid-flight browser call.
+                            if cancel_ev.wait(rem):
+                                return "stopped"
+                            if not single_pass:
+                                waited_samples.append(rem)
+                            log(
+                                f"[Warming] [{prof_name}] Duration budget reached safely before step {step_idx}/{total_steps} ({action})"
+                            )
+                            return _finish_outcome(budget_cutoff=True)
+                        ctrl_timeout = min(base_ctrl_timeout, rem)
+                        if "timeout" in params:
+                            clamped_ms = max(1, min(params["timeout"], int(rem * 1000)))
+                            step_timeout_clamped = clamped_ms < params["timeout"]
+                            params["timeout"] = clamped_ms
+                    else:
+                        ctrl_timeout = base_ctrl_timeout
+
+                    pin_target = has_target and action not in _TAB_SWITCH_ACTIONS
+                    prev_url = last_seen_url
+                    has_pid, payload = _dispatch(action, params, ctrl_timeout, pin_target)
+                    if not has_pid:
+                        log(
+                            f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) interrupted: missing page identity"
+                        )
+                        return "interrupted"
+
+                    acted_any = True
+                    pass_acted = True
+                    has_target = True
+
+                    res_url = (
+                        payload.get("url")
+                        if isinstance(payload, dict) and isinstance(payload.get("url"), str)
+                        else None
+                    )
+                    if res_url is not None:
+                        last_seen_url = res_url
+                    if is_gmail_msg_verify:
+                        msg_origin = _url_origin(res_url)
+                        anchor_origin = (
+                            verified_inbox_origin
+                            if require_opened_click
+                            else _url_origin(pending_click_origin_url)
+                        )
+                        if (require_opened_click or pending_message_verify) and (
+                            res_url is None
+                            or pending_click_origin_url is None
+                            or res_url == pending_click_origin_url
+                            or anchor_origin is None
+                            or msg_origin != anchor_origin
+                        ):
+                            log(
+                                f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) did not open a verified message; stopping"
+                            )
+                            return "failed"
+                        if require_opened_click:
+                            verified_opens += 1
+                        pending_message_verify = False
+                        pending_inbox_reverify = False
+                        pending_click_origin_url = None
+                    elif is_gmail_inbox_reverify and not require_opened_click:
+                        if res_url is None or (
+                            prev_url is not None and _url_origin(res_url) != _url_origin(prev_url)
+                        ):
+                            log(
+                                f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) failed: unverified inbox origin"
+                            )
+                            return "failed"
+                        pending_inbox_reverify = False
+                        pending_message_verify = False
+                        pending_click_origin_url = None
+                    elif require_opened_click:
+                        if action in ("navigate", "tab_new", "tab_select", "tab_close", "back"):
+                            inbox_verified = False
+                            pending_message_verify = False
+                            pending_inbox_reverify = False
+                            pending_click_origin_url = None
+                            if action == "navigate":
+                                nav_origin = _url_origin(params.get("url"))
+                                if expected_inbox_origin is None and nav_origin is not None:
+                                    expected_inbox_origin = nav_origin
+                        elif action == "wait_for" and (
+                            step.get("selector") == _GMAIL_INBOX_SELECTOR or is_gmail_inbox_reverify
+                        ):
+                            origin = _url_origin(res_url)
+                            anchor = verified_inbox_origin or expected_inbox_origin
+                            if (
+                                res_url is None
+                                or origin is None
+                                or (anchor is not None and origin != anchor)
+                            ):
+                                inbox_verified = False
+                                log(
+                                    f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) failed: unverified inbox origin"
+                                )
+                                return "failed"
+                            verified_inbox_origin = origin
+                            verified_inbox_url = res_url
+                            inbox_verified = True
+                            pending_inbox_reverify = False
+                            pending_message_verify = False
+                            pending_click_origin_url = None
+                        elif action == "click":
+                            inbox_verified = False
+                            pending_inbox_reverify = False
+                            pending_message_verify = True
+                            pending_click_origin_url = prev_url
+                        else:
+                            pending_message_verify = False
+                            pending_inbox_reverify = False
+                            pending_click_origin_url = None
+                            if (
+                                res_url is not None
+                                and verified_inbox_origin is not None
+                                and _url_origin(res_url) != verified_inbox_origin
+                            ):
+                                inbox_verified = False
+                                log(
+                                    f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) left verified Gmail origin; stopping"
+                                )
+                                return "failed"
+                            if inbox_verified and (
+                                res_url is None
+                                or verified_inbox_url is None
+                                or res_url != verified_inbox_url
+                            ):
+                                inbox_verified = False
+                                log(
+                                    f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) left verified inbox URL; stopping"
+                                )
+                                return "failed"
+                    elif action == "click":
+                        pending_inbox_reverify = False
+                        pending_message_verify = True
+                        pending_click_origin_url = prev_url
+                    else:
+                        pending_message_verify = False
+                        pending_inbox_reverify = False
+                        pending_click_origin_url = None
+
+                    # Never log typed text or raw URLs/credentials in warming logs.
+                    log(f"[Warming] [{prof_name}] Step {step_idx}/{total_steps}: {action}")
+                except Exception as step_err:
+                    if cancel_ev.is_set():
+                        return "stopped"
+                    err_label = self._safe_step_error(step_err)
+                    if (
+                        getattr(step_err, "error_code", None) == "deadline_expired"
+                        and getattr(step_err, "unknown_state", True) is False
+                        and getattr(step_err, "settled", None) is True
+                    ):
+                        budget_done = (deadline is not None and time.monotonic() >= deadline) or (
+                            not single_pass and math.fsum(waited_samples) >= total_budget_seconds
+                        )
+                        log(
+                            f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) deadline expired: {err_label}"
+                        )
+                        if repeat_until_budget and acted_any and budget_done:
+                            return _finish_outcome(budget_cutoff=True)
+                        return "timed_out"
+                    if self._is_unknown_state_error(step_err):
+                        log(
+                            f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) interrupted: {err_label}"
+                        )
+                        if deadline is not None and time.monotonic() >= deadline:
+                            return "timed_out"
+                        return "interrupted"
+                    if step.get("optional"):
+                        log(
+                            f"[Warming] [{prof_name}] Optional step {step_idx}/{total_steps} ({action}) warning: {err_label}"
+                        )
+                        if (
+                            step_timeout_clamped
+                            and getattr(step_err, "error_code", None) == "action_timeout"
+                        ):
+                            if (
+                                repeat_until_budget
+                                and acted_any
+                                and (
+                                    (deadline is not None and time.monotonic() >= deadline)
+                                    or (
+                                        not single_pass
+                                        and math.fsum(waited_samples) >= total_budget_seconds
+                                    )
+                                )
+                            ):
+                                return _finish_outcome(budget_cutoff=True)
+                            log(
+                                f"[Warming] [{prof_name}] Script budget reached on optional step {step_idx}/{total_steps}"
+                            )
+                            return "timed_out"
+                        if getattr(step_err, "error_code", None) in (
+                            "action_timeout",
+                            "action_error",
+                        ):
+                            if supports_page_pin and not has_target:
+                                err_pid = getattr(step_err, "page_id", None)
+                                if isinstance(err_pid, str) and err_pid:
+                                    pinned_page_id = err_pid
+                                    has_target = True
+                                else:
+                                    return "interrupted"
+                            else:
+                                has_target = True
+                        if require_opened_click and action == "click":
+                            if getattr(step_err, "error_code", None) != "action_timeout":
+                                inbox_verified = False
+                                return "failed"
+                            probe_ms = min(1500, max(200, int(step.get("timeout", 1500))))
+                            if verified_opens == 0:
+                                # Positively verify Gmail's empty-inbox marker instead of inferring empty from a missed click.
+                                p_status, empty_url = _run_gmail_probe(
+                                    _GMAIL_EMPTY_INBOX_SELECTOR, probe_ms
+                                )
+                                if p_status == "budget_cutoff":
+                                    return _finish_outcome(budget_cutoff=True)
+                                if p_status in ("stopped", "timed_out", "interrupted"):
+                                    return p_status
+                                if (
+                                    p_status == "ok"
+                                    and verified_inbox_origin is not None
+                                    and _url_origin(empty_url) == verified_inbox_origin
+                                ):
+                                    log(f"[Warming] [{prof_name}] Verified empty inbox")
+                                    return "no_messages"
+                                inbox_verified = False
+                                log(
+                                    f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) missed without verified empty inbox; stopping"
+                                )
+                                return "failed"
+                            if verified_opens > 0:
+                                # Step immediately following Click 2 will re-verify _GMAIL_INBOX_SELECTOR (1-email inbox vs session loss).
+                                inbox_verified = False
+                                pending_message_verify = False
+                                pending_click_origin_url = None
+                                pending_inbox_reverify = True
+                        elif action == "click":
+                            # Only allow inbox fallback when the optional click was confirmed not to dispatch.
+                            pending_inbox_reverify = (
+                                getattr(step_err, "error_code", None) == "action_timeout"
+                            )
+                            pending_message_verify = not pending_inbox_reverify
+                            pending_click_origin_url = (
+                                last_seen_url if pending_message_verify else None
+                            )
+                        else:
+                            pending_message_verify = False
+                            pending_click_origin_url = None
+                            pending_inbox_reverify = False
+                        continue
+                    log(
+                        f"[Warming] [{prof_name}] Step {step_idx}/{total_steps} ({action}) failed: {err_label}"
+                    )
+                    return "failed"
+
+            if require_opened_click and verified_opens == 0:
+                break
+            if (
+                not repeat_until_budget
+                or single_pass
+                or cancel_ev.is_set()
+                or math.fsum(waited_samples) >= total_budget_seconds
+                or (deadline is not None and time.monotonic() >= deadline)
+                or pass_waited <= 0
+                or not pass_acted
+            ):
+                break
 
         if cancel_ev.is_set():
             return "stopped"
-        if deadline is not None and time.monotonic() > deadline:
+        if not repeat_until_budget and deadline is not None and time.monotonic() > deadline:
             log(f"[Warming] [{prof_name}] Script budget exceeded before completion")
             return "timed_out"
-        return "ok" if acted_any else "failed"
+        if not acted_any:
+            return "failed"
+        return _finish_outcome(budget_cutoff=False)
 
     def _execute_task(
         self,
@@ -1141,20 +1741,28 @@ class WarmingSchedulerService:
     ) -> bool:
         log = log_fn or (lambda m: logger.info(m))
         task_id = task.id
-        is_script = task.preset == "script"
-        steps = task.script_steps
-        urls = [] if is_script else task.resolved_urls()
-        invalid_urls = (not is_script) and (not urls)
+        steps = task.resolved_playbook_steps()
+        is_playbook = bool(steps)
+        urls = [] if is_playbook else task.resolved_urls()
+        invalid_urls = (not is_playbook) and (not urls)
         targets = task.profile_names
         dur_mins = task.duration_minutes
         task_name = task.name
+        requested_headless: bool | None = task.headless
 
         if on_update:
             with contextlib.suppress(Exception):
                 on_update()
 
-        kind_desc = f"{len(steps)} step(s)" if is_script else f"{len(urls)} sites"
-        log(f"[Warming] Starting '{task_name}' for {len(targets)} profile(s) ({kind_desc})")
+        kind_desc = f"{len(steps)} step(s)" if is_playbook else f"{len(urls)} sites"
+        mode_desc = (
+            ", hidden browser"
+            if requested_headless is True
+            else (", visible browser" if requested_headless is False else "")
+        )
+        log(
+            f"[Warming] Starting '{task_name}' for {len(targets)} profile(s) ({kind_desc}{mode_desc})"
+        )
 
         total_budget_seconds = float(max(1, dur_mins) * 60)
         per_url_dwell = (
@@ -1164,6 +1772,7 @@ class WarmingSchedulerService:
         )
 
         succeeded = 0
+        no_message_count = 0
         busy_count = 0
         timed_out_count = 0
         interrupted_count = 0
@@ -1185,26 +1794,42 @@ class WarmingSchedulerService:
                 with self._lease_lock:
                     active = self._profile_active_users.get(prof_name, 0)
                     script_busy = prof_name in self._profile_script_owners
-                    if (is_script and (active > 0 or script_busy)) or (
-                        not is_script and script_busy
+                    if (is_playbook and (active > 0 or script_busy)) or (
+                        not is_playbook and script_busy
                     ):
                         busy_count += 1
                         log(
                             f"[Warming] [{prof_name}] Busy: profile is in use by another warming task"
                         )
                         continue
-                    if is_script:
+                    if is_playbook:
                         self._profile_script_owners[prof_name] = cancel_ev
                         acquired_script_lock = True
                     self._profile_active_users[prof_name] = active + 1
                     acquired_lease = True
                     need_launch = not bl.is_running(prof_name)
                     if need_launch:
-                        started = bl.start_thread(prof, log)
+                        effective_headless = requested_headless
+                        if effective_headless is False and not host_supports_headed():
+                            inherited = os.environ.get("FOXPROFILE_HEADLESS", "").strip().lower()
+                            effective_headless = (
+                                None if inherited in ("1", "true", "yes", "virtual") else True
+                            )
+                            log(
+                                f"[Warming] [{prof_name}] Host has no display; launching hidden browser"
+                            )
+                        if effective_headless is not None and self._supports_headless_launch(bl):
+                            started = bl.start_thread(prof, log, headless=effective_headless)
+                        else:
+                            started = bl.start_thread(prof, log)
                         if started:
                             self._profile_launched_by_warming.add(prof_name)
                     else:
                         started = False
+                        if requested_headless is not None:
+                            log(
+                                f"[Warming] [{prof_name}] Profile is already running; reusing existing browser window (visibility applies only to new launches)"
+                            )
 
                 if need_launch and started:
                     ok, err = bl.wait_for_launch(prof_name, timeout=45.0)
@@ -1212,7 +1837,8 @@ class WarmingSchedulerService:
                         log(f"[Warming] '{prof_name}' launch failed: {err}")
                         continue
 
-                if is_script:
+                if is_playbook:
+                    is_builtin = task.preset != "script"
                     outcome = self._run_script_steps(
                         prof_name,
                         steps,
@@ -1221,9 +1847,15 @@ class WarmingSchedulerService:
                         log,
                         total_budget_seconds,
                         step_dwell_seconds,
+                        repeat_until_budget=is_builtin,
+                        require_opened_click=(
+                            task.preset == "gmail_trust" and not task.custom_urls
+                        ),
                     )
                     if outcome == "ok":
                         succeeded += 1
+                    elif outcome == "no_messages":
+                        no_message_count += 1
                     elif outcome == "timed_out":
                         timed_out_count += 1
                     elif outcome == "interrupted":
@@ -1453,6 +2085,8 @@ class WarmingSchedulerService:
                     elif succeeded > 0:
                         task.status = "completed"
                         issues = []
+                        if no_message_count:
+                            issues.append(f"{no_message_count} no messages")
                         if interrupted_count:
                             issues.append(f"{interrupted_count} interrupted")
                         if timed_out_count:
@@ -1461,6 +2095,19 @@ class WarmingSchedulerService:
                             issues.append(f"{busy_count} busy")
                         suffix = f"; {', '.join(issues)}" if issues else ""
                         task.last_result = f"OK ({succeeded}/{len(targets)} profiles){suffix}"
+                    elif no_message_count > 0:
+                        task.status = "completed"
+                        issues = []
+                        if interrupted_count:
+                            issues.append(f"{interrupted_count} interrupted")
+                        if timed_out_count:
+                            issues.append(f"{timed_out_count} timed out")
+                        if busy_count:
+                            issues.append(f"{busy_count} busy")
+                        suffix = f"; {', '.join(issues)}" if issues else ""
+                        task.last_result = (
+                            f"No messages ({no_message_count}/{len(targets)} profiles){suffix}"
+                        )
                     else:
                         task.status = "failed"
                         if interrupted_count > 0:
@@ -1478,11 +2125,14 @@ class WarmingSchedulerService:
                     with self._store_lease():
                         self._save()
 
-        log(f"[Warming] Finished '{task_name}': {succeeded}/{len(targets)} profile(s) warmed")
+        log(
+            f"[Warming] Finished '{task_name}': {succeeded}/{len(targets)} profile(s) warmed"
+            + (f" ({no_message_count} no messages)" if no_message_count else "")
+        )
         if on_update:
             with contextlib.suppress(Exception):
                 on_update()
-        return succeeded > 0
+        return succeeded > 0 or no_message_count > 0
 
     def run_task_async(
         self,

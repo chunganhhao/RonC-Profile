@@ -41,7 +41,14 @@ def runner_command(profile: Profile) -> list[str]:
     return command
 
 
-def spawn_browser(profile: Profile) -> subprocess.Popen:
+def host_supports_headed() -> bool:
+    """Return whether this host can open visible desktop browser windows."""
+    if sys.platform in ("darwin", "win32"):
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def spawn_browser(profile: Profile, *, headless: bool | None = None) -> subprocess.Popen:
     """Spawn the browser subprocess for the given profile."""
     env = os.environ.copy()
     existing_pythonpath = env.get("PYTHONPATH", "")
@@ -49,6 +56,8 @@ def spawn_browser(profile: Profile) -> subprocess.Popen:
         os.pathsep + existing_pythonpath if existing_pythonpath else ""
     )
     env[_LAUNCHER_PIPE] = "1"
+    if headless is not None:
+        env["FOXPROFILE_HEADLESS"] = "true" if headless else "false"
     return subprocess.Popen(
         runner_command(profile),
         stdin=subprocess.PIPE,

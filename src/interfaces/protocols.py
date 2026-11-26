@@ -90,6 +90,8 @@ class IBrowserLauncher(Protocol):
         on_start: Callable[[], None] | None = None,
         on_ready: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
+        *,
+        headless: bool | None = None,
     ) -> bool: ...
 
     def stop_profile(self, profile_name: str, timeout: int = 8) -> bool: ...

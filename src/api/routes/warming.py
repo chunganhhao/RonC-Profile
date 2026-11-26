@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ...core.logging import get_logger
+from ...services.browser.process import host_supports_headed
 from ...services.warming.scheduler import (
     WARMING_PRESETS,
     WarmingStopTimeout,
@@ -39,6 +40,7 @@ class WarmingCreateRequest(BaseModel):
     schedule_time: str = ""
     repeat_daily: bool = True
     enabled: bool = True
+    headless: bool | None = None
 
 
 @router.get("/tasks")
@@ -50,6 +52,7 @@ def list_warming_tasks(
         "tasks": tasks,
         "presets": list(WARMING_PRESETS.keys()),
         "scenarios": list_warming_scenarios(),
+        "host_supports_headed": host_supports_headed(),
     }
 
 
@@ -80,6 +83,7 @@ def create_warming_task(
         schedule_time=body.schedule_time,
         repeat_daily=body.repeat_daily,
         enabled=body.enabled,
+        headless=body.headless,
     )
     if task is None:
         raise HTTPException(

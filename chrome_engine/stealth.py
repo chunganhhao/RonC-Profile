@@ -1172,6 +1172,18 @@ async def human_scroll(
     mouse = getattr(page, "mouse", None)
     wheel_fn = getattr(mouse, "wheel", None) if mouse is not None else None
     if callable(wheel_fn):
+        # Position cursor over the main content pane before wheeling so SPAs with inner scrollers (e.g. Gmail) scroll reliably even after top/side clicks or navigations.
+        move_fn = getattr(mouse, "move", None)
+        if callable(move_fn):
+            vp = getattr(page, "viewport_size", None)
+            raw_w = vp.get("width") if isinstance(vp, dict) else None
+            raw_h = vp.get("height") if isinstance(vp, dict) else None
+            vw = float(raw_w) if isinstance(raw_w, (int, float)) and raw_w > 0 else 1100.0
+            vh = float(raw_h) if isinstance(raw_h, (int, float)) and raw_h > 0 else 760.0
+            cx, cy = round(vw * 0.55, 1), round(vh * 0.50, 1)
+            with contextlib.suppress(Exception):
+                await move_fn(cx, cy)
+                page._last_mouse_pos = (cx, cy)
         step_x = float(delta_x) / steps
         step_y = float(delta_y) / steps
         for _ in range(steps):

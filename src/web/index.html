@@ -408,7 +408,7 @@ input.ext-switch:checked::after { transform: translateX(16px); background: var(-
 .viewer-type .btn { height: 40px; }
 
 /* Warming Studio */
-.warm-scenarios { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.warm-scenarios { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .warm-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px; border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--paper-raised); color: var(--ink); text-align: left; cursor: pointer; transition: border-color .15s, background-color .15s; min-width: 0; }
 .warm-card:hover { border-color: var(--ink-3); background: var(--row-hover); color: var(--ink); }
 .warm-card.active { border-color: var(--accent); background: var(--row-selected); color: var(--ink); }
@@ -850,13 +850,13 @@ Object.assign(I18N.en, {
   warm_targets: "Target Profiles",
   warm_many_warn: "Sequential warming will run across {n} profiles",
   warm_name: "Campaign Name",
-  warm_steps_title: "Interaction Playbook",
+  warm_steps_title: "Interaction Playbook (Active)",
   warm_steps_url_title: "URL Mode — Active Sites",
   warm_steps_url_override_title: "URL Mode — Custom Override",
   warm_steps_script_title: "Script Steps (Active)",
   warm_steps_count: "{n} steps",
   warm_sites_count: "{n} sites",
-  warm_url_template_note: "URL browse & scroll only. Click 'Edit steps as script' to load the {n}-step interactive template.",
+  warm_url_template_note: "Runs all {n} interactive steps (search, click & scroll). Paste URLs below to switch to URL-only override, or click 'Edit steps as script'.",
   warm_catalog_loading: "Loading interactive script templates...",
   warm_catalog_unavailable: "Templates unavailable ({e})",
   warm_catalog_retry: "Retry",
@@ -875,6 +875,14 @@ Object.assign(I18N.en, {
   warm_duration: "Duration (mins)",
   warm_schedule: "Daily Time (HH:MM)",
   warm_repeat: "Repeat daily",
+  warm_headless: "Hide browser (new launches)",
+  warm_headless_forced: "Hide browser (server has no display)",
+  warm_headless_hint: "Applies to newly launched profiles; already-open windows are reused as-is.",
+  warm_headless_no_display_hint: "Saved as visible, but this server has no display; new launches run hidden (already-open windows are reused).",
+  warm_headless_badge: "Hidden (new)",
+  warm_visible_badge: "Visible (new)",
+  warm_visible_req_badge: "Visible requested (new)",
+  warm_headless_no_display_badge: "Hidden (no display)",
   warm_save: "Save Schedule",
   warm_run: "Run Warming Now",
   warm_tasks_title: "Scheduled & Recent Tasks",
@@ -888,7 +896,9 @@ Object.assign(I18N.en, {
   warm_card_youtube_trust_title: "YouTube & Google Trust",
   warm_card_youtube_trust_desc: "News, search & feed scroll",
   warm_card_social_news_title: "Social & News",
-  warm_card_social_news_desc: "Search type, PageDown & back",
+  warm_card_social_news_desc: "Google hot news search, Wikipedia & article clicks",
+  warm_card_gmail_trust_title: "Gmail Trust",
+  warm_card_gmail_trust_desc: "Scroll inbox & open emails to read naturally",
   warm_card_ecommerce_cookie_title: "E-Commerce Cookie",
   warm_card_ecommerce_cookie_desc: "Catalog browse & reverse scroll",
   warm_card_custom_title: "Custom URLs",
@@ -939,13 +949,13 @@ Object.assign(I18N.vi, {
   warm_targets: "Hồ sơ mục tiêu",
   warm_many_warn: "Sẽ chạy tuần tự trên {n} hồ sơ đã chọn",
   warm_name: "Tên chiến dịch",
-  warm_steps_title: "Chuỗi hành động tương tác",
+  warm_steps_title: "Chuỗi tương tác (Sẽ chạy)",
   warm_steps_url_title: "Chế độ URL — Trang sẽ chạy",
   warm_steps_url_override_title: "Chế độ URL — URL ghi đè",
   warm_steps_script_title: "Kịch bản JSON (Sẽ chạy)",
   warm_steps_count: "{n} bước",
   warm_sites_count: "{n} trang",
-  warm_url_template_note: "Chỉ chạy mở URL & cuộn trang. Bấm 'Tách & sửa thành Kịch bản' để nạp mẫu tương tác {n} bước.",
+  warm_url_template_note: "Chạy trực tiếp {n} bước tương tác thật (gõ tìm kiếm, bấm link, cuộn đọc). Nhập URL bên dưới để ghi đè chỉ mở URL, hoặc bấm 'Tách & sửa thành Kịch bản'.",
   warm_catalog_loading: "Đang tải mẫu kịch bản tương tác...",
   warm_catalog_unavailable: "Không tải được mẫu ({e})",
   warm_catalog_retry: "Thử lại",
@@ -964,6 +974,14 @@ Object.assign(I18N.vi, {
   warm_duration: "Thời lượng (phút)",
   warm_schedule: "Giờ chạy (HH:MM)",
   warm_repeat: "Lặp lại hàng ngày",
+  warm_headless: "Ẩn trình duyệt (lần mở mới)",
+  warm_headless_forced: "Ẩn trình duyệt (server không có màn hình)",
+  warm_headless_hint: "Chỉ áp dụng cho hồ sơ mở mới; cửa sổ đang mở sẵn sẽ được dùng lại.",
+  warm_headless_no_display_hint: "Tác vụ lưu ở chế độ hiện cửa sổ nhưng server không có màn hình; lần mở mới sẽ chạy ẩn (cửa sổ đang mở vẫn dùng lại).",
+  warm_headless_badge: "Ẩn trình duyệt (mở mới)",
+  warm_visible_badge: "Hiện cửa sổ (mở mới)",
+  warm_visible_req_badge: "Yêu cầu hiện cửa sổ (mở mới)",
+  warm_headless_no_display_badge: "Ẩn trình duyệt (không màn hình)",
   warm_save: "Lưu lịch hẹn",
   warm_run: "Chạy ngâm ngay",
   warm_tasks_title: "Lịch hẹn & Tác vụ Ngâm",
@@ -977,7 +995,9 @@ Object.assign(I18N.vi, {
   warm_card_youtube_trust_title: "YouTube & Google Trust",
   warm_card_youtube_trust_desc: "Đọc tin tức, search & cuộn video",
   warm_card_social_news_title: "Mạng xã hội & Tin tức",
-  warm_card_social_news_desc: "Gõ tìm kiếm, PageDown & Back",
+  warm_card_social_news_desc: "Google tìm tin hot, Wikipedia & bấm đọc báo",
+  warm_card_gmail_trust_title: "Nuôi Trust Gmail",
+  warm_card_gmail_trust_desc: "Cuộn hộp thư & bấm mở mail đọc như người thật",
   warm_card_ecommerce_cookie_title: "Cookie Thương mại ĐT",
   warm_card_ecommerce_cookie_desc: "Xem danh mục & cuộn ngược",
   warm_card_custom_title: "Danh sách URL riêng",
@@ -2348,7 +2368,17 @@ function describeWarmStepWeb(step) {
     const dy = Math.round(sNum(step && step.delta_y, 380));
     return ["scroll", `${dy >= 0 ? "Down" : "Up"} ${Math.abs(dy)}px`];
   }
-  if (act === "type") return ["type", `${sStr(step && step.selector, 24)} "${sStr(step && step.text, 20)}"${step && step.submit === true ? " + Enter" : ""}`];
+  if (act === "type") {
+    const sel = sStr(step && step.selector, 24);
+    let txt = sStr(step && step.text, 20);
+    let pool = "";
+    if (step && Array.isArray(step.texts)) {
+      const valid = step.texts.filter((x) => typeof x === "string" && x.trim());
+      txt = valid.length ? valid[0].slice(0, 20) : "";
+      if (valid.length > 1) pool = ` (+${valid.length - 1})`;
+    }
+    return ["type", `${sel} "${txt}"${pool}${step && step.submit === true ? " + Enter" : ""}`.trim()];
+  }
   if (act === "keyboard_type") return ["keyboard", `"${sStr(step && step.text, 24)}"`];
   if (act === "click" || act === "wait_for") return [act, sStr(step && step.selector, 34)];
   if (act === "press") {
@@ -2368,15 +2398,19 @@ function openWarmingModal() {
   modal((close) => {
     closeModalFn = close;
     const initialTargets = new Set(selected.size ? [...selected] : profiles.slice(0, 1).map((p) => p.name));
+    const BUILTIN_SCENARIOS = ["youtube_trust", "social_news", "gmail_trust", "ecommerce_cookie"];
     let scenarios = [
       { id: "youtube_trust", recommended_minutes: 4, default_urls: ["https://www.youtube.com", "https://www.google.com/search?q=technology+trends", "https://news.google.com"], sample_steps: [] },
-      { id: "social_news", recommended_minutes: 4, default_urls: ["https://www.wikipedia.org", "https://www.reddit.com", "https://news.ycombinator.com"], sample_steps: [] },
+      { id: "social_news", recommended_minutes: 5, default_urls: ["https://www.google.com", "https://www.wikipedia.org", "https://news.ycombinator.com"], sample_steps: [] },
+      { id: "gmail_trust", recommended_minutes: 4, default_urls: ["https://mail.google.com/mail/u/0/#inbox"], sample_steps: [] },
       { id: "ecommerce_cookie", recommended_minutes: 4, default_urls: ["https://www.amazon.com", "https://www.ebay.com", "https://www.etsy.com"], sample_steps: [] },
       { id: "custom", recommended_minutes: 3, default_urls: [], sample_steps: [] },
       { id: "script", recommended_minutes: 3, default_urls: [], sample_steps: [] },
     ];
     let catalogState = "loading";
     let catalogError = "";
+    let hostSupportsHeaded = null;
+    let submitting = false;
     let tasks = [];
     let currentPreset = "youtube_trust";
     const drafts = { url: "", script: "" };
@@ -2420,6 +2454,9 @@ function openWarmingModal() {
     const durInput = h("input", { id: "warm-duration", type: "text", value: "4", style: "width:96px" });
     const schedInput = h("input", { id: "warm-schedule", type: "text", placeholder: "09:30", style: "width:140px" });
     const repeatCheck = h("input", { id: "warm-repeat", type: "checkbox", checked: true });
+    const headlessCheck = h("input", { id: "warm-headless", type: "checkbox", checked: false });
+    const headlessLabelSpan = h("span", {}, t("warm_headless"));
+    const headlessWrap = h("label", { class: "check", style: "margin-bottom:8px", title: t("warm_headless_hint") }, headlessCheck, headlessLabelSpan);
     const msgBox = h("div", { id: "warm-msg", class: "msg hidden", role: "alert" });
     const saveBtn = h("button", { type: "button", id: "warm-save-btn", class: "btn btn-line" }, t("warm_save"));
     const runBtn = h("button", { type: "button", id: "warm-run-btn", class: "btn btn-act" }, icon("play", true), t("warm_run"));
@@ -2428,19 +2465,39 @@ function openWarmingModal() {
     const tasksBox = h("div", { id: "warm-tasks", class: "warm-tasks" }, queueErrBox, tasksList);
 
     const isValidStepObj = (st) => Boolean(st && typeof st === "object" && !Array.isArray(st) && typeof st.action === "string" && st.action.trim());
-    const isValidCatalog = (list) => Array.isArray(list) && ["youtube_trust", "social_news", "ecommerce_cookie", "script"].every((reqId) => {
+    const isValidCatalog = (list) => Array.isArray(list) && [...BUILTIN_SCENARIOS, "script"].every((reqId) => {
       const entry = list.find((item) => item && item.id === reqId);
       return Boolean(entry && Array.isArray(entry.sample_steps) && entry.sample_steps.length > 0 && entry.sample_steps.every(isValidStepObj));
     });
-    const tplButtons = ["youtube_trust", "social_news", "ecommerce_cookie"].map((tid) =>
+    const tplButtons = BUILTIN_SCENARIOS.map((tid) =>
       h("button", { type: "button", class: "btn btn-line", style: "height:28px;padding:0 10px;font-size:12px", "data-warm-tpl": tid, disabled: true, onclick: () => loadTemplate(tid) }, t(`warm_card_${tid}_title`))
     );
     const sampleBtn = h("button", { type: "button", id: "warm-sample-btn", class: "btn btn-ghost", style: "height:28px;padding:0 10px;font-size:12px", disabled: true, onclick: () => loadTemplate("script") }, t("warm_sample"));
+    const isBlankBuiltinBlocked = () => {
+      if (!BUILTIN_SCENARIOS.includes(currentPreset)) return false;
+      const parsedUrls = parseWarmingUrlsWeb(payloadArea.value);
+      return parsedUrls.tokens.length === 0 && catalogState !== "ready";
+    };
+    const syncHeadlessControl = () => {
+      if (hostSupportsHeaded === false) {
+        headlessCheck.checked = true;
+        headlessCheck.disabled = true;
+        headlessLabelSpan.textContent = t("warm_headless_forced");
+      } else {
+        headlessCheck.disabled = false;
+        headlessLabelSpan.textContent = t("warm_headless");
+      }
+    };
     const syncCatalogControls = () => {
       const notReady = catalogState !== "ready";
       customizeBtn.disabled = notReady;
       sampleBtn.disabled = notReady;
       for (const b of tplButtons) b.disabled = notReady;
+      const blocked = isBlankBuiltinBlocked();
+      if (!submitting) {
+        saveBtn.disabled = blocked;
+        runBtn.disabled = blocked;
+      }
     };
 
     const showMsg = (cls, txt) => {
@@ -2510,11 +2567,12 @@ function openWarmingModal() {
     };
     const renderSteps = () => {
       const sc = scenarios.find((s) => s.id === currentPreset);
-      const isBuiltin = ["youtube_trust", "social_news", "ecommerce_cookie"].includes(currentPreset);
+      const isBuiltin = BUILTIN_SCENARIOS.includes(currentPreset);
       let steps = [];
       let editable = false;
       let err = null;
       let invalidUrls = 0;
+      let usingOverride = false;
       if (currentPreset === "script") {
         editable = true;
         [steps, err] = parseDraftSteps();
@@ -2522,19 +2580,26 @@ function openWarmingModal() {
       } else {
         const parsedUrls = parseWarmingUrlsWeb(payloadArea.value);
         invalidUrls = parsedUrls.invalidCount;
-        if (parsedUrls.tokens.length > 0 && !parsedUrls.valid.length) {
+        usingOverride = parsedUrls.tokens.length > 0;
+        if (usingOverride && !parsedUrls.valid.length) {
           steps = [];
           err = t("warm_override_invalid");
           stepsTitle.textContent = t(isBuiltin ? "warm_steps_url_override_title" : "warm_steps_url_title");
+        } else if (isBuiltin && !usingOverride) {
+          stepsTitle.textContent = t("warm_steps_title");
+          if (catalogState === "ready" && sc && Array.isArray(sc.sample_steps) && sc.sample_steps.length) {
+            steps = sc.sample_steps;
+          } else {
+            steps = [];
+          }
         } else {
-          const usingOverride = parsedUrls.valid.length > 0;
           const defaultUrls = (sc && Array.isArray(sc.default_urls)) ? sc.default_urls : [];
-          const effectiveUrls = usingOverride ? parsedUrls.valid : defaultUrls;
+          const effectiveUrls = parsedUrls.valid.length > 0 ? parsedUrls.valid : defaultUrls;
           steps = effectiveUrls.flatMap((u) => [
             { action: "navigate", url: u },
             { action: "scroll", delta_y: 480 },
           ]);
-          stepsTitle.textContent = t(isBuiltin && usingOverride ? "warm_steps_url_override_title" : "warm_steps_url_title");
+          stepsTitle.textContent = t(isBuiltin && parsedUrls.valid.length > 0 ? "warm_steps_url_override_title" : "warm_steps_url_title");
         }
       }
       const noteChildren = [];
@@ -2546,7 +2611,7 @@ function openWarmingModal() {
           h("span", { style: "color:var(--err)" }, t("warm_catalog_unavailable", { e: catalogError || "Error" })),
           h("button", { type: "button", id: "warm-retry-btn", class: "btn btn-line", style: "height:28px;padding:0 12px;font-size:12px", onclick: () => fetchWarmingState({ initial: true, force: true }) }, t("warm_catalog_retry"))
         );
-      } else if (isBuiltin && !err && invalidUrls === 0) {
+      } else if (isBuiltin && !err && !usingOverride) {
         if (catalogState === "ready" && sc && sc.sample_steps.length) {
           noteChildren.push(h("span", {}, t("warm_url_template_note", { n: sc.sample_steps.length })));
         } else {
@@ -2560,9 +2625,21 @@ function openWarmingModal() {
         modeNote.className = "hidden";
         modeNote.replaceChildren();
       }
-      stepsCountBadge.textContent = t("warm_steps_count", { n: steps.length });
+      const blankBuiltinNotReady = isBuiltin && !usingOverride && catalogState !== "ready";
+      stepsCountBadge.textContent = blankBuiltinNotReady
+        ? (catalogState === "error" ? "—" : "...")
+        : t("warm_steps_count", { n: steps.length });
+      syncCatalogControls();
       if (err) {
         stepsList.replaceChildren(h("div", { class: "msg err", style: "margin:4px 0" }, err));
+        return;
+      }
+      if (blankBuiltinNotReady) {
+        stepsList.replaceChildren(
+          catalogState === "error"
+            ? h("div", { class: "msg err", style: "margin:4px 0" }, t("warm_catalog_unavailable", { e: catalogError || "Error" }))
+            : h("div", { class: "muted", style: "padding:8px 0;font-size:12px" }, t("warm_catalog_loading"))
+        );
         return;
       }
       if (!steps.length) {
@@ -2606,8 +2683,10 @@ function openWarmingModal() {
       scenariosGrid.replaceChildren(
         ...scenarios.map((s) => {
           const isAct = s.id === currentPreset;
-          const cnt = ["youtube_trust", "social_news", "ecommerce_cookie"].includes(s.id)
-            ? t("warm_sites_count", { n: (s.default_urls || []).length })
+          const cnt = BUILTIN_SCENARIOS.includes(s.id)
+            ? (Array.isArray(s.sample_steps) && s.sample_steps.length
+                ? t("warm_steps_count", { n: s.sample_steps.length })
+                : t("warm_sites_count", { n: (s.default_urls || []).length }))
             : (s.id === "custom" ? "URL" : "JSON");
           return h("button", {
             type: "button",
@@ -2625,7 +2704,7 @@ function openWarmingModal() {
     const selectScenario = (id, updateDur = false) => {
       currentPreset = id;
       const isScript = id === "script";
-      const isBuiltin = ["youtube_trust", "social_news", "ecommerce_cookie"].includes(id);
+      const isBuiltin = BUILTIN_SCENARIOS.includes(id);
       const nextMode = isScript ? "script" : "url";
       if (nextMode !== draftMode) {
         drafts[draftMode] = payloadArea.value;
@@ -2732,7 +2811,7 @@ function openWarmingModal() {
               await api("DELETE", `/warming/tasks/${enc(tk.id)}`);
               mutationGen += 1;
               tasks = tasks.filter((x) => x.id !== tk.id);
-              lastTasksKey = JSON.stringify(tasks);
+              lastTasksKey = `${String(hostSupportsHeaded)}:${JSON.stringify(tasks)}`;
               renderTasks();
               if (inFlight) void fetchWarmingState({ force: true });
               else await fetchWarmingState({ force: true });
@@ -2745,7 +2824,14 @@ function openWarmingModal() {
                 h("span", {}, tk.preset === "script" ? `script (${(tk.script_steps || []).length} steps)` : tk.preset),
                 h("span", {}, `${(tk.profile_names || []).length} profiles`),
                 h("span", {}, `${tk.duration_minutes}m`),
-                h("span", {}, tk.schedule_time || t("warm_manual"))
+                h("span", {}, tk.schedule_time || t("warm_manual")),
+                tk.headless === true
+                  ? h("span", { style: "color:var(--accent);font-weight:600", title: t("warm_headless_hint") }, t("warm_headless_badge"))
+                  : (tk.headless === false
+                      ? (hostSupportsHeaded === false
+                          ? h("span", { style: "color:var(--accent);font-weight:600", title: t("warm_headless_no_display_hint") }, t("warm_headless_no_display_badge"))
+                          : h("span", { title: t("warm_headless_hint") }, t(hostSupportsHeaded === true ? "warm_visible_badge" : "warm_visible_req_badge")))
+                      : null)
               )
             ),
             h("div", { class: "warm-task-acts" },
@@ -2796,6 +2882,12 @@ function openWarmingModal() {
           const res = await api("GET", "/warming/tasks", undefined, { signal: ac.signal });
           if (closed || seq !== tasksSeq) return;
           setQueueError("");
+          let capChanged = false;
+          if (typeof res.host_supports_headed === "boolean") {
+            capChanged = hostSupportsHeaded !== res.host_supports_headed;
+            hostSupportsHeaded = res.host_supports_headed;
+            syncHeadlessControl();
+          }
           if (initial || catalogState !== "ready") {
             if (isValidCatalog(res.scenarios)) {
               scenarios = res.scenarios;
@@ -2811,12 +2903,15 @@ function openWarmingModal() {
           }
           if (startMutationGen !== mutationGen) {
             pendingRefresh = true;
+            if (capChanged) renderTasks();
           } else {
             const nextTasks = Array.isArray(res.tasks) ? res.tasks : [];
-            const nextKey = JSON.stringify(nextTasks);
+            const nextKey = `${String(hostSupportsHeaded)}:${JSON.stringify(nextTasks)}`;
             if (nextKey !== lastTasksKey) {
               lastTasksKey = nextKey;
               tasks = nextTasks;
+              renderTasks();
+            } else if (capChanged) {
               renderTasks();
             }
           }
@@ -2857,6 +2952,9 @@ function openWarmingModal() {
     };
     const submitTask = async (runNow) => {
       showMsg("", "");
+      if (isBlankBuiltinBlocked()) {
+        return showMsg("err", catalogState === "error" ? t("warm_catalog_unavailable", { e: catalogError || "Error" }) : t("warm_catalog_loading"));
+      }
       const targetList = [...initialTargets];
       if (!nameInput.value.trim() || !targetList.length) {
         return showMsg("err", t("warm_invalid"));
@@ -2870,6 +2968,7 @@ function openWarmingModal() {
         schedule_time: runNow ? "" : schedInput.value.trim(),
         repeat_daily: Boolean(repeatCheck.checked),
         enabled: true,
+        headless: hostSupportsHeaded === false ? true : Boolean(headlessCheck.checked),
       };
       if (currentPreset === "script") {
         const [steps, err] = parseDraftSteps();
@@ -2883,6 +2982,7 @@ function openWarmingModal() {
         body.custom_urls = parsedUrls.valid;
       }
       let createdOk = false;
+      submitting = true;
       saveBtn.disabled = runBtn.disabled = true;
       try {
         const created = await api("POST", "/warming/tasks", body);
@@ -2890,7 +2990,7 @@ function openWarmingModal() {
         createdOk = true;
         if (created && created.id && !tasks.some((x) => x.id === created.id)) {
           tasks = [...tasks, created];
-          lastTasksKey = JSON.stringify(tasks);
+          lastTasksKey = `${String(hostSupportsHeaded)}:${JSON.stringify(tasks)}`;
           renderTasks();
         }
         if (runNow && created && created.id) {
@@ -2904,7 +3004,8 @@ function openWarmingModal() {
       } catch (e) {
         showMsg("err", e.message);
       } finally {
-        saveBtn.disabled = runBtn.disabled = false;
+        submitting = false;
+        syncCatalogControls();
       }
       if (createdOk) void fetchWarmingState({ force: true });
     };
@@ -2930,7 +3031,8 @@ function openWarmingModal() {
           h("div", { class: "warm-sched-inputs" },
             h("div", { class: "field", style: "margin-top:0" }, h("label", { for: "warm-duration" }, t("warm_duration")), durInput),
             h("div", { class: "field", style: "margin-top:0" }, h("label", { for: "warm-schedule" }, t("warm_schedule")), schedInput),
-            h("label", { class: "check", style: "margin-bottom:8px" }, repeatCheck, h("span", {}, t("warm_repeat")))
+            h("label", { class: "check", style: "margin-bottom:8px" }, repeatCheck, h("span", {}, t("warm_repeat"))),
+            headlessWrap
           ),
           h("div", { class: "inline-btns", style: "margin-top:0" }, saveBtn, runBtn)
         ),
