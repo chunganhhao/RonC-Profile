@@ -153,6 +153,8 @@ class App:
             on_toggle_running_filter=self._toggle_running_filter,
             initial_page_size=self.state.items_per_page,
         )
+        if self.state.search_query:
+            self.refs.search_field.value = self.state.search_query
         self._filter_column = ft.Column(spacing=2)
         self._header_slot = ft.Container()
         self._total_count_text = ft.Text(
@@ -399,6 +401,16 @@ class App:
             extension_count=self._sidebar_extension_badge,
             warming_task_count=self._sidebar_warming_badge,
         )
+        initial_table_width = self._profile_table_width
+        if initial_table_width is None and self.page is not None:
+            win_w = getattr(self.page, "width", None) or getattr(
+                getattr(self.page, "window", None), "width", None
+            )
+            if isinstance(win_w, (int, float)) and win_w > 320:
+                initial_table_width = max(600.0, float(win_w) - 252 - 48 - 2)
+                self._profile_table_width = initial_table_width
+        if initial_table_width is not None:
+            layout_bulk_bar(r.bulk_bar, initial_table_width)
         content = build_content_area(
             r.content_subtitle,
             r.profile_list_area,
@@ -422,7 +434,7 @@ class App:
             last_btn=r.last_btn,
             page_size_dropdown=r.page_size_dropdown,
             running_filter_btn=r.running_filter_btn,
-            initial_table_width=self._profile_table_width,
+            initial_table_width=initial_table_width,
             on_table_resize=self._remember_table_width,
         )
         return ft.Row(
@@ -455,14 +467,21 @@ class App:
         if seq == getattr(self, "_search_seq", 0) and self.page:
             self._refresh_profiles()
 
-    def _on_filter(self, fid: str) -> None:
+    def _on_filter(self, fid: str, *, clear_search: bool = False) -> None:
         self.filter = fid
         self.state.current_page = 1
+        # Primary sidebar filters clear stale search so the table matches the badge count;
+        # the toolbar Running toggle keeps the active search query (parity with Web).
+        if clear_search:
+            if self.state.search_query:
+                self.state.search_query = ""
+            if self.refs and self.refs.search_field is not None and self.refs.search_field.value:
+                self.refs.search_field.value = ""
         self._search_seq = getattr(self, "_search_seq", 0) + 1
         self._refresh_profiles()
 
     def _toggle_running_filter(self) -> None:
-        self._on_filter("all" if self.filter == "running" else "running")
+        self._on_filter("all" if self.filter == "running" else "running", clear_search=False)
 
     def _on_change_page_size(self, size: int) -> None:
         if size not in PAGE_SIZE_OPTIONS or size == self.state.items_per_page:
@@ -492,11 +511,7 @@ class App:
         all_profiles = self.pm.list_profiles() if all_profiles is None else list(all_profiles)
         if self.filter.startswith("group:"):
             target_group = self.filter.split(":", 1)[1]
-            all_profiles = [
-                p
-                for p in all_profiles
-                if target_group in (p.tags or ([p.group] if p.group else []))
-            ]
+            all_profiles = [p for p in all_profiles if target_group in p.effective_tags]
         else:
             test = self._filter_tests().get(self.filter, lambda p: True)
             all_profiles = [p for p in all_profiles if test(p)]
@@ -506,7 +521,7 @@ class App:
                 for p in all_profiles
                 if q in p.name.lower()
                 or q in (p.proxy or "").lower()
-                or any(q in tag.lower() for tag in (p.tags or ([p.group] if p.group else [])))
+                or any(q in tag.lower() for tag in p.effective_tags)
                 or q in (p.account_uid or "").lower()
                 or q in p.effective_recovery_email.lower()
                 or q in (p.notes or "").lower()
@@ -591,13 +606,7 @@ class App:
             field,
             save,
             row_index=row_index,
-            known_tags=sorted(
-                {
-                    tag
-                    for p in self.pm.list_profiles()
-                    for tag in (p.tags or ([p.group] if p.group else []))
-                }
-            ),
+            known_tags=sorted({tag for p in self.pm.list_profiles() for tag in p.effective_tags}),
             on_copy_code=copy_code,
         )
 
@@ -693,8 +702,12 @@ class App:
         tests = self._filter_tests()
         group_counts: dict[str, int] = {}
         for p in everything:
-            for tag in p.tags or ([p.group] if p.group else []):
+            for tag in p.effective_tags:
                 group_counts[tag] = group_counts.get(tag, 0) + 1
+        if r.search_field is not None and isinstance(
+            getattr(r.search_field, "suffix", None), ft.Control
+        ):
+            r.search_field.suffix.visible = bool(self.state.search_query)
         filter_counts = {fid: sum(1 for p in everything if test(p)) for fid, test in tests.items()}
         filter_key = (
             self.filter,
@@ -706,7 +719,7 @@ class App:
             self._filter_column.controls = build_filter_buttons(
                 self.filter,
                 filter_counts,
-                self._on_filter,
+                lambda fid: self._on_filter(fid, clear_search=True),
                 group_counts=group_counts,
             )
 

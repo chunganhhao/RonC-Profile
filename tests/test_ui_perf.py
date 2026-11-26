@@ -523,3 +523,165 @@ def test_reconcile_loop_dispatches_extensions_profiles_and_toast_paths(tmp_path,
     toast_mock.assert_called_once()
     prof_mock.assert_not_called()
     ext_mock.assert_not_called()
+
+
+def test_sidebar_filter_clears_stale_search_layout_gutter_and_initial_table_width(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    monkeypatch.setattr(app_config, "EXTENSIONS_FILE", str(tmp_path / "extensions.json"))
+    monkeypatch.setattr(app_config, "EXTENSIONS_DIR", str(tmp_path / "extensions"))
+    monkeypatch.setattr(app_config, "PREFERENCES_FILE", str(tmp_path / "preferences.json"))
+
+    container = Container()
+    pm = container.profile_manager
+    assert pm.add_profile("Alpha Gmail", "", "macos", engine="chrome", tags=["Gmail"])
+    assert pm.add_profile("Beta Tag", "", "macos", engine="chrome", tags=["Gemini Xiaomi 3m"])
+    assert pm.add_profile("Gamma Legacy", "", "macos", engine="chrome", group="LegacyFolder")
+    # Simulate legacy JSON profile that only populated `group` without `tags`.
+    pm.profiles["Gamma Legacy"].tags = []
+
+    app = App(container)
+    app.preferences_file = str(tmp_path / "preferences.json")
+    page = SimpleNamespace(
+        title="",
+        window=ft.Window(width=1440, height=880, min_width=0, min_height=0),
+        padding=0,
+        spacing=0,
+        fonts={},
+        theme_mode=None,
+        bgcolor="",
+        theme=None,
+        services=[],
+        controls=[],
+        add=lambda ctrl: page.controls.append(ctrl),
+        update=lambda: None,
+    )
+    app.page = page
+    app._file_picker = None
+    app._build_ui()
+
+    root = page.controls[0]
+    sidebar = root.controls[0]
+    assert sidebar.width == 252
+    controls_by_key = {getattr(c, "key", None): c for c in _walk(root)}
+
+    # Initial table width is seeded from page window width before any on_size_change fires,
+    # and persisted on app._profile_table_width so initial rows match the exact table width.
+    table = controls_by_key["profiles_table_container"]
+    assert table.width >= 600
+    assert app._profile_table_width == table.width
+    assert all(
+        isinstance(row, ProfileRow) and isinstance(row.content, ft.Column)
+        for row in app.refs.profile_list_area.controls
+    )
+
+    # Sidebar nav list reserves a dedicated right gutter so the scrollbar cannot overlap counts.
+    nav_scroll = controls_by_key["sidebar_nav_scroll"]
+    assert isinstance(nav_scroll, ft.ListView)
+    assert nav_scroll.padding.right >= 16
+
+    # Section headers use sentence/title case (not SHOUTING uppercase), and filter rows truncate safely.
+    tag_filter_btn = controls_by_key["filter_group:Gemini Xiaomi 3m"]
+    assert tag_filter_btn.tooltip == "Gemini Xiaomi 3m (1)"
+    label_row = tag_filter_btn.content.controls[0]
+    assert label_row.expand is True
+    label_text = next(c for c in label_row.controls if isinstance(c, ft.Text))
+    assert label_text.expand is True
+    assert label_text.overflow == ft.TextOverflow.ELLIPSIS
+    section_titles = [
+        c.content.value
+        for c in app._filter_column.controls
+        if isinstance(c, ft.Container)
+        and isinstance(c.content, ft.Text)
+        and getattr(c, "on_click", None) is None
+    ]
+    assert section_titles and all(not t.isupper() for t in section_titles)
+
+    # Stale search hides non-matching rows and shows the clear-search button.
+    app.refs.search_field.value = "alpha"
+    app._on_search("alpha")
+    assert len(app.refs.profile_list_area.controls) == 1
+    assert app.refs.search_field.suffix.visible is True
+
+    # Theme switch rebuild preserves visible search_field.value in sync with search_query & suffix.
+    from src.ui.theme.colors import current_theme_mode, set_theme_mode
+
+    prev_theme = current_theme_mode()
+    try:
+        app._set_theme("light" if prev_theme == "dark" else "dark")
+        assert app.state.search_query == "alpha"
+        assert app.refs.search_field.value == "alpha"
+        assert app.refs.search_field.suffix.visible is True
+        assert len(app.refs.profile_list_area.controls) == 1
+    finally:
+        set_theme_mode(prev_theme)
+
+    # Mark Beta Tag as running to verify toolbar vs sidebar Running filter parity with Web.
+    monkeypatch.setattr(app.bl, "running_profile_names", lambda: {"Beta Tag"})
+    monkeypatch.setattr(app.bl, "is_running", lambda name: name == "Beta Tag")
+
+    # Toolbar Running toggle preserves active search query and combines it with Running.
+    app.refs.running_filter_btn.on_click(None)
+    assert app.filter == "running"
+    assert app.state.search_query == "alpha"
+    assert app.refs.search_field.value == "alpha"
+    assert app.refs.search_field.suffix.visible is True
+    assert not any(isinstance(c, ProfileRow) for c in app.refs.profile_list_area.controls)
+
+    # Toggling toolbar Running off returns to "all" while still preserving the active search.
+    app.refs.running_filter_btn.on_click(None)
+    assert app.filter == "all"
+    assert app.state.search_query == "alpha"
+    assert app.refs.search_field.value == "alpha"
+    assert len(app.refs.profile_list_area.controls) == 1
+    assert isinstance(app.refs.profile_list_area.controls[0], ProfileRow)
+
+    # Primary sidebar Running filter clears stale search so running accounts appear.
+    sidebar_running_btn = next(
+        c for c in _walk(app._filter_column) if getattr(c, "key", None) == "filter_running"
+    )
+    sidebar_running_btn.on_click(None)
+    assert app.filter == "running"
+    assert app.state.search_query == ""
+    assert app.refs.search_field.value == ""
+    assert app.refs.search_field.suffix.visible is False
+    assert len(app.refs.profile_list_area.controls) == 1
+    assert isinstance(app.refs.profile_list_area.controls[0], ProfileRow)
+
+    # Clicking a sidebar tag filter clears stale search so all accounts in that tag appear.
+    app.refs.search_field.value = "alpha"
+    app._on_search("alpha")
+    assert app.refs.search_field.suffix.visible is True
+    rebuilt_tag_btn = next(
+        c
+        for c in _walk(app._filter_column)
+        if getattr(c, "key", None) == "filter_group:Gemini Xiaomi 3m"
+    )
+    rebuilt_tag_btn.on_click(None)
+    assert app.filter == "group:Gemini Xiaomi 3m"
+    assert app.state.search_query == ""
+    assert app.refs.search_field.value == ""
+    assert app.refs.search_field.suffix.visible is False
+    assert len(app.refs.profile_list_area.controls) == 1
+
+    # Legacy group-only profiles are matched consistently via effective_tags.
+    app._on_filter("group:LegacyFolder")
+    assert len(app.refs.profile_list_area.controls) == 1
+
+    # Searching AFTER selecting a tag still narrows inside that tag; clicking Clear restores it.
+    app._on_filter("group:Gmail")
+    assert len(app.refs.profile_list_area.controls) == 1
+    app.refs.search_field.value = "nomatch"
+    app._on_search("nomatch")
+    assert len(app.refs.profile_list_area.controls) == 1  # empty state container
+    assert app.refs.search_field.suffix.visible is True
+    app.refs.search_field.suffix.on_click(None)
+    assert app.state.search_query == ""
+    assert app.refs.search_field.value == ""
+    assert app.refs.search_field.suffix.visible is False
+    assert len(app.refs.profile_list_area.controls) == 1
+    assert isinstance(app.refs.profile_list_area.controls[0], ProfileRow)

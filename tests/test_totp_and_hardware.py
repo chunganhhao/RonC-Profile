@@ -1158,3 +1158,1302 @@ def test_chrome_persona_preserves_identity_on_metadata_update(tmp_path):
     assert updated["platform_version"] == "10.0.0", "Platform version must be preserved"
     assert updated["timezone"] == "Europe/London", "Timezone must be preserved"
     assert updated["locale"] == "en-GB", "Locale must be preserved"
+
+
+def test_quick_paste_flushes_all_fields_in_one_click_on_real_flet_session(tmp_path, monkeypatch):
+    """Quick Paste Parse must flush every mutated field + live 2FA OTP in a single click."""
+    import asyncio
+    from unittest.mock import patch
+
+    import flet as ft
+    import msgpack
+    from flet.controls.context import _context_page
+    from flet.messaging.connection import Connection
+    from flet.messaging.protocol import configure_encode_object_for_msgpack
+    from flet.messaging.session import Session
+    from flet.pubsub.pubsub_hub import PubSubHub
+
+    from src.core import config as app_config
+    from src.core.strings import get_string
+    from src.ui.dialogs.profile import open_profile_dialog
+
+    monkeypatch.setattr(app_config, "EXTENSIONS_FILE", str(tmp_path / "extensions.json"))
+    monkeypatch.setattr(app_config, "EXTENSIONS_DIR", str(tmp_path / "extensions"))
+    enc = configure_encode_object_for_msgpack(ft.BaseControl)
+
+    def walk(ctrl):
+        yield ctrl
+        for attr in ("content", "controls", "actions", "title"):
+            children = getattr(ctrl, attr, None)
+            for child in children if isinstance(children, list) else [children]:
+                if isinstance(child, ft.Control):
+                    yield from walk(child)
+
+    class CaptureConnection(Connection):
+        def __init__(self, loop):
+            super().__init__()
+            self.loop = loop
+            self.pubsubhub = PubSubHub(loop=loop)
+            self.sent = []
+
+        def send_message(self, message):
+            # Real Flet transports msgpack-encode every outbound patch, which commits
+            # control `_prev_*` snapshots for subsequent ObjectPatch diffs.
+            packed = msgpack.packb(message.body.patch, default=enc)
+            self.sent.append(msgpack.unpackb(packed, strict_map_key=False))
+
+    async def scenario():
+        conn = CaptureConnection(asyncio.get_running_loop())
+        session = Session(conn)
+        page = session.page
+        msgpack.packb(session.get_page_patch(), default=enc)
+        token = _context_page.set(page)
+        dialog = None
+        try:
+            with patch("src.utils.totp.time.time", return_value=0):
+                open_profile_dialog(page, None, lambda *a, **kw: None)
+                dialog = page._dialogs.controls[-1]
+                page.update()
+                conn.sent.clear()
+
+                controls = list(walk(dialog))
+                paste_field = next(
+                    c
+                    for c in controls
+                    if isinstance(c, ft.TextField) and c.hint_text == "uid|password|2FA_SECRET|note"
+                )
+                paste_btn = next(
+                    c
+                    for c in controls
+                    if isinstance(c, ft.OutlinedButton)
+                    and c.on_click
+                    and c.on_click.__name__ == "_on_quick_paste"
+                )
+                fields = [c for c in controls if isinstance(c, ft.TextField)]
+                name_field = next(
+                    c for c in fields if c.hint_text == get_string("enter_profile_name")
+                )
+                uid_field = next(c for c in fields if c.hint_text == "user@gmail.com / 100089...")
+                pass_field = next(c for c in fields if c.password is True)
+                two_fa_field = next(c for c in fields if c.hint_text == "JBSWY3DPEHPK3PXP")
+                rec_field = next(
+                    c for c in fields if c.hint_text == get_string("recovery_email_hint")
+                )
+                backup_field = next(
+                    c for c in fields if getattr(c, "key", None) == "dialog_backup_codes_field"
+                )
+                notes_field = next(c for c in fields if c.hint_text == get_string("notes_hint"))
+                totp_preview = next(
+                    c
+                    for c in controls
+                    if isinstance(c, ft.Text) and getattr(c, "_refresh_hook", None) is not None
+                )
+
+                # Simulate client syncing pasted text into Quick Paste field, then 1 click on Parse.
+                paste_field.value = (
+                    "acct1@example.test | Pass123! | JBSW Y3DP EHPK 3PXP | "
+                    "backup@example.test extra note"
+                )
+                page.update()
+                conn.sent.clear()
+
+                await session.dispatch_event(paste_btn._i, "click", None)
+
+                assert name_field.value == "acct1"
+                assert uid_field.value == "acct1@example.test"
+                assert pass_field.value == "Pass123!"
+                assert two_fa_field.value == "JBSWY3DPEHPK3PXP"
+                assert rec_field.value == "backup@example.test"
+                assert notes_field.value == "extra note"
+                assert paste_field.value == ""
+                assert totp_preview.visible is True
+                assert "282760" in totp_preview.value
+
+                def patched_values_by_control_id(patches):
+                    """Resolve Flet 1.x wire patch ops to {control._i: {prop: value}}."""
+
+                    def map_tree(node_spec, obj, nodes):
+                        node_id = node_spec[0]
+                        nodes[node_id] = obj
+                        if len(node_spec) > 1 and isinstance(node_spec[1], dict):
+                            for key, child_spec in node_spec[1].items():
+                                child = (
+                                    obj[key] if isinstance(key, int) else getattr(obj, key, None)
+                                )
+                                if child is not None:
+                                    map_tree(child_spec, child, nodes)
+
+                    by_id = {}
+                    for patch_ops in patches:
+                        if not patch_ops:
+                            continue
+                        nodes = {}
+                        map_tree(patch_ops[0], page, nodes)
+                        for op in patch_ops[1:]:
+                            if isinstance(op, list) and len(op) >= 4 and op[0] == 0:
+                                target = nodes.get(op[1])
+                                if isinstance(target, ft.BaseControl):
+                                    by_id.setdefault(target._i, {})[op[2]] = op[3]
+                    return by_id
+
+                # Wire proof: ALL mutated controls must be flushed per-field in Click 1.
+                patched = patched_values_by_control_id(conn.sent)
+                assert patched[name_field._i]["value"] == "acct1"
+                assert patched[uid_field._i]["value"] == "acct1@example.test"
+                assert patched[pass_field._i]["value"] == "Pass123!"
+                assert patched[two_fa_field._i]["value"] == "JBSWY3DPEHPK3PXP"
+                assert patched[rec_field._i]["value"] == "backup@example.test"
+                assert patched[notes_field._i]["value"] == "extra note"
+                assert patched[paste_field._i]["value"] == ""
+                assert patched[totp_preview._i]["visible"] is True
+                assert "282760" in patched[totp_preview._i]["value"]
+
+                # Click 2 on empty Quick Paste field must be a no-op with zero wire patches.
+                conn.sent.clear()
+                await session.dispatch_event(paste_btn._i, "click", None)
+                assert conn.sent == []
+
+                # Enter/submit event fallback with a new UID (no recovery) flushes UID + clears
+                # the previous account's recovery email and backup codes on the wire in one flush.
+                backup_field.value = "1111 0001\n1111 0002"
+                page.update()
+                conn.sent.clear()
+                paste_field.value = ""
+                await session.dispatch_event(
+                    paste_field._i,
+                    "submit",
+                    "acct2@example.test | Pass456! | JBSW Y3DP EHPK 3PXP",
+                )
+                assert uid_field.value == "acct2@example.test"
+                assert pass_field.value == "Pass456!"
+                assert two_fa_field.value == "JBSWY3DPEHPK3PXP"
+                assert rec_field.value == ""
+                assert backup_field.value == ""
+                patched_b = patched_values_by_control_id(conn.sent)
+                assert patched_b[uid_field._i]["value"] == "acct2@example.test"
+                assert patched_b[pass_field._i]["value"] == "Pass456!"
+                assert patched_b[rec_field._i]["value"] == ""
+                assert patched_b[backup_field._i]["value"] == ""
+        finally:
+            if dialog is not None:
+                await session.dispatch_event(dialog._i, "dismiss", None)
+            _context_page.reset(token)
+
+    asyncio.run(scenario())
+
+
+def test_quick_paste_recovery_email_cross_account_integrity(tmp_path, monkeypatch):
+    """Quick Paste must never carry Account A's recovery email onto Account B while preserving same-UID recovery."""
+    import flet as ft
+
+    from src.core import config as app_config
+    from src.models.profile import Profile
+    from src.ui.dialogs.profile import open_profile_dialog
+
+    monkeypatch.setattr(app_config, "EXTENSIONS_FILE", str(tmp_path / "extensions.json"))
+    monkeypatch.setattr(app_config, "EXTENSIONS_DIR", str(tmp_path / "extensions"))
+
+    class DummyPage:
+        dialog = None
+
+        def update(self):
+            pass
+
+        def show_dialog(self, dlg):
+            self.dialog = dlg
+
+        def pop_dialog(self):
+            pass
+
+    def walk(ctrl):
+        yield ctrl
+        for attr in ("content", "controls", "actions", "title"):
+            children = getattr(ctrl, attr, None)
+            for child in children if isinstance(children, list) else [children]:
+                if isinstance(child, ft.Control):
+                    yield from walk(child)
+
+    def run_paste_and_save(initial_profile, lines):
+        page = DummyPage()
+        saved = {}
+
+        def on_save(name, proxy, os_type, timezone, locale, engine, **kwargs):
+            saved.update({"name": name, "engine": engine, **kwargs})
+            return None
+
+        open_profile_dialog(page, None, on_save, initial_profile)
+        try:
+            controls = list(walk(page.dialog))
+            paste_field = next(
+                c
+                for c in controls
+                if isinstance(c, ft.TextField) and c.hint_text == "uid|password|2FA_SECRET|note"
+            )
+            paste_btn = next(
+                c
+                for c in controls
+                if isinstance(c, ft.OutlinedButton)
+                and c.on_click
+                and c.on_click.__name__ == "_on_quick_paste"
+            )
+            for line in lines:
+                paste_field.value = line
+                paste_btn.on_click(None)
+            page.dialog.actions[-1].content.on_click(None)
+            return saved
+        finally:
+            if page.dialog and page.dialog.on_dismiss:
+                page.dialog.on_dismiss(None)
+
+    # 1. Create A -> B where B supplies its own recovery email + note
+    saved_ab_rec = run_paste_and_save(
+        None,
+        [
+            "acctA@example.test | PassA | JBSW Y3DP EHPK 3PXP | recA@example.test noteA",
+            "acctB@example.test | PassB | JBSW Y3DP EHPK 3PXP | recB@example.test noteB",
+        ],
+    )
+    assert saved_ab_rec["account_uid"] == "acctB@example.test"
+    assert saved_ab_rec["account_password"] == "PassB"
+    assert saved_ab_rec["recovery_email"] == "recB@example.test"
+    assert saved_ab_rec["notes"] == "noteB"
+
+    # 2. Create A -> B where B has no recovery email (A's recovery must be cleared)
+    saved_ab_no_rec = run_paste_and_save(
+        None,
+        [
+            "acctA@example.test | PassA | JBSW Y3DP EHPK 3PXP | recA@example.test noteA",
+            "acctB@example.test | PassB | JBSW Y3DP EHPK 3PXP | only note",
+        ],
+    )
+    assert saved_ab_no_rec["account_uid"] == "acctB@example.test"
+    assert saved_ab_no_rec["recovery_email"] == ""
+    assert saved_ab_no_rec["notes"] == "only note"
+
+    # 3. Edit existing A -> paste B without recovery: keep Edit display name, clear A's recovery
+    existing_a = Profile(
+        "Pinned Display Name",
+        os_type="macos",
+        account_uid="acctA@example.test",
+        account_password="OldPass",
+        two_fa_secret="JBSWY3DPEHPK3PXP",
+        recovery_email="recA@example.test",
+        notes="Old note",
+    )
+    saved_edit_b = run_paste_and_save(
+        existing_a,
+        ["acctB@example.test | NewPassB | JBSW Y3DP EHPK 3PXP"],
+    )
+    assert saved_edit_b["name"] == "Pinned Display Name"
+    assert saved_edit_b["account_uid"] == "acctB@example.test"
+    assert saved_edit_b["account_password"] == "NewPassB"
+    assert saved_edit_b["recovery_email"] == ""
+    assert saved_edit_b["notes"] == ""
+
+    # 4. Edit existing A -> re-paste same UID (case-insensitive) without recovery: preserve manual recovery
+    saved_same_uid = run_paste_and_save(
+        existing_a,
+        ["ACCTA@example.test | RotatedPass | JBSW Y3DP EHPK 3PXP | refreshed"],
+    )
+    assert saved_same_uid["name"] == "Pinned Display Name"
+    assert saved_same_uid["account_uid"] == "ACCTA@example.test"
+    assert saved_same_uid["account_password"] == "RotatedPass"
+    assert saved_same_uid["recovery_email"] == "recA@example.test"
+    assert saved_same_uid["notes"] == "refreshed"
+
+    # 5. Edit existing A -> paste B with legacy recovery URL note (Engram #6995):
+    # clear A's recovery address, leave 2FA empty, preserve URL in notes.
+    saved_url_note = run_paste_and_save(
+        existing_a,
+        ["acctB@example.test|PassURL|https://example.test/recovery"],
+    )
+    assert saved_url_note["name"] == "Pinned Display Name"
+    assert saved_url_note["account_uid"] == "acctB@example.test"
+    assert saved_url_note["account_password"] == "PassURL"
+    assert saved_url_note["two_fa_secret"] == ""
+    assert saved_url_note["recovery_email"] == ""
+    assert saved_url_note["notes"] == "https://example.test/recovery"
+
+
+def test_quick_paste_r2_account_boundary_persists_recovery_and_backup_codes(tmp_path, monkeypatch):
+    """Persisted ProfileManager checks for Codex §9 R2.1 (UID edits/clears/blank-UID Parse) and R2.2 (backup codes)."""
+    import flet as ft
+
+    from src.core import config as app_config
+    from src.core.strings import get_string
+    from src.services.profile import manager as pm_mod
+    from src.ui.dialogs.profile import open_profile_dialog
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "EXTENSIONS_FILE", str(tmp_path / "extensions.json"))
+    monkeypatch.setattr(app_config, "EXTENSIONS_DIR", str(tmp_path / "extensions"))
+
+    class DummyPage:
+        dialog = None
+
+        def update(self):
+            pass
+
+        def show_dialog(self, dlg):
+            self.dialog = dlg
+
+        def pop_dialog(self):
+            pass
+
+    def walk(ctrl):
+        yield ctrl
+        for attr in ("content", "controls", "actions", "title"):
+            children = getattr(ctrl, attr, None)
+            for child in children if isinstance(children, list) else [children]:
+                if isinstance(child, ft.Control):
+                    yield from walk(child)
+
+    def open_fields(page, pm, profile_name=None):
+        captured = {}
+        profile = pm.profiles[profile_name] if profile_name else None
+
+        def on_save(name, proxy, os_type, timezone, locale, engine, **kwargs):
+            captured.update({"name": name, **kwargs})
+            if profile is None:
+                ok = pm.add_profile(
+                    name,
+                    proxy,
+                    os_type,
+                    timezone=timezone,
+                    locale=locale,
+                    engine=engine,
+                    **kwargs,
+                )
+            else:
+                ok = pm.update_profile(
+                    profile.name,
+                    name,
+                    proxy,
+                    os_type,
+                    new_timezone=timezone,
+                    new_locale=locale,
+                    **kwargs,
+                )
+            return None if ok else "save failed"
+
+        open_profile_dialog(page, None, on_save, profile)
+        controls = list(walk(page.dialog))
+        fields = [c for c in controls if isinstance(c, ft.TextField)]
+        refs = {
+            "paste": next(c for c in fields if c.hint_text == "uid|password|2FA_SECRET|note"),
+            "paste_btn": next(
+                c
+                for c in controls
+                if isinstance(c, ft.OutlinedButton)
+                and c.on_click
+                and c.on_click.__name__ == "_on_quick_paste"
+            ),
+            "uid": next(c for c in fields if c.hint_text == "user@gmail.com / 100089..."),
+            "rec": next(c for c in fields if c.hint_text == get_string("recovery_email_hint")),
+            "backup": next(
+                c for c in fields if getattr(c, "key", None) == "dialog_backup_codes_field"
+            ),
+            "save_btn": page.dialog.actions[-1].content,
+            "captured": captured,
+        }
+        return refs
+
+    def seed_profile(pm, name, *, backup_codes="1111 0001\n1111 0002"):
+        assert pm.add_profile(
+            name,
+            "",
+            "macos",
+            account_uid="acctA@example.test",
+            account_password="OldPassA",
+            two_fa_secret="JBSWY3DPEHPK3PXP",
+            recovery_email="recA@example.test",
+            backup_codes=backup_codes,
+            notes="Old note",
+        )
+
+    pm = ProfileManager()
+    seed_profile(pm, "EditClearUID")
+    seed_profile(pm, "EditTypeB")
+    seed_profile(pm, "EditBlankParse")
+    seed_profile(pm, "EditDirectClearCodes")
+    seed_profile(pm, "EditDirectNewCodes")
+    seed_profile(pm, "EditSameUID")
+    seed_profile(pm, "EditConcurrentCodes", backup_codes="")
+
+    # R2.1a: Edit A -> clear UID textbox -> Quick Paste B -> Save & reload
+    p = DummyPage()
+    r = open_fields(p, pm, "EditClearUID")
+    try:
+        r["uid"].value = ""
+        r["paste"].value = "acctB@example.test|PassB"
+        r["paste_btn"].on_click(None)
+        r["save_btn"].on_click(None)
+    finally:
+        p.dialog.on_dismiss(None)
+    reloaded = ProfileManager().profiles["EditClearUID"]
+    assert reloaded.account_uid == "acctB@example.test"
+    assert reloaded.recovery_email is None
+    assert reloaded.backup_codes is None
+
+    # R2.1b: Edit A -> manually type B into UID textbox -> Quick Paste B -> Save & reload
+    p = DummyPage()
+    r = open_fields(p, pm, "EditTypeB")
+    try:
+        r["uid"].value = "acctB@example.test"
+        r["paste"].value = "acctB@example.test|PassB"
+        r["paste_btn"].on_click(None)
+        r["save_btn"].on_click(None)
+    finally:
+        p.dialog.on_dismiss(None)
+    reloaded = ProfileManager().profiles["EditTypeB"]
+    assert reloaded.account_uid == "acctB@example.test"
+    assert reloaded.recovery_email is None
+    assert reloaded.backup_codes is None
+
+    # R2.1c: Edit A -> blank-UID Quick Paste `|temp-pass` -> Quick Paste B -> Save & reload
+    p = DummyPage()
+    r = open_fields(p, pm, "EditBlankParse")
+    try:
+        r["paste"].value = "|temp-pass"
+        r["paste_btn"].on_click(None)
+        r["paste"].value = "acctB@example.test|PassB"
+        r["paste_btn"].on_click(None)
+        r["save_btn"].on_click(None)
+    finally:
+        p.dialog.on_dismiss(None)
+    reloaded = ProfileManager().profiles["EditBlankParse"]
+    assert reloaded.account_uid == "acctB@example.test"
+    assert reloaded.recovery_email is None
+    assert reloaded.backup_codes is None
+
+    # R2.1d: Fresh Create with deliberately entered recovery -> Quick Paste A (no recovery) keeps it
+    p = DummyPage()
+    r = open_fields(p, pm, None)
+    try:
+        r["rec"].value = "deliberate@example.test"
+        r["paste"].value = "freshA@example.test|FreshPass"
+        r["paste_btn"].on_click(None)
+        r["save_btn"].on_click(None)
+    finally:
+        p.dialog.on_dismiss(None)
+    reloaded = ProfileManager().profiles["freshA"]
+    assert reloaded.account_uid == "freshA@example.test"
+    assert reloaded.recovery_email == "deliberate@example.test"
+
+    # R2.2a: Direct Edit A -> Quick Paste B (no new backup codes) clears A's stored backup codes
+    p = DummyPage()
+    r = open_fields(p, pm, "EditDirectClearCodes")
+    try:
+        r["paste"].value = "acctB@example.test|PassB|JBSWY3DPEHPK3PXP"
+        r["paste_btn"].on_click(None)
+        assert r["backup"].value == ""
+        r["save_btn"].on_click(None)
+    finally:
+        p.dialog.on_dismiss(None)
+    reloaded = ProfileManager().profiles["EditDirectClearCodes"]
+    assert reloaded.account_uid == "acctB@example.test"
+    assert reloaded.recovery_email is None
+    assert reloaded.backup_codes is None
+
+    # R2.2b: Direct Edit A -> Quick Paste B -> operator supplies B's replacement backup codes
+    p = DummyPage()
+    r = open_fields(p, pm, "EditDirectNewCodes")
+    try:
+        r["paste"].value = "acctB@example.test|PassB|JBSWY3DPEHPK3PXP"
+        r["paste_btn"].on_click(None)
+        assert r["backup"].value == ""
+        r["backup"].value = "2222 0001\n2222 0002"
+        r["save_btn"].on_click(None)
+    finally:
+        p.dialog.on_dismiss(None)
+    reloaded = ProfileManager().profiles["EditDirectNewCodes"]
+    assert reloaded.account_uid == "acctB@example.test"
+    assert reloaded.backup_codes == "2222 0001\n2222 0002"
+
+    # R2.2c: Same-UID Quick Paste keeps recovery & omits unchanged backup_codes (concurrent safety)
+    p = DummyPage()
+    r = open_fields(p, pm, "EditSameUID")
+    try:
+        r["paste"].value = "ACCTA@example.test|RotatedPass|JBSWY3DPEHPK3PXP"
+        r["paste_btn"].on_click(None)
+        r["save_btn"].on_click(None)
+    finally:
+        p.dialog.on_dismiss(None)
+    assert "backup_codes" not in r["captured"]
+    reloaded = ProfileManager().profiles["EditSameUID"]
+    assert reloaded.recovery_email == "recA@example.test"
+    assert reloaded.backup_codes == "1111 0001\n1111 0002"
+
+    # R2.2d: Concurrent inline backup codes written for A while Edit dialog is open ->
+    # Quick Paste A->B still sends an explicit clear so B never inherits A's concurrent codes.
+    p = DummyPage()
+    r = open_fields(p, pm, "EditConcurrentCodes")
+    try:
+        assert pm.update_profile(
+            "EditConcurrentCodes",
+            "EditConcurrentCodes",
+            "",
+            "macos",
+            backup_codes="9999 0001\n9999 0002",
+        )
+        r["paste"].value = "acctB@example.test|PassB"
+        r["paste_btn"].on_click(None)
+        r["save_btn"].on_click(None)
+    finally:
+        p.dialog.on_dismiss(None)
+    assert r["captured"].get("backup_codes") == ""
+    reloaded = ProfileManager().profiles["EditConcurrentCodes"]
+    assert reloaded.account_uid == "acctB@example.test"
+    assert reloaded.backup_codes is None
+
+
+def test_quick_paste_r3_final_uid_guard_revert_and_literal_recovery_reopen(tmp_path, monkeypatch):
+    """Real Flet 1.1.2 Session Save->reload->reopen tests for Codex §11 R3.1, R3.2, and R3.3."""
+    import asyncio
+
+    import flet as ft
+    import msgpack
+    from flet.controls.context import _context_page
+    from flet.messaging.connection import Connection
+    from flet.messaging.protocol import configure_encode_object_for_msgpack
+    from flet.messaging.session import Session
+    from flet.pubsub.pubsub_hub import PubSubHub
+
+    from src.core import config as app_config
+    from src.core.strings import get_string
+    from src.models.profile import split_recovery_and_notes
+    from src.services.profile import manager as pm_mod
+    from src.ui.dialogs.profile import open_profile_dialog
+
+    # R3.3 parser unit checks: whole literal emails beat legacy label prefix stripping.
+    assert split_recovery_and_notes("", "recovery-b@example.test") == (
+        "recovery-b@example.test",
+        "",
+    )
+    assert split_recovery_and_notes("", "recovery.ops@example.test") == (
+        "recovery.ops@example.test",
+        "",
+    )
+    assert split_recovery_and_notes("", "Recovery: alt-b@example.test") == (
+        "alt-b@example.test",
+        "",
+    )
+    assert split_recovery_and_notes("", "Recovery:alt-b@example.test") == (
+        "alt-b@example.test",
+        "",
+    )
+    assert split_recovery_and_notes("", "Mail Recovery: recovery-b@example.test") == (
+        "recovery-b@example.test",
+        "",
+    )
+    assert split_recovery_and_notes("", "https://example.test/recovery") == (
+        "",
+        "https://example.test/recovery",
+    )
+
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "EXTENSIONS_FILE", str(tmp_path / "extensions.json"))
+    monkeypatch.setattr(app_config, "EXTENSIONS_DIR", str(tmp_path / "extensions"))
+    enc = configure_encode_object_for_msgpack(ft.BaseControl)
+
+    def walk(ctrl):
+        yield ctrl
+        for attr in ("content", "controls", "actions", "title"):
+            children = getattr(ctrl, attr, None)
+            for child in children if isinstance(children, list) else [children]:
+                if isinstance(child, ft.Control):
+                    yield from walk(child)
+
+    class CaptureConnection(Connection):
+        def __init__(self, loop):
+            super().__init__()
+            self.loop = loop
+            self.pubsubhub = PubSubHub(loop=loop)
+            self.sent = []
+
+        def send_message(self, message):
+            packed = msgpack.packb(message.body.patch, default=enc)
+            self.sent.append(msgpack.unpackb(packed, strict_map_key=False))
+
+    def seed(pm, name, *, backup_codes="1111 0001\n1111 0002"):
+        assert pm.add_profile(
+            name,
+            "",
+            "macos",
+            account_uid="acctA@example.test",
+            account_password="OldPassA",
+            two_fa_secret="JBSWY3DPEHPK3PXP",
+            recovery_email="recA@example.test",
+            backup_codes=backup_codes,
+            notes="Old note",
+        )
+
+    async def open_dialog_refs(session, pm, profile_name):
+        page = session.page
+        captured = {}
+        profile = pm.profiles[profile_name]
+
+        def on_save(name, proxy, os_type, timezone, locale, engine, **kwargs):
+            captured.clear()
+            captured.update({"name": name, **kwargs})
+            ok = pm.update_profile(
+                profile.name,
+                name,
+                proxy,
+                os_type,
+                new_timezone=timezone,
+                new_locale=locale,
+                **kwargs,
+            )
+            return None if ok else "save failed"
+
+        open_profile_dialog(page, None, on_save, profile)
+        dialog = page._dialogs.controls[-1]
+        page.update()
+        controls = list(walk(dialog))
+        fields = [c for c in controls if isinstance(c, ft.TextField)]
+        return {
+            "dialog": dialog,
+            "paste": next(c for c in fields if c.hint_text == "uid|password|2FA_SECRET|note"),
+            "paste_btn": next(
+                c
+                for c in controls
+                if isinstance(c, ft.OutlinedButton)
+                and c.on_click
+                and c.on_click.__name__ == "_on_quick_paste"
+            ),
+            "uid": next(c for c in fields if c.hint_text == "user@gmail.com / 100089..."),
+            "pass": next(c for c in fields if c.password is True),
+            "two_fa": next(c for c in fields if c.hint_text == "JBSWY3DPEHPK3PXP"),
+            "rec": next(c for c in fields if c.hint_text == get_string("recovery_email_hint")),
+            "backup": next(
+                c for c in fields if getattr(c, "key", None) == "dialog_backup_codes_field"
+            ),
+            "notes": next(c for c in fields if c.hint_text == get_string("notes_hint")),
+            "account_error": next(
+                c for c in controls if getattr(c, "key", None) == "account_cred_error"
+            ),
+            "save_btn": dialog.actions[-1].content,
+            "captured": captured,
+        }
+
+    async def reload_and_reopen_values(session, profile_name):
+        fresh_pm = pm_mod.ProfileManager()
+        reloaded = fresh_pm.profiles[profile_name]
+        reopened = await open_dialog_refs(session, fresh_pm, profile_name)
+        try:
+            return reloaded, {
+                "uid": reopened["uid"].value,
+                "pass": reopened["pass"].value,
+                "two_fa": reopened["two_fa"].value,
+                "rec": reopened["rec"].value,
+                "backup": reopened["backup"].value,
+                "notes": reopened["notes"].value,
+            }
+        finally:
+            await session.dispatch_event(reopened["dialog"]._i, "dismiss", None)
+
+    async def scenario():
+        conn = CaptureConnection(asyncio.get_running_loop())
+        session = Session(conn)
+        page = session.page
+        msgpack.packb(session.get_page_patch(), default=enc)
+        token = _context_page.set(page)
+        try:
+            pm = pm_mod.ProfileManager()
+            seed(pm, "R31_PostParseEdit")
+            seed(pm, "R31_OnChangeNoReparse")
+            seed(pm, "R31_IntentionalC")
+            seed(pm, "R31_BlankEditPasteB")
+            seed(pm, "R32_RevertEmptyConcurrent", backup_codes="")
+            seed(pm, "R32_RevertPopulatedConcurrent", backup_codes="1111 0001\n1111 0002")
+            seed(pm, "R32_ExplicitClearThenRevert", backup_codes="1111 0001\n1111 0002")
+            seed(pm, "R32_ActualReplaceConcurrent", backup_codes="")
+            seed(pm, "R33_BareRecoveryLiteral")
+            seed(pm, "R33_LabeledRecovery")
+            seed(pm, "R33_LegacyUrlNote")
+
+            # R3.1 Route 1a: Paste B + B's backup codes + Parse B again -> manually change UID to C ->
+            # Save MUST block (no leak on disk); clearing mismatched fields allows Save & clean reopen.
+            r = await open_dialog_refs(session, pm, "R31_PostParseEdit")
+            try:
+                session.apply_patch(
+                    r["paste"]._i,
+                    {"value": "acctB@example.test|PassB|recovery-b@example.test"},
+                )
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["rec"].value == "recovery-b@example.test"
+                assert r["backup"].value == ""
+
+                session.apply_patch(r["backup"]._i, {"value": "2222 0001\n2222 0002"})
+                session.apply_patch(
+                    r["paste"]._i,
+                    {"value": "acctB@example.test|PassB|recovery-b@example.test"},
+                )
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["backup"].value == "2222 0001\n2222 0002"
+
+                session.apply_patch(r["uid"]._i, {"value": "acctC@example.test"})
+                session.apply_patch(r["pass"]._i, {"value": "PassC"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["account_error"].visible is True
+                assert "acctB@example.test" in r["account_error"].value
+                assert r["captured"] == {}
+
+                # Second blind Save click still blocks (no double-click bypass).
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["account_error"].visible is True
+                assert r["captured"] == {}
+                assert pm_mod.ProfileManager().profiles["R31_PostParseEdit"].account_uid == (
+                    "acctA@example.test"
+                )
+
+                # Clear mismatched fields -> Save succeeds, disk & reopened dialog match clean C.
+                session.apply_patch(r["rec"]._i, {"value": ""})
+                session.apply_patch(r["backup"]._i, {"value": ""})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["account_error"].visible is False
+                assert r["captured"]["account_uid"] == "acctC@example.test"
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R31_PostParseEdit")
+            assert (
+                reloaded.account_uid == "acctC@example.test" and ui["uid"] == "acctC@example.test"
+            )
+            assert reloaded.recovery_email is None and ui["rec"] == ""
+            assert reloaded.backup_codes is None and ui["backup"] == ""
+
+            # R3.1 Route 1b: Real interactive `change` event binds B's backup codes without 2nd Parse.
+            r = await open_dialog_refs(session, pm, "R31_OnChangeNoReparse")
+            try:
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                session.apply_patch(r["backup"]._i, {"value": "2222 0001"})
+                await session.dispatch_event(r["backup"]._i, "change", "2222 0001")
+                session.apply_patch(r["uid"]._i, {"value": "acctC@example.test"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["account_error"].visible is True
+                assert r["captured"] == {}
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            assert pm_mod.ProfileManager().profiles["R31_OnChangeNoReparse"].account_uid == (
+                "acctA@example.test"
+            )
+
+            # R3.1 Control: Intentionally supplying C's own recovery & backup codes after UID edit saves cleanly.
+            r = await open_dialog_refs(session, pm, "R31_IntentionalC")
+            try:
+                session.apply_patch(
+                    r["paste"]._i,
+                    {"value": "acctB@example.test|PassB|recovery-b@example.test"},
+                )
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                session.apply_patch(r["uid"]._i, {"value": "acctC@example.test"})
+                session.apply_patch(r["rec"]._i, {"value": "recC@example.test"})
+                session.apply_patch(r["backup"]._i, {"value": "3333 0001\n3333 0002"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["account_error"].visible is False
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R31_IntentionalC")
+            assert (
+                reloaded.account_uid == "acctC@example.test" and ui["uid"] == "acctC@example.test"
+            )
+            assert (
+                reloaded.recovery_email == "recC@example.test" and ui["rec"] == "recC@example.test"
+            )
+            assert (
+                reloaded.backup_codes == "3333 0001\n3333 0002"
+                and ui["backup"] == "3333 0001\n3333 0002"
+            )
+
+            # R3.1 Route 2: Open Edit A -> blank UID -> edit recovery & backup -> Paste B (no recovery) ->
+            # Save & reopen must NOT inherit edited A values as unbound Fresh Create.
+            r = await open_dialog_refs(session, pm, "R31_BlankEditPasteB")
+            try:
+                session.apply_patch(r["uid"]._i, {"value": ""})
+                session.apply_patch(r["rec"]._i, {"value": "recA-edited@example.test"})
+                session.apply_patch(r["backup"]._i, {"value": "1111 0009"})
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["rec"].value == ""
+                assert r["backup"].value == ""
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R31_BlankEditPasteB")
+            assert (
+                reloaded.account_uid == "acctB@example.test" and ui["uid"] == "acctB@example.test"
+            )
+            assert reloaded.recovery_email is None and ui["rec"] == ""
+            assert reloaded.backup_codes is None and ui["backup"] == ""
+
+            # R3.2a (Codex repro): A has empty codes -> Parse B -> concurrent sheet written for A ->
+            # Parse A again -> Save without editing codes must preserve A's concurrent sheet.
+            r = await open_dialog_refs(session, pm, "R32_RevertEmptyConcurrent")
+            try:
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert pm.update_profile(
+                    "R32_RevertEmptyConcurrent",
+                    "R32_RevertEmptyConcurrent",
+                    "",
+                    "macos",
+                    backup_codes="9999 0001\n9999 0002",
+                )
+                session.apply_patch(r["paste"]._i, {"value": "acctA@example.test|PassA2"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert "backup_codes" not in r["captured"]
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R32_RevertEmptyConcurrent")
+            assert (
+                reloaded.account_uid == "acctA@example.test" and ui["uid"] == "acctA@example.test"
+            )
+            assert (
+                reloaded.backup_codes == "9999 0001\n9999 0002"
+                and ui["backup"] == "9999 0001\n9999 0002"
+            )
+
+            # R3.2b: A originally had codes -> Parse B auto-clears -> concurrent sheet written for A ->
+            # Parse A restores A's snapshot -> Save omits backup_codes & preserves concurrent sheet.
+            r = await open_dialog_refs(session, pm, "R32_RevertPopulatedConcurrent")
+            try:
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["backup"].value == ""
+                assert pm.update_profile(
+                    "R32_RevertPopulatedConcurrent",
+                    "R32_RevertPopulatedConcurrent",
+                    "",
+                    "macos",
+                    backup_codes="8888 0001\n8888 0002",
+                )
+                session.apply_patch(r["paste"]._i, {"value": "acctA@example.test|PassA2"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["backup"].value == "1111 0001\n1111 0002"
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert "backup_codes" not in r["captured"]
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R32_RevertPopulatedConcurrent")
+            assert (
+                reloaded.backup_codes == "8888 0001\n8888 0002"
+                and ui["backup"] == "8888 0001\n8888 0002"
+            )
+
+            # R3.2c: Explicit user clear of A's codes before B detour is respected on revert to A.
+            r = await open_dialog_refs(session, pm, "R32_ExplicitClearThenRevert")
+            try:
+                session.apply_patch(r["backup"]._i, {"value": ""})
+                await session.dispatch_event(r["backup"]._i, "change", "")
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                session.apply_patch(r["backup"]._i, {"value": "2222 0001"})
+                await session.dispatch_event(r["backup"]._i, "change", "2222 0001")
+                session.apply_patch(r["paste"]._i, {"value": "acctA@example.test|PassA2"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["backup"].value == ""
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["captured"].get("backup_codes") == ""
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R32_ExplicitClearThenRevert")
+            assert reloaded.backup_codes is None and ui["backup"] == ""
+
+            # R3.2d Control: Actual A->B replacement still clears a concurrent A update on disk.
+            r = await open_dialog_refs(session, pm, "R32_ActualReplaceConcurrent")
+            try:
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert pm.update_profile(
+                    "R32_ActualReplaceConcurrent",
+                    "R32_ActualReplaceConcurrent",
+                    "",
+                    "macos",
+                    backup_codes="7777 0001\n7777 0002",
+                )
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["captured"].get("backup_codes") == ""
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R32_ActualReplaceConcurrent")
+            assert (
+                reloaded.account_uid == "acctB@example.test" and ui["uid"] == "acctB@example.test"
+            )
+            assert reloaded.backup_codes is None and ui["backup"] == ""
+
+            # R3.3a: Bare `recovery-b@example.test` must save & reopen intact (never `b@example.test`).
+            r = await open_dialog_refs(session, pm, "R33_BareRecoveryLiteral")
+            try:
+                session.apply_patch(
+                    r["paste"]._i,
+                    {"value": "account-b@example.test|fixture-pass|recovery-b@example.test"},
+                )
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["rec"].value == "recovery-b@example.test"
+                assert r["notes"].value == ""
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R33_BareRecoveryLiteral")
+            assert reloaded.recovery_email == "recovery-b@example.test"
+            assert ui["rec"] == "recovery-b@example.test" and ui["notes"] == ""
+
+            # R3.3b Control: Labeled `Recovery: alt-b@example.test` still extracts `alt-b@example.test`.
+            r = await open_dialog_refs(session, pm, "R33_LabeledRecovery")
+            try:
+                session.apply_patch(
+                    r["paste"]._i,
+                    {"value": "account-b@example.test|fixture-pass|Recovery: alt-b@example.test"},
+                )
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["rec"].value == "alt-b@example.test"
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R33_LabeledRecovery")
+            assert (
+                reloaded.recovery_email == "alt-b@example.test"
+                and ui["rec"] == "alt-b@example.test"
+            )
+
+            # R3.3c Control (#6995): Recovery URL stays in notes with empty 2FA & recovery email.
+            r = await open_dialog_refs(session, pm, "R33_LegacyUrlNote")
+            try:
+                session.apply_patch(
+                    r["paste"]._i,
+                    {"value": "account-b@example.test|fixture-pass|https://example.test/recovery"},
+                )
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["two_fa"].value == ""
+                assert r["rec"].value == ""
+                assert r["notes"].value == "https://example.test/recovery"
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R33_LegacyUrlNote")
+            assert reloaded.two_fa_secret is None and ui["two_fa"] == ""
+            assert reloaded.recovery_email is None and ui["rec"] == ""
+            assert (
+                reloaded.notes == "https://example.test/recovery"
+                and ui["notes"] == "https://example.test/recovery"
+            )
+
+            # --- Codex §13 R4.1, R4.2, R4.3 Save->reload->reopen regressions ---
+            seed(pm, "R41_BlankParseThenB")
+            seed(pm, "R41_BlankParseManualB")
+            seed(pm, "R42_EditedABackupDetour", backup_codes="1111 2101")
+            seed(pm, "R42_EditedEmptyABackupDetour", backup_codes="")
+            seed(pm, "R43_ManualUidPopulated", backup_codes="1111 2101")
+            seed(pm, "R43_ManualUidEmpty", backup_codes="")
+
+            # R4.1a (Codex repro): Edit A -> blank-UID Parse with recovery -> Parse B (no recovery) ->
+            # Save & reopen must NOT file A's pasted recovery address under B.
+            r = await open_dialog_refs(session, pm, "R41_BlankParseThenB")
+            try:
+                session.apply_patch(
+                    r["paste"]._i,
+                    {"value": "|fixture|alt-a-new@example.test"},
+                )
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["rec"].value == "alt-a-new@example.test"
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["rec"].value == ""
+                assert r["backup"].value == ""
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R41_BlankParseThenB")
+            assert (
+                reloaded.account_uid == "acctB@example.test" and ui["uid"] == "acctB@example.test"
+            )
+            assert reloaded.recovery_email is None and ui["rec"] == ""
+            assert reloaded.backup_codes is None and ui["backup"] == ""
+
+            # R4.1b: Edit A -> blank-UID Parse with recovery -> manually set UID to B -> Save blocks.
+            r = await open_dialog_refs(session, pm, "R41_BlankParseManualB")
+            try:
+                session.apply_patch(
+                    r["paste"]._i,
+                    {"value": "|fixture|alt-a-new@example.test"},
+                )
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                session.apply_patch(r["uid"]._i, {"value": "acctB@example.test"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["account_error"].visible is True
+                assert r["captured"] == {}
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            assert pm_mod.ProfileManager().profiles["R41_BlankParseManualB"].account_uid == (
+                "acctA@example.test"
+            )
+
+            # R4.1c Control: Fresh Create blank-UID Parse with recovery -> Parse A preserves recovery.
+            captured_create = {}
+
+            def on_create_save(name, proxy, os_type, timezone, locale, engine, **kwargs):
+                captured_create.update({"name": name, **kwargs})
+                ok = pm.add_profile(
+                    name,
+                    proxy,
+                    os_type,
+                    timezone=timezone,
+                    locale=locale,
+                    engine=engine,
+                    **kwargs,
+                )
+                return None if ok else "save failed"
+
+            open_profile_dialog(page, None, on_create_save, None)
+            create_dlg = page._dialogs.controls[-1]
+            page.update()
+            try:
+                c_ctrls = list(walk(create_dlg))
+                c_fields = [c for c in c_ctrls if isinstance(c, ft.TextField)]
+                c_paste = next(c for c in c_fields if c.hint_text == "uid|password|2FA_SECRET|note")
+                c_paste_btn = next(
+                    c
+                    for c in c_ctrls
+                    if isinstance(c, ft.OutlinedButton)
+                    and c.on_click
+                    and c.on_click.__name__ == "_on_quick_paste"
+                )
+                c_save_btn = create_dlg.actions[-1].content
+                session.apply_patch(c_paste._i, {"value": "|fixture|deliberate-fresh@example.test"})
+                await session.dispatch_event(c_paste_btn._i, "click", None)
+                session.apply_patch(c_paste._i, {"value": "freshR4@example.test|FreshPass"})
+                await session.dispatch_event(c_paste_btn._i, "click", None)
+                await session.dispatch_event(c_save_btn._i, "click", None)
+            finally:
+                await session.dispatch_event(create_dlg._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "freshR4")
+            assert reloaded.account_uid == "freshR4@example.test" and ui["uid"] == (
+                "freshR4@example.test"
+            )
+            assert reloaded.recovery_email == "deliberate-fresh@example.test"
+            assert ui["rec"] == "deliberate-fresh@example.test"
+
+            # R4.2a (Codex repro): Edit A (1111 2101) -> edit A's codes to 2222 2101 -> Parse B ->
+            # Parse A -> Save & reopen must retain A's deliberate edit (2222 2101), not stale 1111 2101.
+            r = await open_dialog_refs(session, pm, "R42_EditedABackupDetour")
+            try:
+                session.apply_patch(r["backup"]._i, {"value": "2222 2101"})
+                await session.dispatch_event(r["backup"]._i, "change", "2222 2101")
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["backup"].value == ""
+                session.apply_patch(r["paste"]._i, {"value": "acctA@example.test|PassA2"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["backup"].value == "2222 2101"
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["captured"].get("backup_codes") == "2222 2101"
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R42_EditedABackupDetour")
+            assert (
+                reloaded.account_uid == "acctA@example.test" and ui["uid"] == "acctA@example.test"
+            )
+            assert reloaded.backup_codes == "2222 2101" and ui["backup"] == "2222 2101"
+
+            # R4.2b: Empty-initial A edited to 2222 2101 -> Parse B -> enter B codes -> Parse A ->
+            # Save & reopen must retain A's deliberate edit and drop B's codes.
+            r = await open_dialog_refs(session, pm, "R42_EditedEmptyABackupDetour")
+            try:
+                session.apply_patch(r["backup"]._i, {"value": "2222 2101"})
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["backup"].value == ""
+                session.apply_patch(r["backup"]._i, {"value": "3333 3101"})
+                await session.dispatch_event(r["backup"]._i, "change", "3333 3101")
+                session.apply_patch(r["paste"]._i, {"value": "acctA@example.test|PassA2"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["backup"].value == "2222 2101"
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["captured"].get("backup_codes") == "2222 2101"
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R42_EditedEmptyABackupDetour")
+            assert reloaded.backup_codes == "2222 2101" and ui["backup"] == "2222 2101"
+
+            # R4.3a (Codex repro): Manual-only UID edit on initially populated A without Parse must
+            # omit unchanged backup_codes and preserve a concurrent inline backup update on disk.
+            r = await open_dialog_refs(session, pm, "R43_ManualUidPopulated")
+            try:
+                assert pm.update_profile(
+                    "R43_ManualUidPopulated",
+                    "R43_ManualUidPopulated",
+                    "",
+                    "macos",
+                    backup_codes="9999 2101",
+                )
+                session.apply_patch(r["uid"]._i, {"value": "acctA-renamed@example.test"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert "backup_codes" not in r["captured"]
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R43_ManualUidPopulated")
+            assert reloaded.account_uid == "acctA-renamed@example.test"
+            assert ui["uid"] == "acctA-renamed@example.test"
+            assert reloaded.backup_codes == "9999 2101" and ui["backup"] == "9999 2101"
+
+            # R4.3b (Codex repro): Manual-only UID edit on initially empty A without Parse must
+            # omit unchanged backup_codes and preserve a concurrent inline backup update on disk.
+            r = await open_dialog_refs(session, pm, "R43_ManualUidEmpty")
+            try:
+                assert pm.update_profile(
+                    "R43_ManualUidEmpty",
+                    "R43_ManualUidEmpty",
+                    "",
+                    "macos",
+                    backup_codes="9999 2102",
+                )
+                session.apply_patch(r["uid"]._i, {"value": "acctA-renamed-empty@example.test"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert "backup_codes" not in r["captured"]
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R43_ManualUidEmpty")
+            assert reloaded.account_uid == "acctA-renamed-empty@example.test"
+            assert ui["uid"] == "acctA-renamed-empty@example.test"
+            assert reloaded.backup_codes == "9999 2102" and ui["backup"] == "9999 2102"
+
+            # --- Codex §15 R5.1 Save->reload->reopen regressions (manual UID return to A) ---
+            seed(pm, "R51_ManualReturnPopulated", backup_codes="1111 2101")
+            seed(pm, "R51_ManualReturnEmpty", backup_codes="")
+            seed(pm, "R51_ManualReturnConcurrent", backup_codes="1111 2101")
+            seed(pm, "R51_ManualReturnExplicitClear", backup_codes="1111 2101")
+            seed(pm, "R51_ManualReturnRetryAfterRecGuard", backup_codes="1111 2101")
+            seed(pm, "R51_ManualReturnOversized", backup_codes="1111 2101")
+
+            # R5.1a (Codex repro — populated A): Edit A -> replace codes with 2222 2101 ->
+            # Parse B -> manually type A's UID/password without Parse -> Save persists 2222 2101.
+            r = await open_dialog_refs(session, pm, "R51_ManualReturnPopulated")
+            try:
+                session.apply_patch(r["backup"]._i, {"value": "2222 2101"})
+                await session.dispatch_event(r["backup"]._i, "change", "2222 2101")
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["backup"].value == ""
+                session.apply_patch(r["uid"]._i, {"value": "acctA@example.test"})
+                session.apply_patch(r["pass"]._i, {"value": "OldPassA"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["captured"].get("backup_codes") == "2222 2101"
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R51_ManualReturnPopulated")
+            assert (
+                reloaded.account_uid == "acctA@example.test" and ui["uid"] == "acctA@example.test"
+            )
+            assert reloaded.backup_codes == "2222 2101" and ui["backup"] == "2222 2101"
+
+            # R5.1b (Codex repro — empty A): Edit A (no sheet) -> enter 2222 2101 -> Parse B ->
+            # manually type A's UID/password without Parse -> Save persists 2222 2101.
+            r = await open_dialog_refs(session, pm, "R51_ManualReturnEmpty")
+            try:
+                session.apply_patch(r["backup"]._i, {"value": "2222 2101"})
+                await session.dispatch_event(r["backup"]._i, "change", "2222 2101")
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert r["backup"].value == ""
+                session.apply_patch(r["uid"]._i, {"value": "acctA@example.test"})
+                session.apply_patch(r["pass"]._i, {"value": "OldPassA"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["captured"].get("backup_codes") == "2222 2101"
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R51_ManualReturnEmpty")
+            assert (
+                reloaded.account_uid == "acctA@example.test" and ui["uid"] == "acctA@example.test"
+            )
+            assert reloaded.backup_codes == "2222 2101" and ui["backup"] == "2222 2101"
+
+            # R5.1c Control: Untouched A + Parse B + concurrent inline update + manual return to A
+            # must omit backup_codes and preserve the newer concurrent sheet on disk.
+            r = await open_dialog_refs(session, pm, "R51_ManualReturnConcurrent")
+            try:
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                assert pm.update_profile(
+                    "R51_ManualReturnConcurrent",
+                    "R51_ManualReturnConcurrent",
+                    "",
+                    "macos",
+                    backup_codes="9999 5101",
+                )
+                session.apply_patch(r["uid"]._i, {"value": "acctA@example.test"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert "backup_codes" not in r["captured"]
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R51_ManualReturnConcurrent")
+            assert reloaded.backup_codes == "9999 5101" and ui["backup"] == "9999 5101"
+
+            # R5.1d Control: Explicit clear of A's codes before Parse B + manual return to A
+            # must not reintroduce old codes.
+            r = await open_dialog_refs(session, pm, "R51_ManualReturnExplicitClear")
+            try:
+                session.apply_patch(r["backup"]._i, {"value": ""})
+                await session.dispatch_event(r["backup"]._i, "change", "")
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                session.apply_patch(r["uid"]._i, {"value": "acctA@example.test"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["captured"].get("backup_codes") == ""
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R51_ManualReturnExplicitClear")
+            assert reloaded.backup_codes is None and ui["backup"] == ""
+
+            # R5.1e Edge: Manual return blocked once by B's recovery email must retain stashed
+            # deliberate A backup edit when the user clears B's recovery email and retries Save.
+            r = await open_dialog_refs(session, pm, "R51_ManualReturnRetryAfterRecGuard")
+            try:
+                session.apply_patch(r["backup"]._i, {"value": "2222 2101"})
+                await session.dispatch_event(r["backup"]._i, "change", "2222 2101")
+                session.apply_patch(
+                    r["paste"]._i,
+                    {"value": "acctB@example.test|PassB|recB@example.test"},
+                )
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                session.apply_patch(r["uid"]._i, {"value": "acctA@example.test"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["account_error"].visible is True
+                assert r["captured"] == {}
+
+                session.apply_patch(r["rec"]._i, {"value": ""})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["account_error"].visible is False
+                assert r["captured"].get("backup_codes") == "2222 2101"
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(
+                session, "R51_ManualReturnRetryAfterRecGuard"
+            )
+            assert reloaded.recovery_email is None and ui["rec"] == ""
+            assert reloaded.backup_codes == "2222 2101" and ui["backup"] == "2222 2101"
+
+            # R5.1f Validation: Stashed deliberate edit exceeding MAX_BACKUP_CODES_LENGTH must
+            # still fail normalize_backup_codes validation on Save without touching disk.
+            r = await open_dialog_refs(session, pm, "R51_ManualReturnOversized")
+            try:
+                oversized = "1111 2101\n" * 500
+                session.apply_patch(r["backup"]._i, {"value": oversized})
+                await session.dispatch_event(r["backup"]._i, "change", oversized)
+                session.apply_patch(r["paste"]._i, {"value": "acctB@example.test|PassB"})
+                await session.dispatch_event(r["paste_btn"]._i, "click", None)
+                session.apply_patch(r["uid"]._i, {"value": "acctA@example.test"})
+                await session.dispatch_event(r["save_btn"]._i, "click", None)
+                assert r["captured"] == {}
+            finally:
+                await session.dispatch_event(r["dialog"]._i, "dismiss", None)
+            reloaded, ui = await reload_and_reopen_values(session, "R51_ManualReturnOversized")
+            assert reloaded.backup_codes == "1111 2101" and ui["backup"] == "1111 2101"
+        finally:
+            _context_page.reset(token)
+
+    asyncio.run(scenario())

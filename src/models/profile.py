@@ -55,12 +55,12 @@ def split_recovery_and_notes(
         if not line:
             continue
         if not found_email:
+            if _EMAIL_TOKEN_RE.match(line):
+                found_email = line
+                continue
             m_pref = _RECOVERY_PREFIX_RE.match(line)
             if m_pref:
                 found_email = m_pref.group(1)
-                continue
-            if _EMAIL_TOKEN_RE.match(line):
-                found_email = line
                 continue
             tokens = line.split()
             if len(tokens) >= 2 and _EMAIL_TOKEN_RE.match(tokens[-1]):

@@ -145,26 +145,28 @@ input[type=checkbox] { width: 16px; height: 16px; margin: 0; accent-color: var(-
 .modal-body > select, .modal-body > .btn { margin-top: 12px; }
 
 /* Shell */
-.layout { display: grid; grid-template-columns: 244px minmax(0, 1fr); min-height: 100vh; }
+.layout { display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 100vh; }
 .rail {
-  position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 16px; padding: 20px 16px 16px;
+  position: sticky; top: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; gap: 12px; padding: 20px 12px 12px;
   color: var(--cover-ink); background-color: var(--cover); border-right: 1px solid var(--rule);
 }
-.brand { display: flex; align-items: center; gap: 12px; padding: 0 4px; }
+.brand { display: flex; align-items: center; gap: 12px; padding: 0 4px; flex: none; }
 .brand img { width: 44px; height: 44px; object-fit: contain; flex: none; }
 .brand b { display: block; font-size: 17.5px; font-weight: 700; letter-spacing: -.01em; color: var(--cover-ink); }
 .brand span { display: block; font-size: 11.5px; color: var(--cover-muted); }
-.rail .btn-act { width: 100%; height: 40px; }
-.nav { display: flex; flex-direction: column; gap: 4px; }
-.nav-title { font-size: 12px; font-weight: 600; color: var(--cover-muted); padding: 4px 12px 8px; }
-.nav button { display: flex; align-items: center; gap: 12px; width: 100%; height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-2); cursor: pointer; font-weight: 500; text-align: left; }
+.rail .btn-act { width: 100%; height: 40px; flex: none; }
+.nav { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding-right: 8px; margin-right: -4px; }
+.nav-title { font-size: 11.5px; font-weight: 600; color: var(--cover-muted); padding: 8px 12px 4px; flex: none; }
+.nav-title.nav-sub { margin-top: 8px; }
+.nav button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 34px; padding: 0 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--ink-2); cursor: pointer; font-weight: 500; text-align: left; flex: none; }
 .nav button:hover { background: var(--cover-deep); color: var(--cover-ink); }
-.nav button.active { background: var(--cover-deep); color: var(--cover-ink); font-weight: 600; }
-.nav button .count { margin-left: auto; font-family: var(--data); font-size: 12px; opacity: .75; }
-.nav button.active .count { opacity: 1; color: var(--accent); }
-.rail .grow { flex: 1; }
-.rail-foot { display: flex; flex-direction: column; gap: 8px; }
-.rail-link { display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 12px; border-radius: 8px; border: 0; background: transparent; color: var(--ink-2); text-decoration: none; cursor: pointer; font-weight: 500; }
+.nav button.active { background: var(--cover-deep); border-color: var(--rule); color: var(--cover-ink); font-weight: 600; }
+.nav button .nav-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav button .count { flex: none; margin-left: auto; padding: 2px 8px; border-radius: 5px; background: var(--cover-deep); font-family: var(--data); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--cover-muted); }
+.nav button.active .count { background: var(--chrome-bg); color: var(--chrome-ink); }
+.rail .grow { display: none; }
+.rail-foot { display: flex; flex-direction: column; gap: 4px; flex: none; border-top: 1px solid var(--rule); padding-top: 12px; }
+.rail-link { display: flex; align-items: center; gap: 12px; height: 34px; padding: 0 12px; border-radius: 7px; border: 0; background: transparent; color: var(--ink-2); text-decoration: none; cursor: pointer; font-weight: 500; }
 .rail-link:hover { background: var(--cover-deep); color: var(--cover-ink); }
 .seg { display: grid; grid-template-columns: 1fr 1fr; padding: 4px; border-radius: 8px; background: var(--cover-deep); }
 .seg button { height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--cover-muted); cursor: pointer; font-size: 12.5px; font-weight: 500; }
@@ -184,7 +186,7 @@ main { min-width: 0; padding: 24px 28px 40px; }
 .head-tool.active-tool { background: var(--paper-sunk); border-color: var(--rule-strong); color: var(--ink); }
 .head-tool.active-tool:hover { background: var(--rule); }
 .prefs-wrap { position: relative; }
-.prefs-pop { position: absolute; right: 0; top: 44px; z-index: 35; width: min(340px, calc(100vw - 32px)); padding: 20px; border-radius: 16px; background: var(--paper-raised); box-shadow: var(--modal-shadow); display: flex; flex-direction: column; gap: 16px; animation: rise .16s var(--ease-out); }
+.prefs-pop { position: absolute; right: 0; top: 44px; z-index: 35; width: min(340px, calc(100dvw - 32px)); padding: 20px; border-radius: 16px; background: var(--paper-raised); box-shadow: var(--modal-shadow); display: flex; flex-direction: column; gap: 16px; animation: rise .16s var(--ease-out); }
 .prefs-sec { display: flex; flex-direction: column; gap: 4px; }
 .prefs-title { font-size: 16px; font-weight: 700; color: var(--ink); }
 .prefs-sub { margin: 0 0 4px; font-size: 12.5px; color: var(--ink-2); }
@@ -464,14 +466,18 @@ input.ext-switch:checked::after { transform: translateX(16px); background: var(-
   .row.body > .c-stamp { grid-area: stamp; }
   .row.body > .actions { grid-area: acts; justify-content: flex-end; }
 }
+@media (max-height: 540px) and (min-width: 861px) {
+  .rail { overflow-y: auto; scrollbar-gutter: stable; }
+  .rail .nav { flex: none; overflow-y: visible; scrollbar-gutter: auto; padding-right: 0; margin-right: 0; }
+}
 @media (max-width: 860px) {
   .layout { grid-template-columns: minmax(0, 1fr); }
-  .rail { min-width: 0; position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px; }
+  .rail { min-width: 0; position: static; height: auto; overflow: visible; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px; }
   .rail .btn-act { width: auto; order: 2; margin-left: auto; height: 38px; }
-  .rail .nav { order: 3; flex-direction: row; overflow-x: auto; width: 100%; min-width: 0; scrollbar-width: none; mask-image: linear-gradient(to right, var(--ink) 85%, transparent); }
-  .rail .nav button { width: auto; flex: none; }
+  .rail .nav { order: 3; flex: none; flex-direction: row; overflow-y: visible; overflow-x: auto; scrollbar-gutter: auto; padding-right: 0; margin-right: 0; width: 100%; min-width: 0; scrollbar-width: none; mask-image: linear-gradient(to right, var(--ink) 85%, transparent); }
+  .rail .nav button { width: auto; max-width: 240px; flex: none; }
   .nav-title, .rail .grow { display: none; }
-  .rail-foot { order: 4; flex-direction: row; flex-wrap: wrap; width: 100%; }
+  .rail-foot { order: 4; flex-direction: row; flex-wrap: wrap; width: 100%; border-top: 0; padding-top: 0; }
   .seg { width: 200px; }
   .seg button { white-space: nowrap; }
   main { padding: 16px 16px 32px; }
@@ -667,7 +673,7 @@ const I18N = {
     "theme_dark": "Tối", "theme_light": "Sáng",
 
 
-    tagline: "Quản lý profile anti-detect", new_profile: "Tạo profile", filters: "Lọc",
+    tagline: "Quản lý profile anti-detect", new_profile: "Tạo profile", filters: "Hồ sơ", group_filter_title: "Thư mục / Nhóm",
     f_all: "Tất cả", f_running: "Đang chạy", f_proxy: "Có proxy", f_direct: "Không proxy", f_chrome: "Engine Chrome",
     api_docs: "Tài liệu API", logout: "Đăng xuất", your_profiles: "Profile", search: "Tìm theo tên hoặc proxy",
     counts: "{n} profile · {r} đang chạy", counts_none: "{n} profile · chưa có profile nào chạy",
@@ -745,7 +751,7 @@ const I18N = {
     "theme_dark": "Dark", "theme_light": "Light",
 
 
-    tagline: "Anti-detect profile manager", new_profile: "New profile", filters: "Filter",
+    tagline: "Anti-detect profile manager", new_profile: "New profile", filters: "Profiles", group_filter_title: "Folders / Tags",
     f_all: "All", f_running: "Running", f_proxy: "With proxy", f_direct: "No proxy", f_chrome: "Chrome engine",
     api_docs: "API docs", logout: "Log out", your_profiles: "Profiles", search: "Search by name or proxy",
     counts: "{n} profiles · {r} running", counts_none: "{n} profiles · none running",
@@ -1264,10 +1270,29 @@ function extractBackupCodes(raw) {
 function profileTags(p) { return p.tags?.length ? p.tags : (p.group ? [p.group] : []); }
 function renderFilters() {
   const nav = $("filters");
-  nav.replaceChildren(h("div", { class: "nav-title" }, t("filters")),
-    ...FILTERS.map(([id, label, pass]) => h("button", { class: filter === id ? "active" : "", "aria-pressed": String(filter === id),
-      onclick: () => { filter = id; currentPage = 1; render(); } }, t(label), h("span", { class: "count" }, String(profiles.filter(pass).length)))),
-    ...[...new Set(profiles.flatMap(profileTags))].sort().map((tag) => h("button", { class: filter === "tag:" + tag ? "active" : "", "aria-pressed": String(filter === "tag:" + tag), onclick: () => { filter = "tag:" + tag; currentPage = 1; render(); } }, tag, h("span", {class:"count"}, String(profiles.filter((p) => profileTags(p).includes(tag)).length)))));
+  const selectFilter = (nextFilter) => {
+    filter = nextFilter;
+    currentPage = 1;
+    const searchEl = $("search");
+    if (searchEl && searchEl.value) searchEl.value = "";
+    render();
+  };
+  const makeBtn = (id, label, count) => h("button", {
+    type: "button",
+    class: filter === id ? "active" : "",
+    "aria-pressed": String(filter === id),
+    title: `${label} (${count})`,
+    onclick: () => selectFilter(id),
+  }, h("span", { class: "nav-lbl" }, label), h("span", { class: "count" }, String(count)));
+  const tags = [...new Set(profiles.flatMap(profileTags))].sort();
+  nav.replaceChildren(
+    h("div", { class: "nav-title" }, t("filters")),
+    ...FILTERS.map(([id, label, pass]) => makeBtn(id, t(label), profiles.filter(pass).length)),
+    ...(tags.length ? [
+      h("div", { class: "nav-title nav-sub" }, t("group_filter_title")),
+      ...tags.map((tag) => makeBtn("tag:" + tag, tag, profiles.filter((p) => profileTags(p).includes(tag)).length)),
+    ] : []),
+  );
 }
 
 function emptyState(filtered, q = "") {

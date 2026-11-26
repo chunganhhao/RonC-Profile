@@ -41,14 +41,13 @@ def _filter_row(
             ft.Icon(
                 icon,
                 size=15,
-                color=(COLORS["accent"] if not is_dark else active_fg)
-                if on
-                else COLORS["cover_muted"],
+                color=COLORS["proxy_pill_fg"] if on else COLORS["cover_muted"],
             )
         )
     left_controls.append(
         ft.Text(
             label,
+            expand=True,
             size=13,
             font_family=FONT_SEMIBOLD if on else FONT_MEDIUM,
             color=active_fg if on else idle_fg,
@@ -57,28 +56,41 @@ def _filter_row(
         )
     )
 
+    count_badge = ft.Container(
+        padding=ft.Padding.symmetric(horizontal=8, vertical=2),
+        border_radius=5,
+        bgcolor=COLORS["proxy_pill_bg"] if on else COLORS["cover_deep"],
+        content=ft.Text(
+            str(count),
+            size=11,
+            font_family=FONT_DATA,
+            color=COLORS["proxy_pill_fg"] if on else COLORS["cover_muted"],
+            no_wrap=True,
+        ),
+    )
+
     return ft.Container(
-        height=33,
+        key=f"filter_{fid}",
+        height=34,
         border_radius=7,
-        padding=ft.Padding.symmetric(horizontal=10),
+        padding=ft.Padding.symmetric(horizontal=12),
         bgcolor=active_bg if on else None,
+        border=ft.Border.all(1, COLORS["card_border"]) if on else None,
+        tooltip=f"{label} ({count})",
         ink=True,
         on_click=lambda _, f=fid: on_filter(f),
         content=ft.Row(
+            spacing=8,
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 ft.Row(
+                    expand=True,
                     spacing=8,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=left_controls,
                 ),
-                ft.Text(
-                    str(count),
-                    size=11.5,
-                    font_family=FONT_DATA,
-                    color=active_fg if on else COLORS["cover_muted"],
-                ),
+                count_badge,
             ],
         ),
     )
@@ -92,15 +104,19 @@ def _nav_action_row(
 ) -> ft.Container:
     controls: list[ft.Control] = [
         ft.Row(
+            expand=True,
             spacing=8,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 ft.Icon(icon, size=16, color=COLORS["cover_muted"]),
                 ft.Text(
                     label,
+                    expand=True,
                     size=13,
                     font_family=FONT_MEDIUM,
                     color=COLORS["cover_ink"],
+                    no_wrap=True,
+                    overflow=ft.TextOverflow.ELLIPSIS,
                 ),
             ],
         ),
@@ -110,10 +126,11 @@ def _nav_action_row(
         badge_text.size = 11
         badge_text.font_family = FONT_DATA
         badge_text.color = COLORS["cover_muted"]
+        badge_text.no_wrap = True
         controls.append(
             ft.Container(
-                padding=ft.Padding.symmetric(horizontal=6, vertical=1),
-                border_radius=4,
+                padding=ft.Padding.symmetric(horizontal=8, vertical=2),
+                border_radius=5,
                 bgcolor=COLORS["cover_deep"],
                 content=badge_text,
             )
@@ -121,10 +138,11 @@ def _nav_action_row(
     return ft.Container(
         height=34,
         border_radius=7,
-        padding=ft.Padding.symmetric(horizontal=10),
+        padding=ft.Padding.symmetric(horizontal=12),
         ink=True,
         on_click=on_click,
         content=ft.Row(
+            spacing=8,
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=controls,
@@ -134,12 +152,14 @@ def _nav_action_row(
 
 def _section_header(title: str) -> ft.Container:
     return ft.Container(
-        padding=ft.Padding.only(left=10, top=10, bottom=3),
+        padding=ft.Padding.only(left=12, top=12, bottom=4),
         content=ft.Text(
-            title.upper(),
-            size=10.5,
+            title,
+            size=11.5,
             font_family=FONT_SEMIBOLD,
             color=COLORS["cover_muted"],
+            no_wrap=True,
+            overflow=ft.TextOverflow.ELLIPSIS,
         ),
     )
 
@@ -219,10 +239,12 @@ def build_sidebar(
         elevation=0,
     )
 
-    nav_scroll = ft.Column(
+    nav_scroll = ft.ListView(
+        key="sidebar_nav_scroll",
         spacing=2,
-        scroll=ft.ScrollMode.ALWAYS,
         expand=True,
+        padding=ft.Padding.only(left=12, right=20, bottom=8),
+        build_controls_on_demand=False,
         controls=[
             *(
                 [
@@ -288,14 +310,11 @@ def build_sidebar(
         ],
     )
 
-    return ft.Container(
-        width=236,
-        bgcolor=COLORS["sidebar"],
-        border=ft.Border.only(right=ft.BorderSide(1, COLORS["card_border"])),
-        padding=ft.Padding.only(left=14, right=14, top=18, bottom=14),
+    header_block = ft.Container(
+        padding=ft.Padding.only(left=12, right=12, top=16, bottom=8),
         content=ft.Column(
             spacing=0,
-            expand=True,
+            tight=True,
             controls=[
                 ft.Row(
                     spacing=10,
@@ -351,13 +370,22 @@ def build_sidebar(
                 ft.Container(height=10),
                 ft.Button(
                     f"+ {get_string('new_profile')}",
-                    width=208,
+                    width=228,
                     height=40,
                     style=cta_style,
                     on_click=on_new_profile,
                 ),
-                ft.Container(height=8),
-                nav_scroll,
+            ],
+        ),
+    )
+
+    footer_block = ft.Container(
+        padding=ft.Padding.only(left=12, right=12, top=4, bottom=12),
+        border=ft.Border.only(top=ft.BorderSide(1, COLORS["card_border"])),
+        content=ft.Column(
+            spacing=0,
+            tight=True,
+            controls=[
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
@@ -372,6 +400,21 @@ def build_sidebar(
                     ],
                 ),
                 log_column,
+            ],
+        ),
+    )
+
+    return ft.Container(
+        width=252,
+        bgcolor=COLORS["sidebar"],
+        border=ft.Border.only(right=ft.BorderSide(1, COLORS["card_border"])),
+        content=ft.Column(
+            spacing=0,
+            expand=True,
+            controls=[
+                header_block,
+                nav_scroll,
+                footer_block,
             ],
         ),
     )

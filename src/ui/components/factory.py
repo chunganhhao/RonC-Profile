@@ -37,6 +37,39 @@ def build_ui_refs(
             text_style=ft.TextStyle(font_family=FONT_MEDIUM, size=13),
         ),
     )
+    search_field = ft.TextField(
+        hint_text=get_string("search_hint"),
+        prefix_icon=ft.Icons.SEARCH,
+        width=320,
+        height=40,
+        dense=True,
+        border_radius=8,
+        bgcolor=COLORS["input_bg"],
+        color=COLORS["text_main"],
+        text_size=14,
+        border_color=COLORS["rule_strong"],
+        focused_border_color=COLORS["accent"],
+        cursor_color=COLORS["accent"],
+        hint_style=ft.TextStyle(color=COLORS["text_dim"]),
+        on_change=lambda e: on_search(e.control.value or ""),
+    )
+
+    def _clear_search(_: ft.ControlEvent) -> None:
+        search_field.value = ""
+        on_search("")
+
+    search_field.suffix = ft.IconButton(
+        key="search_clear_btn",
+        icon=ft.Icons.CLOSE_ROUNDED,
+        icon_size=15,
+        width=26,
+        height=26,
+        padding=0,
+        icon_color=COLORS["text_sub"],
+        tooltip=get_string("clear_search"),
+        visible=False,
+        on_click=_clear_search,
+    )
     return UIRefs(
         stats_text=ft.Text(
             get_string("total_profiles", count=len(pm.profiles)),
@@ -147,20 +180,5 @@ def build_ui_refs(
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         file_picker=file_picker,
-        search_field=ft.TextField(
-            hint_text=get_string("search_hint"),
-            prefix_icon=ft.Icons.SEARCH,
-            width=320,
-            height=40,
-            dense=True,
-            border_radius=8,
-            bgcolor=COLORS["input_bg"],
-            color=COLORS["text_main"],
-            text_size=14,
-            border_color=COLORS["rule_strong"],
-            focused_border_color=COLORS["accent"],
-            cursor_color=COLORS["accent"],
-            hint_style=ft.TextStyle(color=COLORS["text_dim"]),
-            on_change=lambda e: on_search(e.control.value or ""),
-        ),
+        search_field=search_field,
     )

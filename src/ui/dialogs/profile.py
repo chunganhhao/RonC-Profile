@@ -271,6 +271,49 @@ def open_profile_dialog(
         **DLG_FIELD_KWARGS,
     )
 
+    def _clean_backup_text(raw: str) -> str:
+        return raw.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    initial_account_uid = (profile.account_uid or "").strip() if profile is not None else ""
+    initial_recovery_email = (recovery_email_field.value or "").strip()
+    cred_state: dict[str, Any] = {
+        "account_uid": initial_account_uid,
+        "recovery_owner": initial_account_uid if initial_recovery_email else "",
+        "recovery_value": initial_recovery_email,
+        "backup_owner": initial_account_uid if initial_backup_codes else "",
+        "backup_value": initial_backup_codes,
+        "initial_backup_restore": None,
+        "used_quick_paste": False,
+    }
+    account_error = ft.Text(
+        "",
+        key="account_cred_error",
+        size=12,
+        color=COLORS["error"],
+        visible=False,
+    )
+
+    def _on_recovery_change(_: ft.ControlEvent) -> None:
+        val = (recovery_email_field.value or "").strip()
+        owner = (uid_field.value or "").strip() or cred_state["account_uid"]
+        cred_state["recovery_value"] = val
+        cred_state["recovery_owner"] = owner if val else ""
+        with contextlib.suppress(Exception):
+            ft.context.disable_auto_update()
+
+    def _on_backup_change(_: ft.ControlEvent) -> None:
+        val = _clean_backup_text(backup_codes_field.value or "")
+        owner = (uid_field.value or "").strip() or cred_state["account_uid"]
+        cred_state["backup_value"] = val
+        cred_state["backup_owner"] = owner if val else ""
+        if initial_account_uid and owner.casefold() == initial_account_uid.casefold():
+            cred_state["initial_backup_restore"] = None
+        with contextlib.suppress(Exception):
+            ft.context.disable_auto_update()
+
+    recovery_email_field.on_change = _on_recovery_change
+    backup_codes_field.on_change = _on_backup_change
+
     totp_timer_state: dict[str, Any] = {"active": True, "timer": None, "last": None}
     totp_timer_lock = threading.Lock()
     timer_cls = threading.Timer
@@ -351,22 +394,108 @@ def open_profile_dialog(
     two_fa_field.on_change = _update_totp_preview
     _render_totp_state(notify=False)
 
-    def _on_quick_paste(_: ft.ControlEvent) -> None:
-        raw = (quick_paste_field.value or "").strip()
+    def _on_quick_paste(e: ft.ControlEvent | None = None) -> None:
+        raw_val = quick_paste_field.value or ""
+        if not raw_val and e is not None and isinstance(getattr(e, "data", None), str):
+            raw_val = e.data
+        raw = raw_val.strip()
         if not raw:
+            with contextlib.suppress(Exception):
+                ft.context.disable_auto_update()
             return
         parsed = parse_account_line(raw)
-        uid_field.value = parsed["account_uid"]
-        if parsed["account_uid"] and not (name_field.value or "").strip() and not is_edit:
-            name_field.value = parsed["account_uid"].split("@")[0][:40]
+        next_uid = parsed["account_uid"]
+        typed_uid = (uid_field.value or "").strip()
+        # On a previously bound draft, a temporarily blank UID stays bound to the last account.
+        owner_uid = typed_uid or cred_state["account_uid"]
+        current_rec = (recovery_email_field.value or "").strip()
+        current_backup = _clean_backup_text(backup_codes_field.value or "")
+        cred_state["used_quick_paste"] = True
+        # Re-bind credential ownership only when the user explicitly edited that field.
+        if current_rec != cred_state["recovery_value"]:
+            cred_state["recovery_owner"] = owner_uid if current_rec else ""
+            cred_state["recovery_value"] = current_rec
+        if current_backup != cred_state["backup_value"]:
+            cred_state["backup_owner"] = owner_uid if current_backup else ""
+            cred_state["backup_value"] = current_backup
+            if initial_account_uid and owner_uid.casefold() == initial_account_uid.casefold():
+                cred_state["initial_backup_restore"] = None
+
+        rec_owner = cred_state["recovery_owner"]
+        rec_belongs_to_other = bool(
+            rec_owner and next_uid and rec_owner.casefold() != next_uid.casefold()
+        )
+        backup_owner = cred_state["backup_owner"]
+        backup_belongs_to_other = bool(
+            backup_owner and next_uid and backup_owner.casefold() != next_uid.casefold()
+        )
+
+        uid_field.value = next_uid
+        if next_uid and not (name_field.value or "").strip() and not is_edit:
+            name_field.value = next_uid.split("@")[0][:40]
         pass_field.value = parsed["account_password"]
         two_fa_field.value = parsed["two_fa_secret"]
-        rec_mail, clean_note = split_recovery_and_notes(recovery_email_field.value, parsed["notes"])
-        if rec_mail:
-            recovery_email_field.value = rec_mail
+
+        pasted_rec, clean_note = split_recovery_and_notes("", parsed["notes"])
+        if pasted_rec:
+            recovery_email_field.value = pasted_rec
+            # Keep a blank-UID Parse bound to the active draft account rather than unowned.
+            cred_state["recovery_owner"] = next_uid or owner_uid
+            cred_state["recovery_value"] = pasted_rec
+        elif rec_belongs_to_other:
+            recovery_email_field.value = ""
+            cred_state["recovery_owner"] = ""
+            cred_state["recovery_value"] = ""
+        elif current_rec and next_uid and not cred_state["recovery_owner"]:
+            cred_state["recovery_owner"] = next_uid
+
+        reverting_to_initial = bool(
+            is_edit
+            and initial_account_uid
+            and next_uid
+            and next_uid.casefold() == initial_account_uid.casefold()
+        )
+        if backup_belongs_to_other:
+            if (
+                is_edit
+                and initial_account_uid
+                and backup_owner.casefold() == initial_account_uid.casefold()
+            ):
+                cred_state["initial_backup_restore"] = current_backup
+            if reverting_to_initial and cred_state["initial_backup_restore"] is not None:
+                restored = cred_state["initial_backup_restore"]
+                backup_codes_field.value = restored
+                cred_state["backup_owner"] = next_uid if restored else ""
+                cred_state["backup_value"] = restored
+                cred_state["initial_backup_restore"] = None
+            else:
+                backup_codes_field.value = ""
+                cred_state["backup_owner"] = ""
+                cred_state["backup_value"] = ""
+        elif (
+            reverting_to_initial
+            and cred_state["initial_backup_restore"] is not None
+            and not current_backup
+        ):
+            # Reverting restores A's untouched snapshot or deliberate edit from before the detour.
+            restored = cred_state["initial_backup_restore"]
+            backup_codes_field.value = restored
+            cred_state["backup_owner"] = next_uid if restored else ""
+            cred_state["backup_value"] = restored
+            cred_state["initial_backup_restore"] = None
+        elif current_backup and next_uid and not cred_state["backup_owner"]:
+            cred_state["backup_owner"] = next_uid
+
+        if next_uid:
+            cred_state["account_uid"] = next_uid
         notes_field.value = clean_note
         quick_paste_field.value = ""
-        _update_totp_preview()
+        account_error.visible = False
+        # Update TOTP preview state without a child-only update() call, which in Flet 1.x
+        # marks update-called and suppresses auto-update for the 7 sibling fields above.
+        _render_totp_state(notify=False)
+        with contextlib.suppress(Exception):
+            page.update()
 
     quick_paste_field.on_submit = _on_quick_paste
     quick_paste_btn = ft.OutlinedButton(
@@ -803,7 +932,7 @@ def open_profile_dialog(
         engine = engine_dropdown.value or "camoufox"
         timezone = (timezone_field.value or "").strip()
         locale = (locale_field.value or "").strip()
-        name_error.visible = proxy_error.visible = geo_error.visible = False
+        name_error.visible = proxy_error.visible = geo_error.visible = account_error.visible = False
 
         valid_name, name_err = validate_profile_name(name)
         if not valid_name:
@@ -844,13 +973,64 @@ def open_profile_dialog(
             page.update()
             return
 
+        final_uid = (uid_field.value or "").strip()
+        final_rec = (recovery_email_field.value or "").strip()
+        raw_backup = backup_codes_field.value or ""
+        quick_paste_reverted_auto_clear = bool(
+            is_edit
+            and cred_state["used_quick_paste"]
+            and initial_account_uid
+            and final_uid.casefold() == initial_account_uid.casefold()
+            and cred_state["initial_backup_restore"] is not None
+            and not cred_state["backup_value"]
+            and not _clean_backup_text(raw_backup)
+        )
+        if quick_paste_reverted_auto_clear:
+            raw_backup = cred_state["initial_backup_restore"]
+
         try:
-            cleaned_backup_codes = normalize_backup_codes(backup_codes_field.value or "")
+            cleaned_backup_codes = normalize_backup_codes(raw_backup)
         except ValueError as exc:
             name_error.value = str(exc)
             name_error.visible = True
             page.update()
             return
+
+        if cred_state["used_quick_paste"]:
+            if final_rec != cred_state["recovery_value"]:
+                cred_state["recovery_owner"] = final_uid if final_rec else ""
+                cred_state["recovery_value"] = final_rec
+            if (
+                not quick_paste_reverted_auto_clear
+                and cleaned_backup_codes != cred_state["backup_value"]
+            ):
+                cred_state["backup_owner"] = final_uid if cleaned_backup_codes else ""
+                cred_state["backup_value"] = cleaned_backup_codes
+                if initial_account_uid and final_uid.casefold() == initial_account_uid.casefold():
+                    cred_state["initial_backup_restore"] = None
+
+            mismatched_owners: list[str] = []
+            if (
+                final_rec
+                and cred_state["recovery_owner"]
+                and cred_state["recovery_owner"].casefold() != final_uid.casefold()
+            ):
+                mismatched_owners.append(cred_state["recovery_owner"])
+            if (
+                cleaned_backup_codes
+                and cred_state["backup_owner"]
+                and cred_state["backup_owner"].casefold() != final_uid.casefold()
+            ):
+                mismatched_owners.append(cred_state["backup_owner"])
+            if mismatched_owners:
+                account_error.value = get_string(
+                    "quick_paste_uid_mismatch",
+                    owner=", ".join(dict.fromkeys(mismatched_owners)),
+                    uid=final_uid or "(empty)",
+                )
+                account_error.visible = True
+                page.update()
+                return
 
         is_chrome = engine == "chrome"
         default_canvas = profile.canvas_mode if profile is not None else "auto"
@@ -873,10 +1053,10 @@ def open_profile_dialog(
             initial_fp = chrome_state["persona"] if is_chrome else fp_state["fp"]
         extra_kwargs = {
             "group": (group_dropdown.value or "").strip(),
-            "account_uid": (uid_field.value or "").strip(),
+            "account_uid": final_uid,
             "account_password": pass_field.value or "",
             "two_fa_secret": cleaned_2fa,
-            "recovery_email": (recovery_email_field.value or "").strip(),
+            "recovery_email": final_rec,
             "notes": (notes_field.value or "").strip(),
             "start_url": normalize_start_url(raw_start_url),
             "webrtc_mode": webrtc_dropdown.value or "proxy",
@@ -884,8 +1064,15 @@ def open_profile_dialog(
             "initial_fingerprint": initial_fp,
             "extension_ids": sorted(selected_ext_ids),
         }
+        quick_paste_replaced_initial = bool(
+            is_edit
+            and cred_state["used_quick_paste"]
+            and initial_account_uid
+            and final_uid.casefold() != initial_account_uid.casefold()
+        )
         if (not is_edit and cleaned_backup_codes) or (
-            is_edit and cleaned_backup_codes != initial_backup_codes
+            is_edit
+            and (cleaned_backup_codes != initial_backup_codes or quick_paste_replaced_initial)
         ):
             extra_kwargs["backup_codes"] = cleaned_backup_codes
 
@@ -1021,6 +1208,7 @@ def open_profile_dialog(
                 backup_codes_field,
                 get_string("backup_codes_hint"),
             ),
+            account_error,
         ],
     )
 
