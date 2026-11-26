@@ -706,8 +706,12 @@ test('Warming keeps keyboard focus after a scenario is activated', async ({ app,
   await browser.evaluate(() => document.querySelector<HTMLElement>('[data-scenario="social_news"]')?.focus());
   await browser.keyboard.press('Enter');
   await expect(browser.locator('[data-scenario="social_news"]')).toHaveAttribute('class', /active/);
+  const nextScenario = await browser.evaluate(() =>
+    document.querySelector('[data-scenario="social_news"]')?.nextElementSibling?.getAttribute('data-scenario')
+  );
+  expect(nextScenario).toBeTruthy();
   await browser.keyboard.press('Tab');
-  expect(await browser.evaluate(() => (document.activeElement as HTMLElement).dataset.scenario)).toBe('ecommerce_cookie');
+  expect(await browser.evaluate(() => (document.activeElement as HTMLElement).dataset.scenario)).toBe(nextScenario);
 });
 
 test('Warming keeps long campaign names inside the queue at mobile and desktop widths', async ({ app, browser }) => {
