@@ -557,6 +557,9 @@ test('Warming keeps a custom campaign name when targets change', async ({ app, b
   await name.fill('Weekend campaign');
   await browser.locator('.warm-prof-chip input:checked').last().click();
   await expect(name).toHaveValue('Weekend campaign');
+  await name.fill('Warm 1 profile(s)');
+  await secondTarget.click();
+  await expect(name).toHaveValue('Warm 2 profile(s)');
 });
 
 test('Warming shows active status instead of the previous result during a rerun', async ({ app, browser }) => {
@@ -600,8 +603,30 @@ test('Warming keeps keyboard focus after a scenario is activated', async ({ app,
   await app.open('/');
   await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
   await browser.locator('#login-form button').click();
+  await browser.evaluate(() => {
+    const originalFetch = window.fetch.bind(window);
+    const resume = new Promise<void>((resolve) => {
+      window.addEventListener('test-warming-catalog-ready', () => resolve(), { once: true });
+    });
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await originalFetch(input, init);
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (!url.endsWith('/warming/tasks') || !response.ok) return response;
+      await resume;
+      const catalog = await response.json();
+      return Response.json({
+        ...catalog,
+        scenarios: catalog.scenarios.filter((scenario: { id: string }) => scenario.id !== 'custom'),
+      });
+    };
+  });
   await browser.locator('#warming-btn').click();
+  await browser.evaluate(() => {
+    document.querySelector<HTMLElement>('[data-scenario="custom"]')?.focus();
+    window.dispatchEvent(new Event('test-warming-catalog-ready'));
+  });
   await expect(browser.locator('#warm-customize-btn')).toBeEnabled();
+  expect(await browser.evaluate(() => (document.activeElement as HTMLElement).dataset.scenario)).toBe('youtube_trust');
 
   await browser.evaluate(() => document.querySelector<HTMLElement>('[data-scenario="social_news"]')?.focus());
   await browser.keyboard.press('Enter');
