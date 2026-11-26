@@ -560,6 +560,9 @@ test('Warming keeps a custom campaign name when targets change', async ({ app, b
   await name.fill('Warm 1 profile(s)');
   await secondTarget.click();
   await expect(name).toHaveValue('Warm 2 profile(s)');
+  await name.fill('');
+  await browser.locator('.warm-prof-chip input:checked').last().click();
+  await expect(name).toHaveValue('');
 });
 
 test('Warming shows active status instead of the previous result during a rerun', async ({ app, browser }) => {

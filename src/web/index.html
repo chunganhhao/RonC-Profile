@@ -2408,7 +2408,11 @@ function openWarmingModal() {
     const targetsBox = h("div", { class: "warm-targets" });
     const warnNote = h("div", { class: "note hidden" });
     const defaultName = () => `Warm ${initialTargets.size} profile(s)`;
-    const nameInput = h("input", { id: "warm-name", type: "text", value: defaultName() });
+    let nameEdited = false;
+    const nameInput = h("input", {
+      id: "warm-name", type: "text", value: defaultName(),
+      oninput: () => { nameEdited = nameInput.value !== defaultName(); },
+    });
     const stepsTitle = h("span", {}, t("warm_steps_url_title"));
     const stepsCountBadge = h("span", { class: "warm-badge" });
     const customizeBtn = h("button", { type: "button", id: "warm-customize-btn", class: "btn btn-line", style: "height:30px;padding:0 10px;font-size:12px", disabled: true }, t("warm_customize"));
@@ -2483,7 +2487,6 @@ function openWarmingModal() {
             type: "checkbox",
             checked: initialTargets.has(p.name),
             onchange: (e) => {
-              const nameEdited = nameInput.value.trim() !== "" && nameInput.value !== defaultName();
               e.target.checked ? initialTargets.add(p.name) : initialTargets.delete(p.name);
               if (!nameEdited) nameInput.value = defaultName();
               updateTargetsWarn();
