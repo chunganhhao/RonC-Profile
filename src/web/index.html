@@ -853,6 +853,7 @@ Object.assign(I18N.en, {
   warm_title: "Account Warming Studio",
   warm_sub: "Separate scenarios with human-like web interactions and visual step editing",
   warm_targets: "Target Profiles",
+  warm_targets_required: "Select at least one target profile",
   warm_many_warn: "Sequential warming will run across {n} profiles",
   warm_name: "Campaign Name",
   warm_steps_title: "Interaction Playbook (Active)",
@@ -952,6 +953,7 @@ Object.assign(I18N.vi, {
   warm_title: "Trạm Ngâm Tài Khoản (Warming Studio)",
   warm_sub: "Tách riêng từng kịch bản, xem trước chuỗi hành động giống người thật và chỉnh từng bước",
   warm_targets: "Hồ sơ mục tiêu",
+  warm_targets_required: "Chọn ít nhất một profile mục tiêu",
   warm_many_warn: "Sẽ chạy tuần tự trên {n} hồ sơ đã chọn",
   warm_name: "Tên chiến dịch",
   warm_steps_title: "Chuỗi tương tác (Sẽ chạy)",
@@ -2402,7 +2404,7 @@ function openWarmingModal() {
   const closeDialog = () => { cleanup(); if (closeModalFn) closeModalFn(); };
   modal((close) => {
     closeModalFn = close;
-    const initialTargets = new Set(selected.size ? [...selected] : profiles.slice(0, 1).map((p) => p.name));
+    const initialTargets = new Set(selected);
     const BUILTIN_SCENARIOS = ["youtube_trust", "social_news", "gmail_trust", "ecommerce_cookie"];
     let scenarios = [
       { id: "youtube_trust", recommended_minutes: 4, default_urls: ["https://www.youtube.com", "https://www.google.com/search?q=technology+trends", "https://news.google.com"], sample_steps: [] },
@@ -2440,7 +2442,7 @@ function openWarmingModal() {
 
     const scenariosGrid = h("div", { class: "warm-scenarios" });
     const targetsBox = h("div", { class: "warm-targets" });
-    const warnNote = h("div", { class: "note hidden" });
+    const warnNote = h("div", { id: "warm-targets-note", class: "note hidden" });
     const defaultName = () => `Warm ${initialTargets.size} profile(s)`;
     let nameEdited = false;
     const nameInput = h("input", {
@@ -2503,7 +2505,7 @@ function openWarmingModal() {
       customizeBtn.disabled = notReady;
       sampleBtn.disabled = notReady;
       for (const b of tplButtons) b.disabled = notReady;
-      const blocked = isBlankBuiltinBlocked();
+      const blocked = !initialTargets.size || isBlankBuiltinBlocked();
       if (!submitting) {
         saveBtn.disabled = blocked;
         runBtn.disabled = blocked;
@@ -2534,8 +2536,8 @@ function openWarmingModal() {
     };
     const updateTargetsWarn = () => {
       const n = initialTargets.size;
-      warnNote.className = n > 5 ? "note" : "note hidden";
-      warnNote.replaceChildren(icon("alert", true), h("span", {}, t("warm_many_warn", { n })));
+      warnNote.classList.toggle("hidden", n > 0 && n <= 5);
+      warnNote.replaceChildren(icon("alert", true), h("span", {}, n ? t("warm_many_warn", { n }) : t("warm_targets_required")));
     };
     const renderTargets = () => {
       targetsBox.replaceChildren(
@@ -2547,6 +2549,7 @@ function openWarmingModal() {
               e.target.checked ? initialTargets.add(p.name) : initialTargets.delete(p.name);
               if (!nameEdited) nameInput.value = defaultName();
               updateTargetsWarn();
+              syncCatalogControls();
             },
           });
           return h("label", { class: "warm-prof-chip" }, cb, h("span", {}, p.name));
