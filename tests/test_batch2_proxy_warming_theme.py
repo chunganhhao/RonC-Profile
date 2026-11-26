@@ -5002,6 +5002,7 @@ def test_warming_interactive_social_gmail_texts_headless_and_pre_action_timeout(
         _WIKI_SEARCH_TOPICS,
         normalize_warming_steps,
     )
+    from src.ui.dialogs import warming as warming_dlg_mod
 
     monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
     monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
@@ -5171,6 +5172,7 @@ def test_warming_interactive_social_gmail_texts_headless_and_pre_action_timeout(
         assert r.status_code == 201
         assert r.json()["headless"] is True
 
+    monkeypatch.setattr(warming_dlg_mod, "host_supports_headed", lambda: True)
     page = _DummyPage()
     open_warming_dialog(page, ws, container.profile_manager, SimpleNamespace())
     dlg_controls = list(_walk_controls(page.dialog))
