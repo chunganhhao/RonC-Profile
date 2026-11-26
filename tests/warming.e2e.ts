@@ -12,26 +12,38 @@ test('Warming requires an explicitly selected profile', async ({ app, browser })
 
   const targets = browser.locator('.warm-prof-chip input');
   const checked = browser.locator('.warm-prof-chip input:checked');
+  const name = browser.locator('#warm-name');
   const save = browser.locator('#warm-save-btn');
   const run = browser.locator('#warm-run-btn');
   const hint = browser.locator('#warm-targets-note');
   await expect(targets).toHaveCount(2);
   await expect(checked).toHaveCount(0);
+  await expect(name).toHaveValue('');
+  await expect(name).toHaveAttribute('placeholder', 'Warm 0 profile(s)');
   await expect(hint).toContainText('Select at least one target profile');
   await expect(save).toBeDisabled();
   await expect(run).toBeDisabled();
 
   await targets.last().check();
   await expect(checked).toHaveCount(1);
+  await expect(name).toHaveValue('Warm 1 profile(s)');
   await expect(hint).not.toBeVisible();
   await expect(save).toBeEnabled();
   await expect(run).toBeEnabled();
   await targets.last().uncheck();
+  await expect(name).toHaveValue('');
   await expect(hint).toBeVisible();
   await expect(save).toBeDisabled();
   await expect(run).toBeDisabled();
 
+  await targets.last().check();
+  await name.fill('');
+  await targets.last().uncheck();
+  await targets.last().check();
+  await expect(name).toHaveValue('');
+
   await browser.keyboard.press('Escape');
+  await expect(browser.locator('[role=dialog]')).not.toBeVisible();
   await browser.locator('[data-select-profile="Research"]').check();
   await browser.locator('#warming-btn').click();
   await expect(checked).toHaveCount(1);

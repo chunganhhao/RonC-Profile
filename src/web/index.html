@@ -2446,7 +2446,9 @@ function openWarmingModal() {
     const defaultName = () => `Warm ${initialTargets.size} profile(s)`;
     let nameEdited = false;
     const nameInput = h("input", {
-      id: "warm-name", type: "text", value: defaultName(),
+      id: "warm-name", type: "text",
+      value: initialTargets.size ? defaultName() : "",
+      placeholder: initialTargets.size ? "" : defaultName(),
       oninput: () => { nameEdited = nameInput.value !== defaultName(); },
     });
     const stepsTitle = h("span", {}, t("warm_steps_url_title"));
@@ -2547,7 +2549,8 @@ function openWarmingModal() {
             checked: initialTargets.has(p.name),
             onchange: (e) => {
               e.target.checked ? initialTargets.add(p.name) : initialTargets.delete(p.name);
-              if (!nameEdited) nameInput.value = defaultName();
+              if (!nameEdited) nameInput.value = initialTargets.size ? defaultName() : "";
+              nameInput.placeholder = initialTargets.size ? "" : defaultName();
               updateTargetsWarn();
               syncCatalogControls();
             },
