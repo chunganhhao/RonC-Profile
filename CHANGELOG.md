@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- Web panel: Ngâm tài khoản yêu cầu chọn ít nhất một profile để lưu hoặc chạy chiến dịch, không tự chọn profile đầu tiên.
+
 - Web panel: giữ tên chiến dịch ngâm tài khoản khi đổi profile, hiện đúng trạng thái khi chạy lại, giữ tiêu điểm khi chọn kịch bản bằng bàn phím và không để tên dài lấn các nút trong danh sách tác vụ.
 
 - App desktop: cuộn được toàn bộ biểu mẫu và danh sách tác vụ đã lưu trong hộp thoại Ngâm tài khoản ở cửa sổ 900 × 600, kể cả khi mở trình nhập kịch bản.

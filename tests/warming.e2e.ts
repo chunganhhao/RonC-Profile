@@ -1,12 +1,62 @@
 import { test } from '@e2e-dev/web';
 import { expect } from 'e2e';
 
+test('Warming requires an explicitly selected profile', async ({ app, browser }) => {
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('[data-select-profile]')).toHaveCount(2);
+  await expect(browser.locator('[data-select-profile]:checked')).toHaveCount(0);
+  await browser.locator('#warming-btn').click();
+  await expect(browser.locator('#warm-customize-btn')).toBeEnabled();
+
+  const targets = browser.locator('.warm-prof-chip input');
+  const checked = browser.locator('.warm-prof-chip input:checked');
+  const name = browser.locator('#warm-name');
+  const save = browser.locator('#warm-save-btn');
+  const run = browser.locator('#warm-run-btn');
+  const hint = browser.locator('#warm-targets-note');
+  await expect(targets).toHaveCount(2);
+  await expect(checked).toHaveCount(0);
+  await expect(name).toHaveValue('');
+  await expect(name).toHaveAttribute('placeholder', 'Warm 0 profile(s)');
+  await expect(hint).toContainText('Select at least one target profile');
+  await expect(save).toBeDisabled();
+  await expect(run).toBeDisabled();
+
+  await targets.last().check();
+  await expect(checked).toHaveCount(1);
+  await expect(name).toHaveValue('Warm 1 profile(s)');
+  await expect(hint).not.toBeVisible();
+  await expect(save).toBeEnabled();
+  await expect(run).toBeEnabled();
+  await targets.last().uncheck();
+  await expect(name).toHaveValue('');
+  await expect(hint).toBeVisible();
+  await expect(save).toBeDisabled();
+  await expect(run).toBeDisabled();
+
+  await targets.last().check();
+  await name.fill('');
+  await targets.last().uncheck();
+  await targets.last().check();
+  await expect(name).toHaveValue('');
+
+  await browser.keyboard.press('Escape');
+  await expect(browser.locator('[role=dialog]')).not.toBeVisible();
+  await browser.locator('[data-select-profile="Research"]').check();
+  await browser.locator('#warming-btn').click();
+  await expect(checked).toHaveCount(1);
+  await expect(browser.locator('.warm-prof-chip:has-text("Research") input')).toBeChecked();
+});
+
 test('Account Warming studio: scenario cards, visual step builder, and task persistence', async ({ app, browser }) => {
   await browser.setViewport({ width: 1440, height: 900 });
   await app.open('/');
   await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
   await browser.locator('#login-form button').click();
   await expect(browser.locator('#app')).toBeVisible();
+  await browser.locator('[data-select-profile="Studio Gmail"]').check();
 
   await browser.locator('#warming-btn').click();
   await expect(browser.locator('[role=dialog]')).toBeVisible();
@@ -283,6 +333,8 @@ test('Account Warming studio: slow >2s GETs are not self-aborted and unsupported
   await browser.locator('#warming-btn').click();
   await expect(browser.locator('[role=dialog]')).toBeVisible();
 
+  await browser.locator('.warm-prof-chip input').first().check();
+
   // §9.2 Slow 2.35s GET #1 completes without self-abort, enables Customize, and slow GET #2 updates idle -> running
   await expect(browser.locator('#warm-customize-btn')).toBeEnabled({ timeout: 5000 });
   await expect(browser.locator('#warm-tasks button:has-text("Launch")')).toBeVisible();
@@ -316,6 +368,7 @@ test('Account Warming studio: Web rejects extra-slash URLs like backend and deco
   await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
   await browser.locator('#login-form button').click();
   await expect(browser.locator('#app')).toBeVisible();
+  await browser.locator('[data-select-profile="Studio Gmail"]').check();
 
   // §11.4 Real REST loopback: extra-slash URL is rejected in preview & filtered/blocked consistently
   await browser.locator('#warming-btn').click();
@@ -408,6 +461,7 @@ test('Account Warming studio: recovers empty queue after 503, blocks stale GET o
   await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
   await browser.locator('#login-form button').click();
   await expect(browser.locator('#app')).toBeVisible();
+  await browser.locator('[data-select-profile="Studio Gmail"]').check();
 
   await browser.evaluate(() => {
     const w = window as unknown as Record<string, unknown>;
@@ -564,6 +618,7 @@ test('Warming keeps a custom campaign name when targets change', async ({ app, b
   await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
   await browser.locator('#login-form button').click();
   await expect(browser.locator('#app')).toBeVisible();
+  await browser.locator('[data-select-profile="Studio Gmail"]').check();
   await browser.locator('#warming-btn').click();
 
   const name = browser.locator('#warm-name');
@@ -663,6 +718,7 @@ test('Warming keeps long campaign names inside the queue at mobile and desktop w
   await app.open('/');
   await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
   await browser.locator('#login-form button').click();
+  await browser.locator('[data-select-profile="Studio Gmail"]').check();
   await browser.locator('#warming-btn').click();
   const longName = 'LongCampaignName'.repeat(5);
   await browser.locator('#warm-name').fill(longName);
@@ -800,6 +856,7 @@ test('Account Warming studio: gates blank built-ins while catalog is loading/503
   await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
   await browser.locator('#login-form button').click();
   await expect(browser.locator('#app')).toBeVisible();
+  await browser.locator('[data-select-profile="Studio Gmail"]').check();
 
   await browser.evaluate(() => {
     const w = window as unknown as Record<string, unknown>;
