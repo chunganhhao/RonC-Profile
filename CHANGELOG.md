@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- Web panel: giữ tên chiến dịch ngâm tài khoản khi đổi profile, hiện đúng trạng thái khi chạy lại, giữ tiêu điểm khi chọn kịch bản bằng bàn phím và không để tên dài lấn các nút trong danh sách tác vụ.
+
 - App desktop: cuộn được toàn bộ biểu mẫu và danh sách tác vụ đã lưu trong hộp thoại Ngâm tài khoản ở cửa sổ 900 × 600, kể cả khi mở trình nhập kịch bản.
 
 - App desktop: hộp thoại ngâm tài khoản điền sẵn tên chiến dịch theo ngôn ngữ đang dùng (“Ngâm 2 hồ sơ” trong tiếng Việt), hiển thị trọn gợi ý giờ chạy và gợi ý nhãn mặc định trong Kho Proxy không còn bị cắt.
