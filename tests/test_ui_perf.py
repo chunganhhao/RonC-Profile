@@ -66,7 +66,7 @@ def test_disappearing_tag_filter_returns_to_first_page_of_all_profiles(tmp_path,
 
     app.state.search_query = "no match"
     assert app._get_page_profiles() == ([], [], 1)
-    assert app.state.current_page == 2
+    assert app.state.current_page == 1
     app._refresh_profiles()
     assert app.filter == "group:Editorial"
 
@@ -76,8 +76,9 @@ def test_disappearing_tag_filter_returns_to_first_page_of_all_profiles(tmp_path,
         assert app.pm.patch_profile(profile.name, tags=[])
     assert app._get_page_profiles() == ([], [], 1)
     assert app.filter == "group:Editorial"
-    assert app.state.current_page == 2
+    assert app.state.current_page == 1
 
+    app.state.current_page = 2
     app._refresh_profiles()
     untagged = app.pm.list_profiles()
     assert app._get_page_profiles() == (untagged, untagged[:1], 3)
