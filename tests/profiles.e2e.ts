@@ -76,73 +76,101 @@ test('activating a sidebar filter keeps keyboard focus on that filter', async ({
 });
 
 test('profile field editors persist only their fields', async ({ app, browser }) => {
+  const token = 'fixture-token-' + 't'.repeat(32);
   await app.open('/');
-  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#token').fill(token);
   await browser.locator('#login-form button').click();
   await expect(browser.locator('#app')).toBeVisible();
-  await browser.locator('[aria-label="Edit ID: Studio Gmail"]').click();
-  await browser.locator('#field-value').fill('2');
-  await browser.locator('#modal-root .btn-act').click();
-  await expect(browser.locator('.row.body').last()).toContainText('Studio Gmail');
-  await browser.locator('[aria-label="Edit Profile: Studio Gmail"]').click();
-  await browser.locator('#field-value').fill('Studio renamed');
-  await browser.locator('#modal-root .btn-act').click();
-  const renamed = () => browser.locator('.row.body').filter({ hasText: 'Studio renamed' });
-  await expect(renamed()).toContainText('studio@example.test');
-  await browser.locator('[aria-label="Edit Tags: Studio renamed"]').click();
-  await browser.locator('#tag-input').fill('QA');
-  await browser.locator('#tag-input').press('Enter');
-  await browser.locator('#tag-input').fill('Antigravity');
-  await browser.locator('#tag-input').press('Enter');
-  await browser.locator('#modal-root .btn-act').click();
-  // All 4 tags must be visible directly on the row without "+1 / +2" hiding
-  await expect(renamed()).toContainText('Gmail');
-  await expect(renamed()).toContainText('Gemini Pixel');
-  await expect(renamed()).toContainText('QA');
-  await expect(renamed()).toContainText('Antigravity');
-  await browser.locator('[aria-label="Edit Tags: Studio renamed"]').click();
-  await expect(browser.locator('[aria-label="Remove QA"]')).toBeVisible();
-  await browser.locator('#modal-root .btn-line').last().click();
-  // Backup Codes editor (synthetic fixture sheet + on-demand read + generic toast without leaking code)
-  await browser.locator('[aria-label="Backup Codes: Studio renamed"]').click();
-  await expect(browser.locator('#field-value')).toBeEnabled();
-  await browser.locator('#field-value').fill('FIXTURE BACKUP CODES\n1. 1111 0001   6. 1111 0006\n2. 1111 0002   7. 1111 0007');
-  await expect(browser.locator('[data-backup-code="1111 0001"]')).toBeVisible();
-  await expect(browser.locator('[data-backup-code="1111 0006"]')).toBeVisible();
-  await browser.locator('[data-backup-code="1111 0001"]').click();
-  await expect(browser.locator('#toast')).toContainText('Backup codes copied');
-  await expect(browser.locator('#toast')).not.toContainText('1111 0001');
-  await browser.locator('#modal-root .btn-act').click();
-  await expect(browser.locator('[role=dialog]')).toHaveCount(0);
-  // Notes-only edit via full dialog must preserve saved backup codes when not revealed/changed
-  await browser.locator('[aria-label="Edit: Studio renamed"]').click();
-  await browser.locator('#f-notes').fill('Preserve backup check');
-  await browser.locator('#modal-root .btn-act').click();
-  await expect(browser.locator('[role=dialog]')).toHaveCount(0);
-  await browser.locator('[aria-label="Backup Codes: Studio renamed"]').click();
-  await expect(browser.locator('#field-value')).toHaveValue(/1111 0001/);
-  await browser.locator('#modal-root .btn-line').last().click();
-  // Rows-per-page selector (5, 10, 20, 50, 100, 200) & horizontal scroll container
-  await expect(browser.locator('#sheet-scroll')).toBeVisible();
-  await expect(browser.locator('#page-size-select')).toHaveValue('20');
-  await expect(browser.locator('#total-count')).toContainText('Total: 2');
-  await browser.locator('[aria-label="Edit Proxy: Studio renamed"]').click();
-  await browser.locator('#field-value').fill('not valid');
-  await browser.locator('#modal-root .btn-act').click();
-  await expect(browser.locator('#modal-root .msg.err')).toHaveText(/.+/);
-  await browser.locator('#field-value').fill('socks5://127.0.0.1:1080');
-  await browser.locator('#modal-root .btn-act').click();
-  await expect(renamed()).toContainText('127.0.0.1:1080');
-  await browser.locator('[aria-label="Edit Notes: Studio renamed"]').click();
-  await browser.locator('#field-value').fill('New reminder');
-  await browser.locator('#modal-root .btn-act').click();
-  await expect(renamed()).toContainText('New reminder');
-  await browser.locator('[aria-label="Copy Gmail: Studio renamed"]').click();
-  await expect(browser.locator('#toast')).toContainText('Gmail copied');
-  await browser.reload();
-  await expect(browser.locator('.row.body').last()).toContainText('Studio renamed');
-  await expect(renamed()).toContainText('studio@example.test');
-  await expect(renamed()).toContainText('New reminder');
+  await browser.evaluate(async (tok) => {
+    const res = await fetch('/api/v1/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({
+        name: 'Editor fixture',
+        os_type: 'macos',
+        account_uid: 'studio@example.test',
+        tags: ['Gmail', 'Gemini Pixel'],
+      }),
+    });
+    if (!res.ok) throw new Error(`Could not create editor test profile (${res.status})`);
+  }, token);
+  try {
+    await browser.reload();
+    await expect(browser.locator('.row.body').last()).toContainText('Editor fixture');
+    await browser.locator('[aria-label="Edit ID: Editor fixture"]').click();
+    await browser.locator('#field-value').fill('1');
+    await browser.locator('#modal-root .btn-act').click();
+    await expect(browser.locator('.row.body').first()).toContainText('Editor fixture');
+    await browser.locator('[aria-label="Edit Profile: Editor fixture"]').click();
+    await browser.locator('#field-value').fill('Studio renamed');
+    await browser.locator('#modal-root .btn-act').click();
+    const renamed = () => browser.locator('.row.body').filter({ hasText: 'Studio renamed' });
+    await expect(renamed()).toContainText('studio@example.test');
+    await browser.locator('[aria-label="Edit Tags: Studio renamed"]').click();
+    await browser.locator('#tag-input').fill('QA');
+    await browser.locator('#tag-input').press('Enter');
+    await browser.locator('#tag-input').fill('Antigravity');
+    await browser.locator('#tag-input').press('Enter');
+    await browser.locator('#modal-root .btn-act').click();
+    // All 4 tags must be visible directly on the row without "+1 / +2" hiding
+    await expect(renamed()).toContainText('Gmail');
+    await expect(renamed()).toContainText('Gemini Pixel');
+    await expect(renamed()).toContainText('QA');
+    await expect(renamed()).toContainText('Antigravity');
+    await browser.locator('[aria-label="Edit Tags: Studio renamed"]').click();
+    await expect(browser.locator('[aria-label="Remove QA"]')).toBeVisible();
+    await browser.locator('#modal-root .btn-line').last().click();
+    // Backup Codes editor (synthetic fixture sheet + on-demand read + generic toast without leaking code)
+    await browser.locator('[aria-label="Backup Codes: Studio renamed"]').click();
+    await expect(browser.locator('#field-value')).toBeEnabled();
+    await browser.locator('#field-value').fill('FIXTURE BACKUP CODES\n1. 1111 0001   6. 1111 0006\n2. 1111 0002   7. 1111 0007');
+    await expect(browser.locator('[data-backup-code="1111 0001"]')).toBeVisible();
+    await expect(browser.locator('[data-backup-code="1111 0006"]')).toBeVisible();
+    await browser.locator('[data-backup-code="1111 0001"]').click();
+    await expect(browser.locator('#toast')).toContainText('Backup codes copied');
+    await expect(browser.locator('#toast')).not.toContainText('1111 0001');
+    await browser.locator('#modal-root .btn-act').click();
+    await expect(browser.locator('[role=dialog]')).toHaveCount(0);
+    // Notes-only edit via full dialog must preserve saved backup codes when not revealed/changed
+    await browser.locator('[aria-label="Edit: Studio renamed"]').click();
+    await browser.locator('#f-notes').fill('Preserve backup check');
+    await browser.locator('#modal-root .btn-act').click();
+    await expect(browser.locator('[role=dialog]')).toHaveCount(0);
+    await browser.locator('[aria-label="Backup Codes: Studio renamed"]').click();
+    await expect(browser.locator('#field-value')).toHaveValue(/1111 0001/);
+    await browser.locator('#modal-root .btn-line').last().click();
+    // Rows-per-page selector (5, 10, 20, 50, 100, 200) & horizontal scroll container
+    await expect(browser.locator('#sheet-scroll')).toBeVisible();
+    await expect(browser.locator('#page-size-select')).toHaveValue('20');
+    await expect(browser.locator('#total-count')).toContainText('Total: 3');
+    await browser.locator('[aria-label="Edit Proxy: Studio renamed"]').click();
+    await browser.locator('#field-value').fill('not valid');
+    await browser.locator('#modal-root .btn-act').click();
+    await expect(browser.locator('#modal-root .msg.err')).toHaveText(/.+/);
+    await browser.locator('#field-value').fill('socks5://127.0.0.1:1080');
+    await browser.locator('#modal-root .btn-act').click();
+    await expect(renamed()).toContainText('127.0.0.1:1080');
+    await browser.locator('[aria-label="Edit Notes: Studio renamed"]').click();
+    await browser.locator('#field-value').fill('New reminder');
+    await browser.locator('#modal-root .btn-act').click();
+    await expect(renamed()).toContainText('New reminder');
+    await browser.locator('[aria-label="Copy Gmail: Studio renamed"]').click();
+    await expect(browser.locator('#toast')).toContainText('Gmail copied');
+    await browser.reload();
+    await expect(browser.locator('.row.body').first()).toContainText('Studio renamed');
+    await expect(renamed()).toContainText('studio@example.test');
+    await expect(renamed()).toContainText('New reminder');
+  } finally {
+    await browser.evaluate(async (tok) => {
+      for (const name of ['Editor fixture', 'Studio renamed']) {
+        const res = await fetch(`/api/v1/profiles/${encodeURIComponent(name)}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${tok}` },
+        });
+        if (!res.ok && res.status !== 404) throw new Error(`Could not delete ${name} (${res.status})`);
+      }
+    }, token);
+  }
 });
 
 test('sidebar tag filters clear stale search and keep rail footer reachable', async ({ app, browser }) => {
