@@ -1138,6 +1138,9 @@ async function refresh() {
       api("GET", "/extensions").catch(() => ({ extensions: [] })),
     ]);
     profiles = list.profiles;
+    if (filter.startsWith("tag:") && !profiles.some((p) => profileTags(p).includes(filter.slice(4)))) {
+      setSidebarFilter("all");
+    }
     extensions = extRes.extensions || [];
     const extCntEl = $("ext-count");
     if (extCntEl) extCntEl.textContent = String(extensions.length);
@@ -1167,10 +1170,6 @@ function visible() {
 let lastRender = "";
 function render() {
   const q = $("search").value.trim();
-  if (filter.startsWith("tag:") && !profiles.some((p) => profileTags(p).includes(filter.slice(4)))) {
-    filter = "all";
-    currentPage = 1;
-  }
   const shown = visible();
   const totalPages = Math.max(1, Math.ceil(shown.length / pageSize));
   if (currentPage > totalPages) currentPage = totalPages;
@@ -1272,24 +1271,24 @@ function extractBackupCodes(raw) {
 }
 
 function profileTags(p) { return p.tags?.length ? p.tags : (p.group ? [p.group] : []); }
+function setSidebarFilter(nextFilter) {
+  filter = nextFilter;
+  currentPage = 1;
+  const searchEl = $("search");
+  if (searchEl && searchEl.value) searchEl.value = "";
+}
+
 function renderFilters() {
   const nav = $("filters");
   const focused = document.activeElement;
   const focusedFilter = nav.contains(focused) ? focused.dataset.filterId : undefined;
-  const selectFilter = (nextFilter) => {
-    filter = nextFilter;
-    currentPage = 1;
-    const searchEl = $("search");
-    if (searchEl && searchEl.value) searchEl.value = "";
-    render();
-  };
   const makeBtn = (id, label, count) => h("button", {
     type: "button",
     "data-filter-id": id,
     class: filter === id ? "active" : "",
     "aria-pressed": String(filter === id),
     title: `${label} (${count})`,
-    onclick: () => selectFilter(id),
+    onclick: () => { setSidebarFilter(id); render(); },
   }, h("span", { class: "nav-lbl" }, label), h("span", { class: "count" }, String(count)));
   const tags = [...new Set(profiles.flatMap(profileTags))].sort();
   nav.replaceChildren(

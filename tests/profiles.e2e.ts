@@ -38,27 +38,48 @@ test('Space keeps keyboard focus on the selected row', async ({ app, browser }) 
 });
 
 test('removing the last use of the active tag returns to All', async ({ app, browser }) => {
+  const token = 'fixture-token-' + 't'.repeat(32);
   await app.open('/');
-  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#token').fill(token);
   await browser.locator('#login-form button').click();
-  await browser.locator('[aria-label="Edit Tags: Research"]').click();
-  await browser.locator('#tag-input').fill('Temporary QA');
-  await browser.locator('#modal-root .btn-act').click();
   const tag = browser.locator('#filters button[title="Temporary QA (1)"]');
-  await tag.click();
-  await expect(browser.locator('#total-count')).toContainText('Total: 1');
+  const search = browser.locator('#search');
+  const editTags = browser.locator('[aria-label="Edit Tags: Research"]');
+  try {
+    await editTags.click();
+    await browser.locator('#tag-input').fill('Temporary QA');
+    await browser.locator('#modal-root .btn-act').click();
+    await tag.click();
+    await expect(browser.locator('#total-count')).toContainText('Total: 1');
 
-  await browser.locator('#search').fill('no matching profile');
-  await expect(browser.locator('.row.body')).toHaveCount(0);
-  await expect(tag).toHaveAttribute('aria-pressed', 'true');
-  await browser.locator('#search').fill('');
+    await search.fill('no matching profile');
+    await expect(browser.locator('.row.body')).toHaveCount(0);
+    await expect(tag).toHaveAttribute('aria-pressed', 'true');
+    await search.fill('Research');
 
-  await browser.locator('[aria-label="Edit Tags: Research"]').click();
-  await browser.locator('[aria-label="Remove Temporary QA"]').click();
-  await browser.locator('#modal-root .btn-act').click();
-  await expect(tag).toHaveCount(0);
-  await expect(browser.locator('#filters button[title="All (2)"]')).toHaveAttribute('aria-pressed', 'true');
-  await expect(browser.locator('.row.body')).toHaveCount(2);
+    await editTags.click();
+    await browser.locator('[aria-label="Remove Temporary QA"]').click();
+    await browser.locator('#modal-root .btn-act').click();
+    await expect(tag).toHaveCount(0);
+    await expect(browser.locator('#filters button[title="All (2)"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(search).toHaveValue('');
+    await expect(browser.locator('.row.body')).toHaveCount(2);
+  } finally {
+    await browser.evaluate(async (tok) => {
+      const auth = { Authorization: `Bearer ${tok}` };
+      const list = await fetch('/api/v1/profiles', { headers: auth });
+      if (!list.ok) throw new Error(`Could not read tag test fixture (${list.status})`);
+      const { profiles } = await list.json();
+      const research = profiles.find((p: { name: string }) => p.name === 'Research');
+      if (!research.tags.includes('Temporary QA')) return;
+      const res = await fetch('/api/v1/profiles/Research', {
+        method: 'PATCH',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags: research.tags.filter((tag: string) => tag !== 'Temporary QA') }),
+      });
+      if (!res.ok) throw new Error(`Could not restore Research tags (${res.status})`);
+    }, token);
+  }
 });
 
 test('activating a sidebar filter keeps keyboard focus on that filter', async ({ app, browser }) => {
