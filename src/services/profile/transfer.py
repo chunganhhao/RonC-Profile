@@ -3,12 +3,23 @@ import errno
 import json
 import os
 import pathlib
+import shutil
 import stat
 import tempfile
 import zipfile
+from collections.abc import Collection
 from datetime import datetime
 from itertools import count
 
+from ...core.config import (
+    PinnedStorageRoot,
+    StorageIdentity,
+    StorageVolumeUnmountedError,
+    require_data_dir_mounted,
+    require_no_pending_delete,
+    require_same_storage_root,
+    storage_root_identity,
+)
 from ...core.logging import get_logger
 from ...models.profile import (
     CANVAS_MODES,
@@ -37,15 +48,39 @@ _EXPORT_STAGING_PREFIX = ".ronc-profile-export-"
 _EXPORT_STAGING_SUFFIX = ".tmp"
 
 
+def _raise_walk_error(exc: OSError) -> None:
+    raise exc
+
+
 def export_to_zip(
     profile: Profile,
     profile_data_dir: str,
     export_path: str,
     include_data: bool = True,
     exclude_files: frozenset[str] = frozenset(),
+    *,
+    expected_root_identity: StorageIdentity | None = None,
+    known_profiles: Collection[str] | None = None,
+    profiles_file: str | os.PathLike[str] | None = None,
 ) -> tuple[bool, str]:
     """Create a ZIP archive of a profile and optionally its browser data."""
     try:
+        require_data_dir_mounted(profile_data_dir)
+        source_path = pathlib.Path(profile_data_dir)
+        root_identity = (
+            require_same_storage_root(source_path.parent, expected_root_identity)
+            if expected_root_identity is not None
+            else storage_root_identity(source_path.parent)
+        )
+        require_no_pending_delete(
+            source_path, known_profiles=known_profiles, profiles_file=profiles_file
+        )
+        source_existed = source_path.exists()
+        if not source_existed:
+            require_same_storage_root(source_path.parent, root_identity)
+            require_no_pending_delete(
+                source_path, known_profiles=known_profiles, profiles_file=profiles_file
+            )
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         stem = f"{profile.name}_{timestamp}"
         fd, staging_path = tempfile.mkstemp(
@@ -59,9 +94,9 @@ def export_to_zip(
             ):
                 zipf.writestr("profile.json", json.dumps(profile.to_dict(), indent=2))
 
-                if include_data and pathlib.Path(profile_data_dir).exists():
+                if include_data and source_existed:
                     archive_stat = os.fstat(staging.fileno())
-                    for root, _dirs, files in os.walk(profile_data_dir):
+                    for root, _dirs, files in os.walk(profile_data_dir, onerror=_raise_walk_error):
                         for file in files:
                             if file.startswith(_EXPORT_STAGING_PREFIX) and file.endswith(
                                 _EXPORT_STAGING_SUFFIX
@@ -84,6 +119,17 @@ def export_to_zip(
                         if pathlib.Path(fp_file).exists():
                             zipf.write(fp_file, os.path.join("data", identity))
 
+            require_data_dir_mounted(profile_data_dir)
+            require_same_storage_root(source_path.parent, root_identity)
+            require_no_pending_delete(
+                source_path, known_profiles=known_profiles, profiles_file=profiles_file
+            )
+            if source_existed and not source_path.exists():
+                raise OSError(
+                    errno.ENODEV,
+                    f"Profile data directory '{source_path}' became unavailable during export",
+                    str(source_path),
+                )
             zip_path = _publish_zip(staging_path, export_path, stem)
 
         logger.info("Exported profile %s to %s", profile.name, zip_path)
@@ -132,9 +178,22 @@ def read_profile_meta(zip_path: str) -> dict | None:
         return None
 
 
+def _safe_archive_rel_parts(entry_name: str) -> tuple[str, ...] | None:
+    rel = entry_name.removeprefix("data/")
+    if not rel or rel.startswith("/") or "\\" in rel:
+        return None
+    parts = [part for part in pathlib.PurePosixPath(rel).parts if part not in ("", ".")]
+    if not parts or any(part in ("/", "..") or ":" in part for part in parts):
+        return None
+    return tuple(parts)
+
+
 def import_from_zip(
     zip_path: str,
     data_dir: str,
+    *,
+    pinned: PinnedStorageRoot | None = None,
+    base_rel_parts: tuple[str, ...] = (),
 ) -> tuple[bool, Profile | str]:
     """Extract a profile from a ZIP archive.
 
@@ -217,30 +276,49 @@ def import_from_zip(
 
             data_files = [f for f in zipf.namelist() if f.startswith("data/")]
             if data_files:
-                profile_data_dir = os.path.join(data_dir, name)
-                root = pathlib.Path(profile_data_dir).resolve()
-                root.mkdir(exist_ok=True, parents=True)
+                if pinned is not None:
+                    dest_root_parts = (*base_rel_parts, name)
+                    pinned.ensure_subdir(dest_root_parts)
+                    for file in data_files:
+                        if file.endswith("/"):
+                            continue
+                        rel_parts = _safe_archive_rel_parts(file)
+                        if rel_parts is None:
+                            return False, f"Unsafe path in archive: {file}"
+                        with (
+                            zipf.open(file) as src,
+                            pinned.open_file_write(
+                                (*dest_root_parts, *rel_parts[:-1]), rel_parts[-1]
+                            ) as dst,
+                        ):
+                            shutil.copyfileobj(src, dst)
+                else:
+                    profile_data_dir = os.path.join(data_dir, name)
+                    root = pathlib.Path(profile_data_dir).resolve()
+                    root.mkdir(exist_ok=True, parents=True)
 
-                for file in data_files:
-                    if file.endswith("/"):
-                        continue
-                    target_path = os.path.join(
-                        profile_data_dir,
-                        os.path.relpath(file, "data"),
-                    )
-                    # Reject entries such as data/../../evil that would be
-                    # written outside the profile's own directory.
-                    if not pathlib.Path(target_path).resolve().is_relative_to(root):
-                        return False, f"Unsafe path in archive: {file}"
-                    pathlib.Path(target_path).parent.mkdir(
-                        exist_ok=True,
-                        parents=True,
-                    )
-                    with zipf.open(file) as src, open(target_path, "wb") as dst:
-                        dst.write(src.read())
+                    for file in data_files:
+                        if file.endswith("/"):
+                            continue
+                        target_path = os.path.join(
+                            profile_data_dir,
+                            os.path.relpath(file, "data"),
+                        )
+                        # Reject entries such as data/../../evil that would be
+                        # written outside the profile's own directory.
+                        if not pathlib.Path(target_path).resolve().is_relative_to(root):
+                            return False, f"Unsafe path in archive: {file}"
+                        pathlib.Path(target_path).parent.mkdir(
+                            exist_ok=True,
+                            parents=True,
+                        )
+                        with zipf.open(file) as src, open(target_path, "wb") as dst:
+                            dst.write(src.read())
 
             logger.info("Imported profile from zip: %s", name)
             return True, profile
+    except StorageVolumeUnmountedError:
+        raise
     except zipfile.BadZipFile:
         return False, "Invalid zip file"
     except Exception as e:

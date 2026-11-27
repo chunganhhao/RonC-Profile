@@ -15,7 +15,12 @@ import os
 import pathlib
 from typing import Any
 
-from ...core.config import FINGERPRINT_FILE
+from ...core.config import (
+    FINGERPRINT_FILE,
+    PinnedStorageRoot,
+    require_data_dir_mounted,
+    require_no_pending_delete,
+)
 from ...core.logging import get_logger
 
 logger = get_logger("browser.fingerprint")
@@ -250,14 +255,22 @@ def generate_coherent_fingerprint(
     return fp
 
 
-def save_fingerprint(profile_dir: str, os_type: str, fp: dict[str, Any]) -> None:
+def save_fingerprint(
+    profile_dir: str,
+    os_type: str,
+    fp: dict[str, Any],
+    *,
+    pinned: PinnedStorageRoot | None = None,
+    rel_dir: tuple[str, ...] | None = None,
+) -> None:
     """Persist a fingerprint dictionary to the profile's directory."""
     path = pathlib.Path(fingerprint_path(profile_dir))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"os": os_type, "fingerprint": fp}),
-        encoding="utf-8",
-    )
+    payload = json.dumps({"os": os_type, "fingerprint": fp}).encode("utf-8")
+    if pinned is not None and rel_dir is not None:
+        pinned.write_file_atomic(rel_dir, FINGERPRINT_FILE, payload)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
     _summary_cache.pop(str(path), None)
 
 
@@ -294,13 +307,36 @@ IDENTITY_FILES = (FINGERPRINT_FILE, CHROME_PERSONA_FILE, GEO_LOCALE_FILE)
 _NAVIGATOR_PLATFORM = {"windows": "Win32", "macos": "MacIntel", "linux": "Linux x86_64"}
 
 
-def reset(profile_dir: str) -> bool:
+def reset(
+    profile_dir: str,
+    *,
+    pinned: PinnedStorageRoot | None = None,
+    rel_dir: tuple[str, ...] | None = None,
+    profiles_file: str | os.PathLike[str] | None = None,
+) -> bool:
     """Delete the saved fingerprint so the next launch generates a new one."""
+    require_data_dir_mounted(profile_dir)
+    require_no_pending_delete(profile_dir, profiles_file=profiles_file)
     removed = False
+    if pinned is not None and rel_dir is not None:
+        for name in IDENTITY_FILES:
+            if pinned.unlink_file(rel_dir, name):
+                _summary_cache.pop(str(pathlib.Path(profile_dir) / name), None)
+                removed = True
+        return removed
+    target = pathlib.Path(profile_dir)
+    if target.parent.is_dir():
+        with PinnedStorageRoot(target.parent, mount_check=require_data_dir_mounted) as local_pin:
+            for name in IDENTITY_FILES:
+                if local_pin.unlink_file((target.name,), name):
+                    _summary_cache.pop(str(target / name), None)
+                    removed = True
+        return removed
     for name in IDENTITY_FILES:
-        path = pathlib.Path(profile_dir) / name
+        path = target / name
         if path.exists():
             path.unlink()
+            _summary_cache.pop(str(path), None)
             removed = True
     return removed
 
@@ -776,13 +812,20 @@ def _write_chrome_persona(
     profile_dir: str,
     persona: Any,
     existing: dict[str, Any] | None,
+    *,
+    pinned: PinnedStorageRoot | None = None,
+    rel_dir: tuple[str, ...] | None = None,
 ) -> str:
     from chrome_engine import persona as chrome_persona
 
     path = pathlib.Path(profile_dir) / CHROME_PERSONA_FILE
     if existing == persona.to_json():
         return str(path)
-    chrome_persona.save(profile_dir, persona)
+    if pinned is not None and rel_dir is not None:
+        payload = json.dumps(persona.to_json(), indent=2).encode("utf-8")
+        pinned.write_file_atomic(rel_dir, CHROME_PERSONA_FILE, payload)
+    else:
+        chrome_persona.save(profile_dir, persona)
     _summary_cache.pop(str(path), None)
     return str(path)
 

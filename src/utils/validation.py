@@ -4,6 +4,7 @@ import zoneinfo
 from collections.abc import Callable
 from urllib.parse import unquote, urlparse
 
+from ..core.config import is_reserved_profile_name
 from ..core.strings import get_string
 from .proxy_parser import normalize_proxy
 
@@ -26,7 +27,7 @@ _PROXY_PATTERN = re.compile(
 _LOCALE_PATTERN = re.compile(r"^[a-z]{2,3}(?:-[A-Z][a-z]{3})?-(?:[A-Z]{2}|\d{3})$")
 
 
-def validate_profile_name(name: str) -> tuple[bool, str]:
+def validate_profile_name(name: str, *, allow_reserved: bool = False) -> tuple[bool, str]:
     if not name:
         return False, get_string("validation_empty_name")
 
@@ -51,7 +52,7 @@ def validate_profile_name(name: str) -> tuple[bool, str]:
     if name.endswith("."):
         return False, get_string("validation_trailing_dot")
 
-    if name.upper() in _RESERVED_NAMES:
+    if name.upper() in _RESERVED_NAMES or (not allow_reserved and is_reserved_profile_name(name)):
         return False, get_string("validation_reserved_name", name=name)
 
     return True, ""

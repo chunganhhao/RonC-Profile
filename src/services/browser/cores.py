@@ -358,6 +358,38 @@ def backup_and_apply(
         source = Path(pm._data_path(name))
         if source.is_symlink():
             raise CoreError("Cannot back up a symlinked profile directory")
+        from ...core.config import (
+            PendingProfileDeleteError,
+            StorageIdentity,
+            StorageVolumeUnmountedError,
+            require_no_pending_delete,
+            require_same_storage_root,
+            storage_root_identity,
+        )
+
+        root_identity: StorageIdentity | None = None
+        known_names = tuple(pm.profiles.keys())
+
+        def _require_source_mounted() -> StorageIdentity:
+            nonlocal root_identity
+            try:
+                if root_identity is None:
+                    root_identity = storage_root_identity(source.parent)
+                else:
+                    require_same_storage_root(source.parent, root_identity)
+                require_no_pending_delete(
+                    source,
+                    known_profiles=known_names,
+                    profiles_file=getattr(pm, "profiles_file", None),
+                )
+            except (StorageVolumeUnmountedError, PendingProfileDeleteError) as exc:
+                raise CoreError(str(exc)) from exc
+            return root_identity
+
+        def _raise_walk_error(exc: OSError) -> None:
+            raise CoreError(f"Profile data traversal failed: {exc.strerror or exc}") from exc
+
+        _require_source_mounted()
         root = backup_home().resolve()
         data_root = source.parent.resolve()
         for protected in (data_root, staging_home().resolve(), fetch.engine_home().resolve()):
@@ -367,6 +399,7 @@ def backup_and_apply(
         persistent_locks = frozenset({".parentlock", "parent.lock"})
 
         def snapshot():
+            _require_source_mounted()
             for lock in locks:
                 p = source / lock
                 if p.exists() or p.is_symlink():
@@ -375,7 +408,9 @@ def backup_and_apply(
                     )
             files = {}
             if source.exists():
-                for base, dirs, names in os.walk(source, followlinks=False):
+                for base, dirs, names in os.walk(
+                    source, followlinks=False, onerror=_raise_walk_error
+                ):
                     for item in dirs + names:
                         if (Path(base) / item).is_symlink():
                             raise CoreError("Profile contains symbolic links; backup refused")
@@ -383,10 +418,16 @@ def backup_and_apply(
                         if Path(base) == source and item in persistent_locks:
                             continue
                         p = Path(base) / item
-                        st = p.stat()
+                        try:
+                            st = p.stat()
+                        except OSError as exc:
+                            raise CoreError(
+                                f"Profile data became unavailable during snapshot: {exc.strerror or exc}"
+                            ) from exc
                         if not p.is_file():
                             raise CoreError("Profile contains non-regular files")
                         files[str(p.relative_to(source))] = (st.st_size, st.st_mtime_ns, st.st_ino)
+            _require_source_mounted()
             return files
 
         with profile_lease(source), native_profile_guard(source, engine):
@@ -401,72 +442,88 @@ def backup_and_apply(
             if shutil.disk_usage(root).free < sum(v[0] for v in before.values()) + 10 * 1024 * 1024:
                 raise CoreError("Insufficient free disk space for a complete backup")
             directory = Path(tempfile.mkdtemp(prefix="core-", dir=root))
-            ok, archive = export_to_zip(
-                profile,
-                str(source),
-                str(directory),
-                include_data=True,
-                exclude_files=persistent_locks,
-            )
-            if not ok:
-                raise CoreError("Backup failed; core binding was not changed")
-            archive = Path(archive)
-            archive.chmod(0o600)
-            with zipfile.ZipFile(archive) as z:
-                if z.testzip() is not None:
-                    raise CoreError("Backup verification failed; binding unchanged")
-                if {n.removeprefix("data/") for n in z.namelist() if n.startswith("data/")} != set(
-                    before
-                ):
-                    raise CoreError("Backup file list mismatch; binding unchanged")
-
-                def digest(stream):
-                    value = hashlib.sha256()
-                    while chunk := stream.read(1024 * 1024):
-                        value.update(chunk)
-                    return value.hexdigest()
-
-                for relative in before:
-                    with (
-                        (source / relative).open("rb") as original,
-                        z.open("data/" + relative.replace(os.sep, "/")) as saved,
-                    ):
-                        if digest(original) != digest(saved):
-                            raise CoreError("Backup content mismatch; binding unchanged")
-            if snapshot() != before:
-                raise CoreError("Profile data changed during backup; binding unchanged")
-            manifest = directory / "recovery.json"
-            manifest.write_text(
-                json.dumps(
-                    {
-                        "engine": engine,
-                        "previous_core": current,
-                        "target_core": version,
-                        "previous_binding": profile.core_version,
-                        "excluded_native_lockfiles": list(persistent_locks),
-                        "previous_executable": str(previous_exe) if previous_exe else None,
-                        "libraries": _stack(),
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                        "warning": "Restore requires matching old data snapshot AND old runtime; never open migrated data with old core.",
-                    },
-                    indent=2,
-                )
-            )
-            manifest.chmod(0o600)
-            previous = profile.core_version
-            profile.core_version = version
+            verified = False
             try:
-                pm.save_profiles(strict=True)
-            except Exception:
-                profile.core_version = previous
-                raise
-            return {
-                "applied": True,
-                "version": version,
-                "backup_path": str(archive),
-                "browser_started": False,
-                "profile_data_changed": False,
-            }
+                ok, archive = export_to_zip(
+                    profile,
+                    str(source),
+                    str(directory),
+                    include_data=True,
+                    exclude_files=persistent_locks,
+                    expected_root_identity=root_identity,
+                    known_profiles=known_names,
+                    profiles_file=getattr(pm, "profiles_file", None),
+                )
+                if not ok:
+                    raise CoreError("Backup failed; core binding was not changed")
+                archive = Path(archive)
+                archive.chmod(0o600)
+                with zipfile.ZipFile(archive) as z:
+                    if z.testzip() is not None:
+                        raise CoreError("Backup verification failed; binding unchanged")
+                    if {
+                        n.removeprefix("data/") for n in z.namelist() if n.startswith("data/")
+                    } != set(before):
+                        raise CoreError("Backup file list mismatch; binding unchanged")
+
+                    def digest(stream):
+                        value = hashlib.sha256()
+                        while chunk := stream.read(1024 * 1024):
+                            value.update(chunk)
+                        return value.hexdigest()
+
+                    for relative in before:
+                        try:
+                            with (
+                                (source / relative).open("rb") as original,
+                                z.open("data/" + relative.replace(os.sep, "/")) as saved,
+                            ):
+                                if digest(original) != digest(saved):
+                                    raise CoreError("Backup content mismatch; binding unchanged")
+                        except OSError as exc:
+                            raise CoreError(
+                                f"Profile data became unavailable during verification: "
+                                f"{exc.strerror or exc}"
+                            ) from exc
+                if snapshot() != before:
+                    raise CoreError("Profile data changed during backup; binding unchanged")
+                manifest = directory / "recovery.json"
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "engine": engine,
+                            "previous_core": current,
+                            "target_core": version,
+                            "previous_binding": profile.core_version,
+                            "excluded_native_lockfiles": list(persistent_locks),
+                            "previous_executable": str(previous_exe) if previous_exe else None,
+                            "libraries": _stack(),
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "warning": "Restore requires matching old data snapshot AND old runtime; never open migrated data with old core.",
+                        },
+                        indent=2,
+                    )
+                )
+                manifest.chmod(0o600)
+                _require_source_mounted()
+                verified = True
+                previous = profile.core_version
+                profile.core_version = version
+                try:
+                    pm.save_profiles(strict=True)
+                except Exception:
+                    profile.core_version = previous
+                    raise
+                return {
+                    "applied": True,
+                    "version": version,
+                    "backup_path": str(archive),
+                    "browser_started": False,
+                    "profile_data_changed": False,
+                }
+            finally:
+                if not verified:
+                    shutil.rmtree(directory, ignore_errors=True)
 
 
 def launch_binding(name: str, engine: str, requested: str = "") -> str:

@@ -24,7 +24,14 @@ sys.path.insert(
 
 from camoufox.async_api import AsyncCamoufox
 
-from src.core.config import DATA_DIR
+from src.core.config import (
+    DATA_DIR,
+    PinnedStorageRoot,
+    ensure_data_dir,
+    require_data_dir_mounted,
+    require_no_pending_delete,
+    storage_root_identity,
+)
 from src.models.profile import ENGINES
 from src.services.browser.cores import ProfileStoreBusyError
 from src.services.browser.fingerprint import load_or_create
@@ -55,7 +62,16 @@ def _open(profile_dir: str, os_type: str, engine: str) -> Any:
 async def _run(
     action: str, profile_name: str, os_type: str, payload: list, engine: str = "camoufox"
 ) -> dict:
+    require_data_dir_mounted(DATA_DIR)
     profile_dir = os.path.join(os.getcwd(), DATA_DIR, profile_name)
+    require_no_pending_delete(profile_dir)
+    data_root = ensure_data_dir(DATA_DIR)
+    with PinnedStorageRoot(
+        data_root,
+        mount_check=require_data_dir_mounted,
+        identity_fn=storage_root_identity,
+    ) as pinned:
+        pinned.clear_resolved_import_journals((profile_name,), strict=True)
     with profile_lease(profile_dir) if engine == "chrome" else nullcontext():
         async with _open(profile_dir, os_type, engine) as context:
             if action == "export":
@@ -75,7 +91,7 @@ def main() -> int:
 
     action, profile_name, os_type = sys.argv[1:4]
     engine = sys.argv[4] if len(sys.argv) == 5 else "camoufox"
-    valid, msg = validate_profile_name(profile_name)
+    valid, msg = validate_profile_name(profile_name, allow_reserved=True)
     if not valid or os_type not in ("windows", "macos", "linux") or engine not in ENGINES:
         print("RESULT:" + json.dumps({"error": msg or f"invalid os/engine {os_type!r}/{engine!r}"}))
         return 2

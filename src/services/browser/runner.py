@@ -23,7 +23,19 @@ sys.path.insert(
 from camoufox.async_api import AsyncCamoufox
 from camoufox.virtdisplay import VirtualDisplay
 
-from src.core.config import DATA_DIR, HEADLESS, PROFILES_FILE, RESTORE_TABS
+from src.core.config import (
+    DATA_DIR,
+    HEADLESS,
+    PROFILES_FILE,
+    RESTORE_TABS,
+    PendingProfileDeleteError,
+    PinnedStorageRoot,
+    StorageVolumeUnmountedError,
+    ensure_data_dir,
+    require_data_dir_mounted,
+    require_no_pending_delete,
+    storage_root_identity,
+)
 from src.core.strings import LAUNCH_STORE_BUSY_CODE
 from src.services.browser import control, session
 from src.services.browser import display as xvfb
@@ -433,6 +445,13 @@ async def run_browser(
     except ValueError as exc:
         _safe_print(f"LAUNCH_FAILED: {exc}")
         return 1
+    profile_dir = os.path.join(os.getcwd(), DATA_DIR, profile_name)
+    try:
+        require_data_dir_mounted(DATA_DIR)
+        require_no_pending_delete(profile_dir, profiles_file=PROFILES_FILE)
+    except (StorageVolumeUnmountedError, PendingProfileDeleteError, OSError) as exc:
+        _safe_print(f"LAUNCH_FAILED: {_compact_error(exc, 220)}")
+        return 1
     with launch_stage("profile_metadata"):
         extra = _read_profile_extra(profile_name)
     # A long-lived manager may hold an older Profile object after another
@@ -449,7 +468,20 @@ async def run_browser(
         except (ValueError, OSError, RuntimeError) as exc:
             _safe_print(f"LAUNCH_FAILED: {_compact_error(exc, 220)}")
             return 1
-    profile_dir = os.path.join(os.getcwd(), DATA_DIR, profile_name)
+    try:
+        require_no_pending_delete(profile_dir, profiles_file=PROFILES_FILE)
+        data_root = ensure_data_dir(DATA_DIR)
+        with PinnedStorageRoot(
+            data_root,
+            mount_check=require_data_dir_mounted,
+            identity_fn=storage_root_identity,
+        ) as pinned:
+            pinned.clear_resolved_import_journals(
+                (profile_name,), profiles_file=PROFILES_FILE, strict=True
+            )
+    except (StorageVolumeUnmountedError, PendingProfileDeleteError, OSError) as exc:
+        _safe_print(f"LAUNCH_FAILED: {_compact_error(exc, 220)}")
+        return 1
     with launch_stage("fingerprint"):
         fp = load_or_create(profile_dir, os_type)
 

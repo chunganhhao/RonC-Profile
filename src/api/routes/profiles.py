@@ -9,7 +9,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import ValidationError
 
-from ...core.config import DATA_DIR
+from ...core.config import (
+    DATA_DIR,
+    PendingDeleteEntry,
+    StorageVolumeUnmountedError,
+    format_pending_delete_message,
+    require_data_dir_mounted,
+    require_no_pending_delete,
+    scan_pending_deletes,
+)
 from ...core.logging import get_logger
 from ...models.profile import (
     CANVAS_MODES,
@@ -113,9 +121,38 @@ def list_profiles(
 ) -> PanelProfileListResponse | ProfileListResponse:
     profiles = [profile_response(p, bl) for p in pm.list_profiles()]
     if panel:
+        storage_offline = False
+        storage_error: str | None = None
+        pending_map: dict[str, list[PendingDeleteEntry]] = {}
+        known_names = [profile.name for profile in profiles]
+        try:
+            require_data_dir_mounted(DATA_DIR)
+            pending_map = scan_pending_deletes(
+                DATA_DIR,
+                known_profiles=known_names,
+                profiles_file=getattr(pm, "profiles_file", None),
+            )
+        except StorageVolumeUnmountedError as exc:
+            storage_offline = True
+            storage_error = str(exc)
         rows = []
         for profile in profiles:
-            info = fingerprint.summary(os.path.join(DATA_DIR, profile.name))
+            pending_entries = (
+                [] if storage_offline else pending_map.get(profile.name.casefold(), [])
+            )
+            pending_delete = bool(pending_entries)
+            pending_delete_error = (
+                format_pending_delete_message(
+                    profile.name, os.path.join(DATA_DIR, profile.name), pending_entries
+                )
+                if pending_entries
+                else None
+            )
+            info = (
+                None
+                if storage_offline or pending_delete
+                else fingerprint.summary(os.path.join(DATA_DIR, profile.name))
+            )
             preview = None
             if info is not None:
                 with contextlib.suppress(ValidationError):
@@ -125,9 +162,16 @@ def list_profiles(
                     **profile.model_dump(),
                     proxy_display=mask_proxy(profile.proxy),
                     fingerprint=preview,
+                    pending_delete=pending_delete,
+                    pending_delete_error=pending_delete_error,
                 )
             )
-        return PanelProfileListResponse(profiles=rows, total=len(rows))
+        return PanelProfileListResponse(
+            profiles=rows,
+            total=len(rows),
+            storage_offline=storage_offline,
+            storage_error=storage_error,
+        )
     return ProfileListResponse(profiles=profiles, total=len(profiles))
 
 
@@ -266,7 +310,7 @@ def update_profile(
     new_name = supplied.get("name", name)
 
     if "name" in supplied:
-        valid, msg = validate_profile_name(new_name)
+        valid, msg = validate_profile_name(new_name, allow_reserved=(new_name == name))
         if not valid:
             raise HTTPException(status_code=400, detail=msg)
         if new_name != name and bl.is_running(name):
@@ -382,7 +426,13 @@ def get_data_dir(
     pm: IProfileManager = Depends(get_profile_manager),
 ) -> DataDirResponse:
     require_profile(name, pm)
+    require_data_dir_mounted(DATA_DIR)
     data_dir = os.path.join(os.getcwd(), DATA_DIR, name)
+    require_no_pending_delete(
+        data_dir,
+        known_profiles=pm.profiles.keys(),
+        profiles_file=getattr(pm, "profiles_file", None),
+    )
     return DataDirResponse(
         name=name,
         data_dir=data_dir,
@@ -506,7 +556,14 @@ def get_fingerprint(
 ) -> FingerprintResponse:
     """Show the fingerprint the profile presents on every launch."""
     require_profile(name, pm)
-    info = fingerprint.summary(os.path.join(DATA_DIR, name))
+    require_data_dir_mounted(DATA_DIR)
+    profile_dir = os.path.join(DATA_DIR, name)
+    require_no_pending_delete(
+        profile_dir,
+        known_profiles=pm.profiles.keys(),
+        profiles_file=getattr(pm, "profiles_file", None),
+    )
+    info = fingerprint.summary(profile_dir)
     if info is None:
         return FingerprintResponse(name=name, exists=False)
     return FingerprintResponse(name=name, exists=True, **info)
@@ -527,7 +584,10 @@ def reset_fingerprint(
     _require_stopped(name, bl, "resetting the fingerprint")
     try:
         with bl.exclusive(name):
-            removed = fingerprint.reset(os.path.join(DATA_DIR, name))
+            removed = fingerprint.reset(
+                os.path.join(DATA_DIR, name),
+                profiles_file=getattr(pm, "profiles_file", None),
+            )
     except ProfileBusyError as e:
         raise HTTPException(status_code=409, detail=_BUSY_DETAIL) from e
     logger.info("API reset fingerprint for %s (existed=%s)", name, removed)

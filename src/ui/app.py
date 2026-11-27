@@ -6,7 +6,14 @@ from collections.abc import Callable
 
 import flet as ft
 
-from ..core.config import DATA_DIR, PREFERENCES_FILE
+from ..core.config import (
+    DATA_DIR,
+    PREFERENCES_FILE,
+    PendingProfileDeleteError,
+    StorageVolumeUnmountedError,
+    require_data_dir_mounted,
+    require_no_pending_delete,
+)
 from ..core.container import Container
 from ..core.logging import get_logger
 from ..core.strings import current_language, get_string, localize_launch_error, set_language
@@ -928,7 +935,15 @@ class App:
 
     @staticmethod
     def _device_label(name: str) -> str:
-        info = fingerprint.summary(os.path.join(DATA_DIR, name))
+        profile_dir = os.path.join(DATA_DIR, name)
+        try:
+            require_data_dir_mounted(DATA_DIR)
+            require_no_pending_delete(profile_dir)
+        except StorageVolumeUnmountedError:
+            return get_string("storage_offline_short")
+        except PendingProfileDeleteError:
+            return get_string("pending_delete_short")
+        info = fingerprint.summary(profile_dir)
         if not info:
             return ""
         cpu = f"{info['hardware_concurrency']} CPU"

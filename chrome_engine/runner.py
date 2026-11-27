@@ -23,7 +23,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from chrome_engine import fetch
 from chrome_engine.engine import ChromeEngine, EngineError
-from src.core.config import DATA_DIR, HEADLESS, LOG_DIR, LOG_LEVEL, RESTORE_TABS
+from src.core.config import (
+    DATA_DIR,
+    HEADLESS,
+    LOG_DIR,
+    LOG_LEVEL,
+    RESTORE_TABS,
+    PendingProfileDeleteError,
+    PinnedStorageRoot,
+    StorageVolumeUnmountedError,
+    ensure_data_dir,
+    require_data_dir_mounted,
+    require_no_pending_delete,
+    storage_root_identity,
+)
 from src.core.logging import get_logger, setup_logging
 from src.core.strings import LAUNCH_STORE_BUSY_CODE
 from src.services.browser import control, session
@@ -80,6 +93,12 @@ async def run_browser(
 ) -> int:
     launch_started = perf_counter()
     profile_dir = os.path.join(os.getcwd(), DATA_DIR, profile_name)
+    try:
+        require_data_dir_mounted(DATA_DIR)
+        require_no_pending_delete(profile_dir)
+    except (StorageVolumeUnmountedError, PendingProfileDeleteError) as exc:
+        _say(f"LAUNCH_FAILED: {_compact(exc, 220)}")
+        return 1
     proxy = proxy_str if proxy_str and proxy_str != "None" else None
     with launch_stage("profile_metadata"):
         extra = _read_profile_extra(profile_name)
@@ -127,6 +146,14 @@ async def run_browser(
         if not core_version:
             with launch_stage("install_check"):
                 await ensure_installed()
+        require_no_pending_delete(profile_dir)
+        data_root = ensure_data_dir(DATA_DIR)
+        with PinnedStorageRoot(
+            data_root,
+            mount_check=require_data_dir_mounted,
+            identity_fn=storage_root_identity,
+        ) as pinned:
+            pinned.clear_resolved_import_journals((profile_name,), strict=True)
         with launch_stage("browser_start"):
             context = await engine.start()
     except asyncio.CancelledError:

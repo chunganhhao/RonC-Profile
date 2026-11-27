@@ -12,7 +12,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from chrome_engine.persona import MACOS_CPU_COUNTS_BY_SLOT, SEED_MAX
 from chrome_engine.release import host_os
 
-from ..core.config import API_PORT, API_TOKEN, HEADLESS
+from ..core.config import (
+    API_PORT,
+    API_TOKEN,
+    HEADLESS,
+    PendingProfileDeleteError,
+    StorageVolumeUnmountedError,
+)
 from ..core.logging import get_logger
 from ..services.profile.manager import ProfileStoreChangedError
 from . import mcp_http
@@ -88,6 +94,14 @@ def create_app(container: Container, self_url: str | None = None) -> FastAPI:
             status_code=409,
             content={"detail": "Profile/store is busy; retry after the current operation finishes"},
         )
+
+    @app.exception_handler(StorageVolumeUnmountedError)
+    async def unmounted_storage(_request, exc):
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+    @app.exception_handler(PendingProfileDeleteError)
+    async def pending_delete(_request, exc):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     if not API_TOKEN:
         # Token-less means local-only: block CSRF and DNS rebinding from websites.

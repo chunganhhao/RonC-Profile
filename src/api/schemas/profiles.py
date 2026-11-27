@@ -155,8 +155,12 @@ class FingerprintResponse(BaseModel):
 class PanelProfileResponse(ProfileResponse):
     proxy_display: str
     fingerprint: FingerprintResponse | None
+    pending_delete: bool = False
+    pending_delete_error: str | None = None
 
 
 class PanelProfileListResponse(BaseModel):
     profiles: list[PanelProfileResponse]
     total: int
+    storage_offline: bool = False
+    storage_error: str | None = None

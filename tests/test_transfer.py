@@ -125,8 +125,8 @@ def test_concurrent_exports_do_not_archive_each_others_staging_files(tmp_path, m
     walk = os.walk
     both_scanning = Barrier(2)
 
-    def concurrent_walk(path):
-        for listing in walk(path):
+    def concurrent_walk(path, **kwargs):
+        for listing in walk(path, **kwargs):
             both_scanning.wait(timeout=5)
             yield listing
 

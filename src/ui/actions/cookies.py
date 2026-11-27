@@ -5,7 +5,13 @@ from collections.abc import Callable
 
 import flet as ft
 
-from ...core.config import DATA_DIR
+from ...core.config import (
+    DATA_DIR,
+    PendingProfileDeleteError,
+    StorageVolumeUnmountedError,
+    require_data_dir_mounted,
+    require_no_pending_delete,
+)
 from ...core.strings import get_string
 from ...interfaces.protocols import IBrowserLauncher, IProfileManager
 from ...services.browser import cookies, fingerprint
@@ -80,9 +86,12 @@ def manage_cookies(
         def _do_reset() -> None:
             try:
                 with bl.exclusive(name):
-                    fingerprint.reset(profile_dir)
+                    fingerprint.reset(profile_dir, profiles_file=getattr(pm, "profiles_file", None))
             except ProfileBusyError:
                 log(get_string("profile_busy", name=name))
+                return
+            except OSError as exc:
+                log(str(exc))
                 return
             log(get_string("fingerprint_was_reset", name=name))
 
@@ -95,17 +104,29 @@ def manage_cookies(
             action_icon=ft.Icons.FINGERPRINT,
         )
 
-    info = fingerprint.summary(profile_dir)
-    if info:
-        screen = info["screen"]
-        fingerprint_line = get_string(
-            "fingerprint_current" if screen else "fingerprint_current_no_screen",
-            platform=info["platform"],
-            screen=screen,
-            cores=info["hardware_concurrency"],
+    try:
+        require_data_dir_mounted(DATA_DIR)
+        require_no_pending_delete(
+            profile_dir,
+            known_profiles=pm.profiles.keys(),
+            profiles_file=getattr(pm, "profiles_file", None),
         )
+    except StorageVolumeUnmountedError:
+        fingerprint_line = get_string("storage_offline")
+    except PendingProfileDeleteError as exc:
+        fingerprint_line = str(exc)
     else:
-        fingerprint_line = get_string("fingerprint_none")
+        info = fingerprint.summary(profile_dir)
+        if info:
+            screen = info["screen"]
+            fingerprint_line = get_string(
+                "fingerprint_current" if screen else "fingerprint_current_no_screen",
+                platform=info["platform"],
+                screen=screen,
+                cores=info["hardware_concurrency"],
+            )
+        else:
+            fingerprint_line = get_string("fingerprint_none")
     open_cookie_dialog(
         page,
         name,

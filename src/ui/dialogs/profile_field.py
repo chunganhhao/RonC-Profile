@@ -149,8 +149,10 @@ def open_profile_field_dialog(
                 cancel()
                 return
         elif field in ("name", "proxy"):
-            valid, message = (validate_profile_name if field == "name" else validate_proxy_format)(
-                str(draft)
+            valid, message = (
+                validate_profile_name(str(draft), allow_reserved=(str(draft) == str(value)))
+                if field == "name"
+                else validate_proxy_format(str(draft))
             )
             if not valid:
                 report(message)

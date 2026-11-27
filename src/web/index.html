@@ -696,7 +696,7 @@ const I18N = {
     confirm_delete: "Xoá profile “{name}”? Cookie và dữ liệu của profile sẽ mất vĩnh viễn.", confirm_title: "Xác nhận", stop_first: "Hãy dừng trình duyệt trước",
     cookie_hint: "Trình duyệt của profile phải đang tắt.", export_json: "Xuất cookie JSON", export_json_hint: "Cookie-Editor, GoLogin, GPM",
     export_txt: "Xuất cookies.txt", export_txt_hint: "Netscape: yt-dlp, curl, wget", import: "Nhập cookie", import_hint: "Từ file JSON hoặc cookies.txt",
-    reset_fp: "Tạo fingerprint mới", reset_fp_hint: "Lần mở sau trang web sẽ thấy một thiết bị khác", fp_title: "Fingerprint hiện tại", no_fp: "Chưa có fingerprint. Nó được tạo ở lần mở đầu tiên.",
+    reset_fp: "Tạo fingerprint mới", reset_fp_hint: "Lần mở sau trang web sẽ thấy một thiết bị khác", fp_title: "Fingerprint hiện tại", no_fp: "Chưa có fingerprint. Nó được tạo ở lần mở đầu tiên.", storage_offline: "Ổ lưu trữ profile đang ngắt kết nối. Cắm lại ổ cứng để xem hoặc thao tác fingerprint.", storage_offline_short: "ổ lưu trữ ngắt kết nối", pending_delete: "Xóa dở dang đang chờ khôi phục. Hãy khôi phục thư mục tạm hoặc bấm Xóa lại trước khi dùng profile này.", pending_delete_short: "chờ khôi phục xóa",
     fp_platform: "Nền tảng", fp_screen: "Màn hình", fp_cpu: "CPU",
     confirm_reset: "Tạo fingerprint mới cho “{name}”? Trang web sẽ thấy đây là một máy khác.", close: "Đóng",
     launching: "Đang mở {name}...", started: "Đã mở {name}", stopped: "Đã dừng {name}", created: "Đã tạo {name}", saved: "Đã lưu",
@@ -774,7 +774,7 @@ const I18N = {
     confirm_delete: "Delete profile “{name}”? Its cookies and data are removed permanently.", confirm_title: "Confirm", stop_first: "Stop the browser first",
     cookie_hint: "The profile's browser must be stopped.", export_json: "Export cookies as JSON", export_json_hint: "Cookie-Editor, GoLogin, GPM",
     export_txt: "Export cookies.txt", export_txt_hint: "Netscape: yt-dlp, curl, wget", import: "Import cookies", import_hint: "From a JSON or cookies.txt file",
-    reset_fp: "New fingerprint", reset_fp_hint: "Sites see a different device on the next launch", fp_title: "Current fingerprint", no_fp: "No fingerprint yet. It is created on the first launch.",
+    reset_fp: "New fingerprint", reset_fp_hint: "Sites see a different device on the next launch", fp_title: "Current fingerprint", no_fp: "No fingerprint yet. It is created on the first launch.", storage_offline: "External profile storage is offline. Mount the drive to view or manage fingerprints.", storage_offline_short: "storage offline", pending_delete: "Interrupted delete awaiting recovery. Restore the staged folder or retry Delete before using this profile.", pending_delete_short: "delete pending",
     fp_platform: "Platform", fp_screen: "Screen", fp_cpu: "CPU",
     confirm_reset: "Create a new fingerprint for “{name}”? Sites will see a different machine.", close: "Close",
     launching: "Launching {name}...", started: "Started {name}", stopped: "Stopped {name}", created: "Created {name}", saved: "Saved",
@@ -1024,6 +1024,8 @@ let pageSize = Number(store.get("foxprofile.pageSize")) || 20;
 if (!PAGE_SIZES.includes(pageSize)) pageSize = 20;
 let currentPage = 1;
 let profiles = [], running = new Set(), extensions = [];
+let storageOffline = false, storageError = "";
+let syncOpenCookies = null;
 let filter = "all";
 const busy = new Map();          // name -> "starting" | "stopping"
 const failed = new Map();        // name -> error message of the last failed launch
@@ -1131,16 +1133,20 @@ const enc = encodeURIComponent;
 const hhmm = (d) => d.toTimeString().slice(0, 5);
 
 async function refresh() {
+  const seq = (refresh._seq = (refresh._seq || 0) + 1);
   try {
     const [list, run, extRes] = await Promise.all([
       api("GET", "/profiles?panel=true"),
       api("GET", "/browser"),
       api("GET", "/extensions").catch(() => ({ extensions: [] })),
     ]);
+    if (seq !== refresh._seq) return;
     profiles = list.profiles;
     if (filter.startsWith("tag:") && !profiles.some((p) => profileTags(p).includes(filter.slice(4)))) {
       setSidebarFilter("all");
     }
+    storageOffline = Boolean(list.storage_offline);
+    storageError = list.storage_error || "";
     extensions = extRes.extensions || [];
     const extCntEl = $("ext-count");
     if (extCntEl) extCntEl.textContent = String(extensions.length);
@@ -1151,6 +1157,7 @@ async function refresh() {
     for (const name of [...selected]) if (!profiles.some((p) => p.name === name)) selected.delete(name);
     for (const name of [...failed.keys()]) if (now.has(name) || !profiles.some((p) => p.name === name)) failed.delete(name);
     render();
+    if (typeof syncOpenCookies === "function") syncOpenCookies();
   } catch (e) { if (e.status !== 401) toast(e.message, true); }
 }
 
@@ -1177,10 +1184,11 @@ function render() {
   const pageItems = shown.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   // Rebuilding the list replaces every button; skip it when nothing changed so a
   // periodic refresh cannot swap the button under the user's cursor mid-click.
-  const key = JSON.stringify([lang, q, filter, pageSize, currentPage, profiles, [...running].sort(), [...busy], [...failed], [...selected].sort(),
+  const key = JSON.stringify([lang, q, filter, pageSize, currentPage, profiles, storageOffline, storageError, [...running].sort(), [...busy], [...failed], [...selected].sort(),
     [...justLanded], [...copyFeedback.keys()]]);
   if (key === lastRender) return;
   lastRender = key;
+  if (typeof syncOpenCookies === "function") syncOpenCookies();
 
   if (running.size) {
     const [before, after] = t("counts", { n: profiles.length, r: "\u0000" }).split("\u0000");
@@ -1379,7 +1387,7 @@ function row(p) {
     h("div", { class: "c-notes", role: "cell" }, editable(p, "notes", h("div", {class:"stack"},
       h("span", {class:"notes-line", title:p.notes || ""}, p.notes || t("empty_notes")),
       h("span", {class:"minor", title:[os, engine, p.timezone || t("follow_ip"), p.locale || t("follow_ip")].join(" / ")},
-        [os, fp && fp.exists ? `${fp.screen || engine} / ${fp.hardware_concurrency || "?"} CPU` : engine].join(" / "))))),
+        [os, fp && fp.exists ? `${fp.screen || engine} / ${fp.hardware_concurrency || "?"} CPU` : (storageOffline ? t("storage_offline_short") : (p.pending_delete ? t("pending_delete_short") : engine))].join(" / "))))),
     h("div", { class: "c-stamp", role: "cell" }, stamp(p)),
     h("div", { class: "actions", role: "cell" }, main,
       iconBtn("monitor", t("view"), () => openViewer(p.name), "", !on || isBusy),
@@ -1910,18 +1918,46 @@ function openCookies(p) {
   modal((close) => {
     const msg = h("div", { class: "msg", role: "status" });
     const fpSection = h("div");
-    const renderFp = (fp) => {
+    const actions = [];
+    let fpKey = "";
+    let lastBlocked = storageOffline || Boolean(p.pending_delete);
+    const syncFp = (fpOverride = undefined) => {
+      if (fpOverride === undefined && !fpSection.isConnected) {
+        if (syncOpenCookies === syncFp) syncOpenCookies = null;
+        return;
+      }
+      const latest = profiles.find((x) => x.name === p.name);
+      const fp = fpOverride !== undefined ? fpOverride : (latest ? latest.fingerprint : null);
+      const pending = !storageOffline && Boolean(latest ? latest.pending_delete : p.pending_delete);
+      const pendingErr = (latest ? latest.pending_delete_error : p.pending_delete_error) || "";
+      const blocked = storageOffline || pending;
+      if (lastBlocked && !blocked && !actions.some((b) => b.disabled) && msg.classList.contains("err")) {
+        msg.className = "msg";
+        msg.textContent = "";
+      }
+      lastBlocked = blocked;
+      const nextKey = JSON.stringify([lang, storageOffline, storageError, pending, pendingErr, fp]);
+      if (nextKey === fpKey) return;
+      fpKey = nextKey;
       fpSection.replaceChildren(
         h("div", { class: "field" }, h("label", {}, t("fp_title"))),
-        fp && fp.exists
-          ? h("dl", { class: "fp-card" },
-              h("dt", {}, t("fp_platform")), h("dd", { class: "data" }, fp.platform || "?"),
-              h("dt", {}, t("fp_screen")), h("dd", { class: "data" }, fp.screen || "?"),
-              h("dt", {}, t("fp_cpu")), h("dd", { class: "data" }, String(fp.hardware_concurrency || "?")))
-          : h("div", { class: "note calm" }, icon("fingerprint", true), h("span", {}, t("no_fp"))));
+        storageOffline
+          ? h("div", { class: "note" }, icon("alert", true), h("span", { title: storageError || "" }, t("storage_offline")))
+          : pending
+            ? h("div", { class: "note" }, icon("alert", true), h("span", { title: pendingErr }, t("pending_delete")))
+            : fp && fp.exists
+              ? h("dl", { class: "fp-card" },
+                  h("dt", {}, t("fp_platform")), h("dd", { class: "data" }, fp.platform || "?"),
+                  h("dt", {}, t("fp_screen")), h("dd", { class: "data" }, fp.screen || "?"),
+                  h("dt", {}, t("fp_cpu")), h("dd", { class: "data" }, String(fp.hardware_concurrency || "?")))
+              : h("div", { class: "note calm" }, icon("fingerprint", true), h("span", {}, t("no_fp"))));
     };
-    renderFp(p.fingerprint);
-    const actions = [];
+    const closeModal = () => {
+      if (syncOpenCookies === syncFp) syncOpenCookies = null;
+      close();
+    };
+    syncFp(p.fingerprint);
+    syncOpenCookies = syncFp;
     const run = async (fn) => {
       if (actions.some((b) => b.disabled)) return;
       actions.forEach((b) => (b.disabled = true));
@@ -1948,7 +1984,7 @@ function openCookies(p) {
       return b;
     };
     return h("div", {},
-      modalHead(t("cookies"), `${p.name} · ${t("cookie_hint")}`, close),
+      modalHead(t("cookies"), `${p.name} · ${t("cookie_hint")}`, closeModal),
       h("div", { class: "modal-body" },
         h("div", { class: "choice" },
           choice("download", t("export_json"), t("export_json_hint"), () => exportAs("json")),
@@ -1960,11 +1996,11 @@ function openCookies(p) {
             if (!(await confirmDialog(t("confirm_reset", { name: p.name }), t("reset_fp"), true))) return;
             await run(async () => {
               await api("DELETE", `/profiles/${enc(p.name)}/fingerprint`);
-              renderFp(null); toast(t("fp_reset")); refresh();
+              syncFp(null); toast(t("fp_reset")); await refresh();
             });
           })),
         msg),
-      h("div", { class: "modal-foot" }, h("button", { type: "button", class: "btn btn-line", onclick: close }, t("close"))));
+      h("div", { class: "modal-foot" }, h("button", { type: "button", class: "btn btn-line", onclick: closeModal }, t("close"))));
   });
 }
 

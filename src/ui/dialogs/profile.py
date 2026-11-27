@@ -934,7 +934,9 @@ def open_profile_dialog(
         locale = (locale_field.value or "").strip()
         name_error.visible = proxy_error.visible = geo_error.visible = account_error.visible = False
 
-        valid_name, name_err = validate_profile_name(name)
+        valid_name, name_err = validate_profile_name(
+            name, allow_reserved=(profile is not None and name == profile.name)
+        )
         if not valid_name:
             name_error.value = name_err
             name_error.visible = True
