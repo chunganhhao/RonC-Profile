@@ -1271,11 +1271,13 @@ function extractBackupCodes(raw) {
 }
 
 function profileTags(p) { return p.tags?.length ? p.tags : (p.group ? [p.group] : []); }
-function setSidebarFilter(nextFilter) {
+function setSidebarFilter(nextFilter, clearSearch = false) {
   filter = nextFilter;
   currentPage = 1;
-  const searchEl = $("search");
-  if (searchEl && searchEl.value) searchEl.value = "";
+  if (clearSearch) {
+    const searchEl = $("search");
+    if (searchEl && searchEl.value) searchEl.value = "";
+  }
 }
 
 function renderFilters() {
@@ -1288,7 +1290,7 @@ function renderFilters() {
     class: filter === id ? "active" : "",
     "aria-pressed": String(filter === id),
     title: `${label} (${count})`,
-    onclick: () => { setSidebarFilter(id); render(); },
+    onclick: () => { setSidebarFilter(id, true); render(); },
   }, h("span", { class: "nav-lbl" }, label), h("span", { class: "count" }, String(count)));
   const tags = [...new Set(profiles.flatMap(profileTags))].sort();
   nav.replaceChildren(

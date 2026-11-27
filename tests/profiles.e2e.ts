@@ -62,6 +62,10 @@ test('removing the last use of the active tag returns to All', async ({ app, bro
     await browser.locator('#modal-root .btn-act').click();
     await expect(tag).toHaveCount(0);
     await expect(browser.locator('#filters button[title="All (2)"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(search).toHaveValue('Research');
+    await expect(browser.locator('.row.body')).toHaveCount(1);
+    await expect(browser.locator('.row.body')).toContainText('Research');
+    await browser.locator('#filters button[title="All (2)"]').click();
     await expect(search).toHaveValue('');
     await expect(browser.locator('.row.body')).toHaveCount(2);
   } finally {
