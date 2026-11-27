@@ -1138,6 +1138,9 @@ async function refresh() {
       api("GET", "/extensions").catch(() => ({ extensions: [] })),
     ]);
     profiles = list.profiles;
+    if (filter.startsWith("tag:") && !profiles.some((p) => profileTags(p).includes(filter.slice(4)))) {
+      setSidebarFilter("all");
+    }
     extensions = extRes.extensions || [];
     const extCntEl = $("ext-count");
     if (extCntEl) extCntEl.textContent = String(extensions.length);
@@ -1268,21 +1271,26 @@ function extractBackupCodes(raw) {
 }
 
 function profileTags(p) { return p.tags?.length ? p.tags : (p.group ? [p.group] : []); }
-function renderFilters() {
-  const nav = $("filters");
-  const selectFilter = (nextFilter) => {
-    filter = nextFilter;
-    currentPage = 1;
+function setSidebarFilter(nextFilter, clearSearch = false) {
+  filter = nextFilter;
+  currentPage = 1;
+  if (clearSearch) {
     const searchEl = $("search");
     if (searchEl && searchEl.value) searchEl.value = "";
-    render();
-  };
+  }
+}
+
+function renderFilters() {
+  const nav = $("filters");
+  const focused = document.activeElement;
+  const focusedFilter = nav.contains(focused) ? focused.dataset.filterId : undefined;
   const makeBtn = (id, label, count) => h("button", {
     type: "button",
+    "data-filter-id": id,
     class: filter === id ? "active" : "",
     "aria-pressed": String(filter === id),
     title: `${label} (${count})`,
-    onclick: () => selectFilter(id),
+    onclick: () => { setSidebarFilter(id, true); render(); },
   }, h("span", { class: "nav-lbl" }, label), h("span", { class: "count" }, String(count)));
   const tags = [...new Set(profiles.flatMap(profileTags))].sort();
   nav.replaceChildren(
@@ -1293,6 +1301,9 @@ function renderFilters() {
       ...tags.map((tag) => makeBtn("tag:" + tag, tag, profiles.filter((p) => profileTags(p).includes(tag)).length)),
     ] : []),
   );
+  if (focusedFilter !== undefined) {
+    nav.querySelector(`[data-filter-id="${CSS.escape(focusedFilter)}"]`)?.focus({ preventScroll: true });
+  }
 }
 
 function emptyState(filtered, q = "") {

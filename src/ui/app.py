@@ -507,6 +507,13 @@ class App:
             "chrome": lambda p: p.engine == "chrome",
         }
 
+    def _drop_stale_tag_filter(self, profiles: list) -> None:
+        if self.filter.startswith("group:"):
+            tag = self.filter.split(":", 1)[1]
+            if not any(tag in profile.effective_tags for profile in profiles):
+                self.filter = "all"
+                self.state.current_page = 1
+
     def _get_page_profiles(self, all_profiles: list | None = None) -> tuple[list, list, int]:
         all_profiles = self.pm.list_profiles() if all_profiles is None else list(all_profiles)
         if self.filter.startswith("group:"):
@@ -681,6 +688,7 @@ class App:
         r = self.refs
         assert r is not None
         everything = self.pm.list_profiles()
+        self._drop_stale_tag_filter(everything)
         self._update_stats()
         self._flush_log()
         all_profiles, page_profiles, total_pages = self._get_page_profiles(everything)
