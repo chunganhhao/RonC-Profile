@@ -75,7 +75,7 @@ test('removing the last use of the active tag returns to All', async ({ app, bro
       if (!list.ok) throw new Error(`Could not read tag test fixture (${list.status})`);
       const { profiles } = await list.json();
       const research = profiles.find((p: { name: string }) => p.name === 'Research');
-      if (!research.tags.includes('Temporary QA')) return;
+      if (!research || !research.tags.includes('Temporary QA')) return;
       const res = await fetch('/api/v1/profiles/Research', {
         method: 'PATCH',
         headers: { ...auth, 'Content-Type': 'application/json' },
