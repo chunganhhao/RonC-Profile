@@ -507,16 +507,18 @@ class App:
             "chrome": lambda p: p.engine == "chrome",
         }
 
+    def _drop_stale_tag_filter(self, profiles: list) -> None:
+        if self.filter.startswith("group:"):
+            tag = self.filter.split(":", 1)[1]
+            if not any(tag in profile.effective_tags for profile in profiles):
+                self.filter = "all"
+                self.state.current_page = 1
+
     def _get_page_profiles(self, all_profiles: list | None = None) -> tuple[list, list, int]:
         all_profiles = self.pm.list_profiles() if all_profiles is None else list(all_profiles)
         if self.filter.startswith("group:"):
             target_group = self.filter.split(":", 1)[1]
-            tagged_profiles = [p for p in all_profiles if target_group in p.effective_tags]
-            if tagged_profiles:
-                all_profiles = tagged_profiles
-            else:
-                self.filter = "all"
-                self.state.current_page = 1
+            all_profiles = [p for p in all_profiles if target_group in p.effective_tags]
         else:
             test = self._filter_tests().get(self.filter, lambda p: True)
             all_profiles = [p for p in all_profiles if test(p)]
@@ -533,8 +535,8 @@ class App:
             ]
         page_size = max(1, int(getattr(self.state, "items_per_page", ITEMS_PER_PAGE)))
         total = max(1, (len(all_profiles) + page_size - 1) // page_size)
-        self.state.current_page = max(1, min(self.state.current_page, total))
-        start = (self.state.current_page - 1) * page_size
+        current_page = max(1, min(self.state.current_page, total))
+        start = (current_page - 1) * page_size
         return all_profiles, all_profiles[start : start + page_size], total
 
     def _on_edit_field(self, name: str, field: str, row_index: int = 1) -> None:
@@ -686,9 +688,11 @@ class App:
         r = self.refs
         assert r is not None
         everything = self.pm.list_profiles()
+        self._drop_stale_tag_filter(everything)
         self._update_stats()
         self._flush_log()
         all_profiles, page_profiles, total_pages = self._get_page_profiles(everything)
+        self.state.current_page = max(1, min(self.state.current_page, total_pages))
         page_size = max(1, int(getattr(self.state, "items_per_page", ITEMS_PER_PAGE)))
         global_positions = {profile.name: index for index, profile in enumerate(everything, 1)}
 

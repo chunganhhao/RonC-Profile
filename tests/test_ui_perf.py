@@ -24,6 +24,8 @@ from src.ui.components.factory import build_ui_refs
 from src.ui.components.profile_card import ProfileRow, build_header_row, build_profile_card
 from src.ui.dialogs.profile import open_profile_dialog
 from src.ui.dialogs.responsive import bind_responsive_dialog
+from src.ui.handlers import AppHandlers
+from src.ui.state import AppState
 from src.ui.theme.styles import StableButton, StableIconButton
 
 
@@ -36,26 +38,82 @@ def _walk(control):
         yield from _walk(content)
 
 
-def test_disappearing_tag_filter_returns_to_first_page_of_all_profiles():
-    app = App.__new__(App)
-    app.filter = "group:Editorial"
-    app.state = SimpleNamespace(search_query="", current_page=2, items_per_page=1)
-    tagged = [Profile("Maple", tags=["Editorial"]), Profile("River", tags=["Editorial"])]
-    other = Profile("Cedar")
+def test_disappearing_tag_filter_returns_to_first_page_of_all_profiles(tmp_path, monkeypatch):
+    monkeypatch.setattr(pm_mod, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(pm_mod, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(app_config, "PROXY_POOL_FILE", str(tmp_path / "proxies.json"))
+    monkeypatch.setattr(app_config, "WARMING_FILE", str(tmp_path / "warming.json"))
+    monkeypatch.setattr(app_config, "EXTENSIONS_FILE", str(tmp_path / "extensions.json"))
+    monkeypatch.setattr(app_config, "EXTENSIONS_DIR", str(tmp_path / "extensions"))
 
-    all_profiles, page, total = app._get_page_profiles([*tagged, other])
-    assert (all_profiles, page, total) == (tagged, tagged[1:], 2)
+    app = App(Container())
+    for name, tags in (("Maple", ["Editorial"]), ("River", ["Editorial"]), ("Cedar", [])):
+        assert app.pm.add_profile(name, "", "macos", engine="chrome", tags=tags)
+    app.page = SimpleNamespace(
+        window=SimpleNamespace(width=1200, height=800),
+        controls=[],
+        add=lambda ctrl: app.page.controls.append(ctrl),
+        update=lambda: None,
+    )
+    app._file_picker = None
+    app._build_ui()
+    app.filter = "group:Editorial"
+    app.state.items_per_page = 1
+    app.state.current_page = 2
+    app._refresh_profiles()
+    tagged = [app.pm.profiles[name] for name in ("Maple", "River")]
+    assert app._get_page_profiles() == (tagged, tagged[1:], 2)
 
     app.state.search_query = "no match"
-    assert app._get_page_profiles([*tagged, other]) == ([], [], 1)
+    assert app._get_page_profiles() == ([], [], 1)
+    assert app.state.current_page == 2
+    app._refresh_profiles()
     assert app.filter == "group:Editorial"
 
     app.state.search_query = ""
     app.state.current_page = 2
-    untagged = [Profile(p.name) for p in tagged] + [other]
-    assert app._get_page_profiles(untagged) == (untagged, untagged[:1], 3)
+    for profile in tagged:
+        assert app.pm.patch_profile(profile.name, tags=[])
+    assert app._get_page_profiles() == ([], [], 1)
+    assert app.filter == "group:Editorial"
+    assert app.state.current_page == 2
+
+    app._refresh_profiles()
+    untagged = app.pm.list_profiles()
+    assert app._get_page_profiles() == (untagged, untagged[:1], 3)
     assert app.filter == "all"
     assert app.state.current_page == 1
+    assert app._filter_cache_key[0] == "all"
+
+
+def test_select_all_page_does_not_select_unseen_profiles_when_active_tag_disappears(monkeypatch):
+    monkeypatch.setattr(ft.context, "disable_auto_update", lambda: None)
+    app = App.__new__(App)
+    app.state = AppState()
+    app.filter = "group:Editorial"
+    app.pm = Mock()
+    app.pm.list_profiles.return_value = [Profile("Maple", tags=["Editorial"]), Profile("Cedar")]
+    handlers = AppHandlers(
+        pm=app.pm,
+        bl=Mock(),
+        ps=Mock(),
+        state=app.state,
+        get_page=lambda: None,
+        get_refs=lambda: None,
+        log_fn=Mock(),
+        refresh_fn=Mock(),
+        get_page_profiles=app._get_page_profiles,
+    )
+
+    handlers.on_select_all_page()
+    assert app.state.selected_names() == {"Maple"}
+    app.state.clear_selection()
+
+    app.pm.list_profiles.return_value = [Profile("Maple"), Profile("Cedar")]
+    handlers.on_select_all_page()
+    assert app.state.selected_names() == set()
+    assert app.filter == "group:Editorial"
+    assert app.state.consume_refresh()
 
 
 def test_stable_buttons_emit_zero_phantom_style_ops():
