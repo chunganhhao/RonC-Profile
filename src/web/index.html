@@ -1167,6 +1167,10 @@ function visible() {
 let lastRender = "";
 function render() {
   const q = $("search").value.trim();
+  if (filter.startsWith("tag:") && !profiles.some((p) => profileTags(p).includes(filter.slice(4)))) {
+    filter = "all";
+    currentPage = 1;
+  }
   const shown = visible();
   const totalPages = Math.max(1, Math.ceil(shown.length / pageSize));
   if (currentPage > totalPages) currentPage = totalPages;
@@ -1270,6 +1274,8 @@ function extractBackupCodes(raw) {
 function profileTags(p) { return p.tags?.length ? p.tags : (p.group ? [p.group] : []); }
 function renderFilters() {
   const nav = $("filters");
+  const focused = document.activeElement;
+  const focusedFilter = nav.contains(focused) ? focused.dataset.filterId : undefined;
   const selectFilter = (nextFilter) => {
     filter = nextFilter;
     currentPage = 1;
@@ -1279,6 +1285,7 @@ function renderFilters() {
   };
   const makeBtn = (id, label, count) => h("button", {
     type: "button",
+    "data-filter-id": id,
     class: filter === id ? "active" : "",
     "aria-pressed": String(filter === id),
     title: `${label} (${count})`,
@@ -1293,6 +1300,9 @@ function renderFilters() {
       ...tags.map((tag) => makeBtn("tag:" + tag, tag, profiles.filter((p) => profileTags(p).includes(tag)).length)),
     ] : []),
   );
+  if (focusedFilter !== undefined) {
+    nav.querySelector(`[data-filter-id="${CSS.escape(focusedFilter)}"]`)?.focus({ preventScroll: true });
+  }
 }
 
 function emptyState(filtered, q = "") {

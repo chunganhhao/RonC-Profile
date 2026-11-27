@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- Desktop và web panel tự trở về bộ lọc Tất cả khi tag đang chọn không còn trên profile nào; web panel giữ tiêu điểm khi chọn bộ lọc bằng bàn phím.
+
 - Web panel: Ngâm tài khoản yêu cầu chọn ít nhất một profile để lưu hoặc chạy chiến dịch, không tự chọn profile đầu tiên.
 
 - Web panel: giữ tên chiến dịch ngâm tài khoản khi đổi profile, hiện đúng trạng thái khi chạy lại, giữ tiêu điểm khi chọn kịch bản bằng bàn phím và không để tên dài lấn các nút trong danh sách tác vụ.

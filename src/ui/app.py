@@ -511,7 +511,12 @@ class App:
         all_profiles = self.pm.list_profiles() if all_profiles is None else list(all_profiles)
         if self.filter.startswith("group:"):
             target_group = self.filter.split(":", 1)[1]
-            all_profiles = [p for p in all_profiles if target_group in p.effective_tags]
+            tagged_profiles = [p for p in all_profiles if target_group in p.effective_tags]
+            if tagged_profiles:
+                all_profiles = tagged_profiles
+            else:
+                self.filter = "all"
+                self.state.current_page = 1
         else:
             test = self._filter_tests().get(self.filter, lambda p: True)
             all_profiles = [p for p in all_profiles if test(p)]

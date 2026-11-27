@@ -36,6 +36,28 @@ def _walk(control):
         yield from _walk(content)
 
 
+def test_disappearing_tag_filter_returns_to_first_page_of_all_profiles():
+    app = App.__new__(App)
+    app.filter = "group:Editorial"
+    app.state = SimpleNamespace(search_query="", current_page=2, items_per_page=1)
+    tagged = [Profile("Maple", tags=["Editorial"]), Profile("River", tags=["Editorial"])]
+    other = Profile("Cedar")
+
+    all_profiles, page, total = app._get_page_profiles([*tagged, other])
+    assert (all_profiles, page, total) == (tagged, tagged[1:], 2)
+
+    app.state.search_query = "no match"
+    assert app._get_page_profiles([*tagged, other]) == ([], [], 1)
+    assert app.filter == "group:Editorial"
+
+    app.state.search_query = ""
+    app.state.current_page = 2
+    untagged = [Profile(p.name) for p in tagged] + [other]
+    assert app._get_page_profiles(untagged) == (untagged, untagged[:1], 3)
+    assert app.filter == "all"
+    assert app.state.current_page == 1
+
+
 def test_stable_buttons_emit_zero_phantom_style_ops():
     enc = configure_encode_object_for_msgpack(ft.BaseControl)
     icon_btn = StableIconButton(

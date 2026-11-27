@@ -37,6 +37,44 @@ test('Space keeps keyboard focus on the selected row', async ({ app, browser }) 
   await expect(browser.locator('.row.body .c-id button:focus')).toHaveCount(1);
 });
 
+test('removing the last use of the active tag returns to All', async ({ app, browser }) => {
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  await browser.locator('[aria-label="Edit Tags: Research"]').click();
+  await browser.locator('#tag-input').fill('Temporary QA');
+  await browser.locator('#modal-root .btn-act').click();
+  const tag = browser.locator('#filters button[title="Temporary QA (1)"]');
+  await tag.click();
+  await expect(browser.locator('#total-count')).toContainText('Total: 1');
+
+  await browser.locator('#search').fill('no matching profile');
+  await expect(browser.locator('.row.body')).toHaveCount(0);
+  await expect(tag).toHaveAttribute('aria-pressed', 'true');
+  await browser.locator('#search').fill('');
+
+  await browser.locator('[aria-label="Edit Tags: Research"]').click();
+  await browser.locator('[aria-label="Remove Temporary QA"]').click();
+  await browser.locator('#modal-root .btn-act').click();
+  await expect(tag).toHaveCount(0);
+  await expect(browser.locator('#filters button[title="All (2)"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(browser.locator('.row.body')).toHaveCount(2);
+});
+
+test('activating a sidebar filter keeps keyboard focus on that filter', async ({ app, browser }) => {
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  const agy = browser.locator('#filters button[title="AGY (1)"]');
+  await expect(agy).toBeVisible();
+  await browser.evaluate(() => document.querySelector<HTMLButtonElement>('#filters button[title="AGY (1)"]')!.focus());
+  await browser.keyboard.press('Enter');
+  await expect(agy).toHaveAttribute('aria-pressed', 'true');
+  await expect(browser.locator('#filters button[title="AGY (1)"]:focus')).toHaveCount(1);
+  await browser.keyboard.press('Tab');
+  await expect(browser.locator('#filters button[title="Gemini Pixel (2)"]:focus')).toHaveCount(1);
+});
+
 test('profile field editors persist only their fields', async ({ app, browser }) => {
   await app.open('/');
   await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
