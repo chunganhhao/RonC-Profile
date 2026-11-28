@@ -151,6 +151,53 @@ def test_full_editor_saves_fingerprint_with_its_os(tmp_path, monkeypatch):
     )
 
 
+@pytest.mark.parametrize("quick_paste", [False, True])
+def test_full_editor_only_quick_paste_replacement_clears_peer_credentials(
+    tmp_path, monkeypatch, quick_paste
+):
+    from src.services.profile import manager
+    from src.ui.actions.profile import edit_profile
+
+    monkeypatch.setattr(manager, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(manager, "DATA_DIR", str(tmp_path / "data"))
+    pm = manager.ProfileManager()
+    assert pm.add_profile("Fixture", "", "macos", engine="chrome", account_uid="old@example.test")
+    peer = manager.ProfileManager()
+    page = Page()
+    bl = SimpleNamespace(is_running=lambda _: False)
+    edit_profile(page, "Fixture", pm, bl, None, lambda _: None, lambda: None)
+    assert peer.patch_profile(
+        "Fixture",
+        account_password="fixture-password",
+        two_fa_secret="JBSWY3DPEHPK3PXP",
+        recovery_email="old-recovery@example.test",
+        backup_codes="1111 0001",
+    )
+    assert pm.list_profiles()[0].account_password == "fixture-password"
+
+    hint = "uid|password|2FA_SECRET|note" if quick_paste else "user@gmail.com / 100089..."
+    account_field = next(c for c in walk(page.dialog) if getattr(c, "hint_text", None) == hint)
+    account_field.value = "new@example.test"
+    if quick_paste:
+        account_field.on_submit(None)
+    name = next(c for c in walk(page.dialog) if getattr(c, "value", None) == "Fixture")
+    name.on_submit(None)
+    assert page.closed
+    saved = pm.profiles["Fixture"]
+    assert saved.account_uid == "new@example.test"
+    expected = (
+        (None, None, None, None)
+        if quick_paste
+        else ("fixture-password", "JBSWY3DPEHPK3PXP", "old-recovery@example.test", "1111 0001")
+    )
+    assert (
+        saved.account_password,
+        saved.two_fa_secret,
+        saved.recovery_email,
+        saved.backup_codes,
+    ) == expected
+
+
 @pytest.mark.parametrize("initial,target", [("light", "dark"), ("dark", "light")])
 def test_chromium_warning_uses_current_theme(initial, target):
     from src.core.strings import get_string

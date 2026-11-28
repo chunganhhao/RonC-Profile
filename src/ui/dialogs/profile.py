@@ -1066,19 +1066,19 @@ def open_profile_dialog(
             "initial_fingerprint": initial_fp,
             "extension_ids": sorted(selected_ext_ids),
         }
-        quick_paste_replaced_initial = bool(
+        account_replaced = (
             is_edit
             and cred_state["used_quick_paste"]
-            and initial_account_uid
             and final_uid.casefold() != initial_account_uid.casefold()
         )
         if (not is_edit and cleaned_backup_codes) or (
-            is_edit
-            and (cleaned_backup_codes != initial_backup_codes or quick_paste_replaced_initial)
+            is_edit and (cleaned_backup_codes != initial_backup_codes or account_replaced)
         ):
             extra_kwargs["backup_codes"] = cleaned_backup_codes
 
         sig = inspect.signature(on_save)
+        if "account_replaced" in sig.parameters:
+            extra_kwargs["account_replaced"] = account_replaced
         accepts_kwargs = any(
             p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
         )

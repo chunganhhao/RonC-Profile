@@ -91,6 +91,8 @@ def edit_profile(
         timezone: str,
         locale: str,
         _engine: str,
+        *,
+        account_replaced: bool = False,
         **extra: Any,
     ) -> str | None:
         if new_name != original and bl.is_running(original):
@@ -106,6 +108,12 @@ def edit_profile(
         changes = {key: value for key, value in values.items() if value != initial.get(key)}
         if extra.get("initial_fingerprint") is not None:
             changes["os_type"] = new_os
+        if account_replaced:
+            changes.update(
+                account_password=extra["account_password"],
+                two_fa_secret=extra["two_fa_secret"],
+                recovery_email=extra["recovery_email"],
+            )
         if pm.patch_profile(original, **changes):
             log(get_string("updated_profile", old=original, new=new_name))
             refresh()
