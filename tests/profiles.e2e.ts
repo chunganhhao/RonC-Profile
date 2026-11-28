@@ -1,6 +1,85 @@
 import { test } from '@e2e-dev/web';
 import { expect } from 'e2e';
 
+test('full editor preserves a peer recovery email update and permits clearing it', async ({ app, browser }) => {
+  const token = 'fixture-token-' + 't'.repeat(32);
+  await browser.setViewport({ width: 1450, height: 850 });
+  await app.open('/');
+  await browser.locator('#token').fill(token);
+  await browser.locator('#login-form button').click();
+  const edit = browser.locator('[aria-label="Edit: Studio Gmail"]');
+  const patch = (changes: Record<string, string>) => browser.evaluate(async ({ token, changes }) => {
+    const res = await fetch('/api/v1/profiles/Studio%20Gmail', {
+      method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(changes),
+    });
+    if (!res.ok) throw new Error(`Profile PATCH failed (${res.status})`);
+  }, { token, changes });
+  try {
+    await edit.click();
+    await expect(browser.locator('#f-recovery')).toHaveValue('');
+    await patch({ recovery_email: 'peer@example.test' });
+    await browser.locator('#f-notes').fill('Edited notes');
+    await browser.locator('#modal-root .modal-foot .btn-act').click();
+    await expect(browser.locator('[role=dialog]')).toHaveCount(0);
+    await expect(browser.locator('.row.body').first()).toContainText('peer@example.test');
+    await expect(browser.locator('.row.body').first()).toContainText('Edited notes');
+    await edit.click();
+    await browser.locator('#f-recovery').fill('');
+    await browser.locator('#modal-root .modal-foot .btn-act').click();
+    await expect(browser.locator('[role=dialog]')).toHaveCount(0);
+    await expect(browser.locator('.row.body').first()).not.toContainText('peer@example.test');
+  } finally {
+    await patch({ recovery_email: '', notes: 'Review before signing in' });
+  }
+});
+
+test('Select all keeps keyboard focus through both Space presses', async ({ app, browser }) => {
+  await browser.setViewport({ width: 1450, height: 850 });
+  await app.open('/');
+  await browser.locator('#token').fill('fixture-token-' + 't'.repeat(32));
+  await browser.locator('#login-form button').click();
+  const header = '.head-row input[type=checkbox]';
+  await expect(browser.locator(header)).toBeVisible();
+  await browser.evaluate((selector) => document.querySelector<HTMLInputElement>(selector)!.focus(), header);
+  await browser.keyboard.press('Space');
+  await expect(browser.locator(header)).toBeChecked();
+  await expect(browser.locator(`${header}:focus`)).toHaveCount(1);
+  await browser.keyboard.press('Space');
+  await expect(browser.locator(header)).not.toBeChecked();
+  await expect(browser.locator(`${header}:focus`)).toHaveCount(1);
+});
+
+test('table keeps its horizontal scroll after a changed background refresh', async ({ app, browser }) => {
+  const token = 'fixture-token-' + 't'.repeat(32);
+  await browser.setViewport({ width: 1450, height: 850 });
+  await app.open('/');
+  await browser.locator('#token').fill(token);
+  await browser.locator('#login-form button').click();
+  await expect(browser.locator('#sheet-scroll')).toBeVisible();
+  const scroll = () => browser.evaluate(() => document.querySelector('#sheet-scroll')!.scrollLeft);
+  const before = await browser.evaluate(() => {
+    const table = document.querySelector('#sheet-scroll')!;
+    table.scrollLeft = table.scrollWidth;
+    return table.scrollLeft;
+  });
+  expect(before).toBeGreaterThan(0);
+  const patch = (notes: string) => browser.evaluate(async ({ token, notes }) => {
+    const res = await fetch('/api/v1/profiles/Studio%20Gmail', {
+      method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes }),
+    });
+    if (!res.ok) throw new Error(`Profile PATCH failed (${res.status})`);
+  }, { token, notes });
+  try {
+    await patch('Peer updated the note');
+    await expect(browser.locator('.row.body').first()).toContainText('Peer updated the note');
+    expect(await scroll()).toBe(before);
+  } finally {
+    await patch('Review before signing in');
+  }
+});
+
 test('changing Startup URL preserves a multiline inline note', async ({ app, browser }) => {
   const note = 'Line one\nLine two';
   await app.open('/');

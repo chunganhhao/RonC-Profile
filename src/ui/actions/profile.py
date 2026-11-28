@@ -65,6 +65,23 @@ def edit_profile(
     if not profile:
         return
     original = profile.name
+    initial = {
+        "name": original,
+        "proxy": (profile.proxy or "").strip(),
+        "os_type": profile.os_type,
+        "timezone": (profile.timezone or "").strip(),
+        "locale": (profile.locale or "").strip(),
+        "group": (profile.group or "").strip(),
+        "account_uid": (profile.account_uid or "").strip(),
+        "account_password": profile.account_password or "",
+        "two_fa_secret": profile.two_fa_secret or "",
+        "recovery_email": profile.effective_recovery_email.strip(),
+        "notes": profile.effective_notes.strip(),
+        "start_url": profile.start_url or "",
+        "canvas_mode": profile.canvas_mode,
+        "extension_ids": sorted(set(profile.extension_ids)),
+        "initial_fingerprint": None,
+    }
 
     @_store_conflict
     def on_save(
@@ -78,15 +95,16 @@ def edit_profile(
     ) -> str | None:
         if new_name != original and bl.is_running(original):
             return get_string("stop_before_rename")
-        if pm.update_profile(
-            original,
-            new_name,
-            new_proxy,
-            new_os,
-            timezone,
-            locale,
+        values = {
+            "name": new_name,
+            "proxy": new_proxy,
+            "os_type": new_os,
+            "timezone": timezone,
+            "locale": locale,
             **extra,
-        ):
+        }
+        changes = {key: value for key, value in values.items() if value != initial.get(key)}
+        if pm.patch_profile(original, **changes):
             log(get_string("updated_profile", old=original, new=new_name))
             refresh()
             return None

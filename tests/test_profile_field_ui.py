@@ -43,7 +43,10 @@ def test_rename_warming_save_error_is_localized(monkeypatch, field_editor):
 
     profile = Profile(name="Before")
     pm = SimpleNamespace(
-        profiles={profile.name: profile}, update_profile=reject, list_profiles=lambda: [profile]
+        profiles={profile.name: profile},
+        update_profile=reject,
+        patch_profile=reject,
+        list_profiles=lambda: [profile],
     )
     bl = SimpleNamespace(is_running=lambda _: False)
     callbacks = []
@@ -73,6 +76,47 @@ def walk(control):
     content = getattr(control, "content", None)
     if content is not None and not isinstance(content, str):
         yield from walk(content)
+
+
+def test_full_editor_preserves_peer_recovery_email_and_permits_clearing(tmp_path, monkeypatch):
+    from src.core.strings import get_string
+    from src.services.profile import manager
+    from src.ui.actions.profile import edit_profile
+
+    monkeypatch.setattr(manager, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(manager, "DATA_DIR", str(tmp_path / "data"))
+    pm = manager.ProfileManager()
+    assert pm.add_profile(
+        "Fixture", "", "macos", engine="chrome", recovery_email="before@example.test"
+    )
+    peer = manager.ProfileManager()
+    page = Page()
+    bl = SimpleNamespace(is_running=lambda _: False)
+
+    def open_editor():
+        edit_profile(page, "Fixture", pm, bl, None, lambda _: None, lambda: None)
+
+    def field(hint):
+        return next(c for c in walk(page.dialog) if getattr(c, "hint_text", None) == hint)
+
+    def save():
+        name = next(c for c in walk(page.dialog) if getattr(c, "value", None) == "Fixture")
+        name.on_submit(None)
+        assert page.closed
+
+    open_editor()
+    assert peer.patch_profile("Fixture", recovery_email="peer@example.test")
+    assert pm.list_profiles()[0].recovery_email == "peer@example.test"
+    field(get_string("notes_hint")).value = "Edited notes"
+    save()
+    assert pm.profiles["Fixture"].notes == "Edited notes"
+    assert pm.profiles["Fixture"].recovery_email == "peer@example.test"
+
+    page.closed = False
+    open_editor()
+    field(get_string("recovery_email_hint")).value = ""
+    save()
+    assert pm.profiles["Fixture"].recovery_email is None
 
 
 @pytest.mark.parametrize("initial,target", [("light", "dark"), ("dark", "light")])

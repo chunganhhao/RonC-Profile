@@ -1204,7 +1204,10 @@ function render() {
   renderFilters();
 
   const sheet = $("sheet");
-  const focusedProfile = document.activeElement?.dataset.selectProfile;
+  const focused = document.activeElement;
+  const focusedProfile = focused?.dataset.selectProfile;
+  const focusedSelectAll = focused?.id === "select-page";
+  const scrollLeft = $("sheet-scroll")?.scrollLeft ?? 0;
   sheet.replaceChildren();
   if (!profiles.length) return sheet.append(emptyState(false));
   if (selected.size) sheet.append(bulkBar(shown));
@@ -1212,9 +1215,13 @@ function render() {
   inner.append(headRow(pageItems));
   if (!shown.length) inner.append(emptyState(true, q));
   for (const p of pageItems) inner.append(row(p));
-  sheet.append(h("div", { class: "sheet-scroll", id: "sheet-scroll" }, inner));
+  const scroll = h("div", { class: "sheet-scroll", id: "sheet-scroll" }, inner);
+  sheet.append(scroll);
   sheet.append(sheetFooter(shown.length, totalPages));
-  if (focusedProfile !== undefined) {
+  scroll.scrollLeft = scrollLeft;
+  if (focusedSelectAll) {
+    $("select-page").focus({ preventScroll: true });
+  } else if (focusedProfile !== undefined) {
     inner.querySelector(`[data-select-profile="${CSS.escape(focusedProfile)}"]`)?.focus({ preventScroll: true });
   }
   justLanded.clear();
@@ -1325,7 +1332,7 @@ function emptyState(filtered, q = "") {
 
 function headRow(shown) {
   const all = shown.length > 0 && shown.every((p) => selected.has(p.name));
-  const box = h("input", { type: "checkbox", "aria-label": t("select_all"), onchange: (e) => {
+  const box = h("input", { id: "select-page", type: "checkbox", "aria-label": t("select_all"), onchange: (e) => {
     shown.forEach((p) => (e.target.checked ? selected.add(p.name) : selected.delete(p.name))); render(); } });
   box.checked = all;
   box.indeterminate = !all && shown.some((p) => selected.has(p.name));
@@ -1764,7 +1771,8 @@ function openEditor(p) {
           backupErr,
           h("div", { class: "hint" }, t("backup_codes_hint")))
       : field(t("backup_codes"), backupInput, t("backup_codes_hint"));
-    const selectedExts = new Set((p && p.extension_ids) || []);
+    const initialExts = new Set(p?.extension_ids || []);
+    const selectedExts = new Set(initialExts);
     const extChecks = h("div", { class: "ext-prof-list" },
       extensions.length
         ? extensions.map((ext) => {
@@ -1819,6 +1827,7 @@ function openEditor(p) {
       }
       const rawBackup = normalizeBackupText(backupInput.value);
       const notes = notesInput.value.trim();
+      const extensionsChanged = selectedExts.size !== initialExts.size || [...selectedExts].some((id) => !initialExts.has(id));
       const body = {
         name: name.value.trim(),
         os_type: os.value,
@@ -1830,12 +1839,26 @@ function openEditor(p) {
         backup_codes: p ? (backupLoaded && rawBackup !== initialBackupCodes ? rawBackup : undefined) : (rawBackup || undefined),
         notes: p && notes === initialNotes ? undefined : notes,
         webrtc_mode: webrtcSelect.value,
-        extension_ids: [...selectedExts],
+        extension_ids: !p || extensionsChanged ? [...selectedExts] : undefined,
         initial_fingerprint: (isChrome && (!p || hwChanged)) ? fpPayload : undefined,
       };
-      if (!p) body.engine = engine.value;
+      if (p) {
+        const initial = {
+          name: p.name,
+          os_type: p.os_type,
+          proxy: p.proxy?.trim() || null,
+          timezone: p.timezone?.trim() || "",
+          locale: p.locale?.trim() || "",
+          recovery_email: p.recovery_email?.trim() || "",
+        };
+        for (const [key, value] of Object.entries(initial)) {
+          if (body[key] === value) delete body[key];
+        }
+      } else {
+        body.engine = engine.value;
+      }
       try {
-        if (p) { await api("PATCH", `/profiles/${enc(p.name)}`, body); flashFeedback(body.name, "edit_profile"); toast(t("saved")); }
+        if (p) { await api("PATCH", `/profiles/${enc(p.name)}`, body); flashFeedback(body.name ?? p.name, "edit_profile"); toast(t("saved")); }
         else { await api("POST", "/profiles", body); toast(t("created", { name: body.name })); }
         close(); refresh();
       } catch (ex) { say("err", ex.message); }
