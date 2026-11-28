@@ -14,6 +14,8 @@
 
 ### Sửa
 
+- Trình sửa profile trên desktop và web panel không ghi đè các trường vừa được cập nhật ở nơi khác; web panel giữ tiêu điểm ô Chọn tất cả và vị trí cuộn ngang khi bảng tải lại.
+
 - Desktop và web panel tự trở về bộ lọc Tất cả khi tag đang chọn không còn trên profile nào; web panel giữ tiêu điểm khi chọn bộ lọc bằng bàn phím.
 
 - Web panel: Ngâm tài khoản yêu cầu chọn ít nhất một profile để lưu hoặc chạy chiến dịch, không tự chọn profile đầu tiên.

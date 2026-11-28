@@ -43,7 +43,10 @@ def test_rename_warming_save_error_is_localized(monkeypatch, field_editor):
 
     profile = Profile(name="Before")
     pm = SimpleNamespace(
-        profiles={profile.name: profile}, update_profile=reject, list_profiles=lambda: [profile]
+        profiles={profile.name: profile},
+        update_profile=reject,
+        patch_profile=reject,
+        list_profiles=lambda: [profile],
     )
     bl = SimpleNamespace(is_running=lambda _: False)
     callbacks = []
@@ -73,6 +76,126 @@ def walk(control):
     content = getattr(control, "content", None)
     if content is not None and not isinstance(content, str):
         yield from walk(content)
+
+
+def test_full_editor_preserves_peer_recovery_email_and_permits_clearing(tmp_path, monkeypatch):
+    from src.core.strings import get_string
+    from src.services.profile import manager
+    from src.ui.actions.profile import edit_profile
+
+    monkeypatch.setattr(manager, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(manager, "DATA_DIR", str(tmp_path / "data"))
+    pm = manager.ProfileManager()
+    assert pm.add_profile(
+        "Fixture", "", "macos", engine="chrome", recovery_email="before@example.test"
+    )
+    peer = manager.ProfileManager()
+    page = Page()
+    bl = SimpleNamespace(is_running=lambda _: False)
+
+    def open_editor():
+        edit_profile(page, "Fixture", pm, bl, None, lambda _: None, lambda: None)
+
+    def field(hint):
+        return next(c for c in walk(page.dialog) if getattr(c, "hint_text", None) == hint)
+
+    def save():
+        name = next(c for c in walk(page.dialog) if getattr(c, "value", None) == "Fixture")
+        name.on_submit(None)
+        assert page.closed
+
+    open_editor()
+    assert peer.patch_profile("Fixture", recovery_email="peer@example.test")
+    assert pm.list_profiles()[0].recovery_email == "peer@example.test"
+    field(get_string("notes_hint")).value = "Edited notes"
+    save()
+    assert pm.profiles["Fixture"].notes == "Edited notes"
+    assert pm.profiles["Fixture"].recovery_email == "peer@example.test"
+
+    page.closed = False
+    open_editor()
+    field(get_string("recovery_email_hint")).value = ""
+    save()
+    assert pm.profiles["Fixture"].recovery_email is None
+
+
+def test_full_editor_saves_fingerprint_with_its_os(tmp_path, monkeypatch):
+    from src.services.browser.fingerprint import load_saved_fingerprint
+    from src.services.profile import manager
+    from src.ui.actions.profile import edit_profile
+    from src.ui.dialogs import profile as dialog
+
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(manager, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(manager, "DATA_DIR", str(data_dir))
+    monkeypatch.setattr(dialog, "DATA_DIR", str(data_dir))
+    pm = manager.ProfileManager()
+    assert pm.add_profile("Fixture", "", "macos")
+    profile_dir = str(data_dir / "Fixture")
+    assert load_saved_fingerprint(profile_dir) is None
+    peer = manager.ProfileManager()
+    page = Page()
+    bl = SimpleNamespace(is_running=lambda _: False)
+    edit_profile(page, "Fixture", pm, bl, None, lambda _: None, lambda: None)
+    assert peer.patch_profile("Fixture", os_type="linux")
+    assert pm.list_profiles()[0].os_type == "linux"
+
+    name = next(c for c in walk(page.dialog) if getattr(c, "value", None) == "Fixture")
+    name.on_submit(None)
+    assert page.closed
+    saved_os, fingerprint = load_saved_fingerprint(profile_dir)
+    assert (pm.profiles["Fixture"].os_type, saved_os, fingerprint["navigator"]["platform"]) == (
+        "macos",
+        "macos",
+        "MacIntel",
+    )
+
+
+@pytest.mark.parametrize("quick_paste", [False, True])
+def test_full_editor_only_quick_paste_replacement_clears_peer_credentials(
+    tmp_path, monkeypatch, quick_paste
+):
+    from src.services.profile import manager
+    from src.ui.actions.profile import edit_profile
+
+    monkeypatch.setattr(manager, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(manager, "DATA_DIR", str(tmp_path / "data"))
+    pm = manager.ProfileManager()
+    assert pm.add_profile("Fixture", "", "macos", engine="chrome", account_uid="old@example.test")
+    peer = manager.ProfileManager()
+    page = Page()
+    bl = SimpleNamespace(is_running=lambda _: False)
+    edit_profile(page, "Fixture", pm, bl, None, lambda _: None, lambda: None)
+    assert peer.patch_profile(
+        "Fixture",
+        account_password="fixture-password",
+        two_fa_secret="JBSWY3DPEHPK3PXP",
+        recovery_email="old-recovery@example.test",
+        backup_codes="1111 0001",
+    )
+    assert pm.list_profiles()[0].account_password == "fixture-password"
+
+    hint = "uid|password|2FA_SECRET|note" if quick_paste else "user@gmail.com / 100089..."
+    account_field = next(c for c in walk(page.dialog) if getattr(c, "hint_text", None) == hint)
+    account_field.value = "new@example.test"
+    if quick_paste:
+        account_field.on_submit(None)
+    name = next(c for c in walk(page.dialog) if getattr(c, "value", None) == "Fixture")
+    name.on_submit(None)
+    assert page.closed
+    saved = pm.profiles["Fixture"]
+    assert saved.account_uid == "new@example.test"
+    expected = (
+        (None, None, None, None)
+        if quick_paste
+        else ("fixture-password", "JBSWY3DPEHPK3PXP", "old-recovery@example.test", "1111 0001")
+    )
+    assert (
+        saved.account_password,
+        saved.two_fa_secret,
+        saved.recovery_email,
+        saved.backup_codes,
+    ) == expected
 
 
 @pytest.mark.parametrize("initial,target", [("light", "dark"), ("dark", "light")])
