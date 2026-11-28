@@ -104,6 +104,8 @@ def edit_profile(
             **extra,
         }
         changes = {key: value for key, value in values.items() if value != initial.get(key)}
+        if extra.get("initial_fingerprint") is not None:
+            changes["os_type"] = new_os
         if pm.patch_profile(original, **changes):
             log(get_string("updated_profile", old=original, new=new_name))
             refresh()

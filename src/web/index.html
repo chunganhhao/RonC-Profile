@@ -1852,6 +1852,7 @@ function openEditor(p) {
           recovery_email: p.recovery_email?.trim() || "",
         };
         for (const [key, value] of Object.entries(initial)) {
+          if (key === "os_type" && body.initial_fingerprint !== undefined) continue;
           if (body[key] === value) delete body[key];
         }
       } else {

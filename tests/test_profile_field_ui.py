@@ -119,6 +119,38 @@ def test_full_editor_preserves_peer_recovery_email_and_permits_clearing(tmp_path
     assert pm.profiles["Fixture"].recovery_email is None
 
 
+def test_full_editor_saves_fingerprint_with_its_os(tmp_path, monkeypatch):
+    from src.services.browser.fingerprint import load_saved_fingerprint
+    from src.services.profile import manager
+    from src.ui.actions.profile import edit_profile
+    from src.ui.dialogs import profile as dialog
+
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(manager, "PROFILES_FILE", str(tmp_path / "profiles.json"))
+    monkeypatch.setattr(manager, "DATA_DIR", str(data_dir))
+    monkeypatch.setattr(dialog, "DATA_DIR", str(data_dir))
+    pm = manager.ProfileManager()
+    assert pm.add_profile("Fixture", "", "macos")
+    profile_dir = str(data_dir / "Fixture")
+    assert load_saved_fingerprint(profile_dir) is None
+    peer = manager.ProfileManager()
+    page = Page()
+    bl = SimpleNamespace(is_running=lambda _: False)
+    edit_profile(page, "Fixture", pm, bl, None, lambda _: None, lambda: None)
+    assert peer.patch_profile("Fixture", os_type="linux")
+    assert pm.list_profiles()[0].os_type == "linux"
+
+    name = next(c for c in walk(page.dialog) if getattr(c, "value", None) == "Fixture")
+    name.on_submit(None)
+    assert page.closed
+    saved_os, fingerprint = load_saved_fingerprint(profile_dir)
+    assert (pm.profiles["Fixture"].os_type, saved_os, fingerprint["navigator"]["platform"]) == (
+        "macos",
+        "macos",
+        "MacIntel",
+    )
+
+
 @pytest.mark.parametrize("initial,target", [("light", "dark"), ("dark", "light")])
 def test_chromium_warning_uses_current_theme(initial, target):
     from src.core.strings import get_string
